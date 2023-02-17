@@ -1,3 +1,15 @@
+# repository specific
+.vscode
+notebooks/temp
+
+# training
+checkpoint/
+base_checkpoint/
+summary/
+
+# Mac specific
+.DS_Store
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
