@@ -39,8 +39,8 @@ class DeltaLossModel(BaseModel):
         n_neighbors=20,
         input_shape=None,
         optimizer=None,
-        dir_summary=None,
-        dir_checkpoint=None,
+        summary_dir=None,
+        checkpoint_dir=None,
         restore_checkpoint=False,
         max_checkpoints=3,
         init_step=0,
@@ -57,8 +57,8 @@ class DeltaLossModel(BaseModel):
                 Defaults to None.
             optimizer (tf.keras.optimizers.Optimizer, optional): Optimizer of the model. Defaults to None, which loads
                 Adam.
-            dir_summary (str, optional): Directory to save the summaries. Defaults to None.
-            dir_checkpoint (str, optional): Directory where to save the weights and optimizer. Defaults to None.
+            summary_dir (str, optional): Directory to save the summaries. Defaults to None.
+            checkpoint_dir (str, optional): Directory where to save the weights and optimizer. Defaults to None.
             restore_checkpoint (boo, optional): Whether to restore the network from a checkpoint, or initialize it.
                 Defaults to False.
             init_step (int, optional): Initial step. Defaults to 0.
@@ -77,8 +77,8 @@ class DeltaLossModel(BaseModel):
             network=network,
             input_shape=input_shape,
             optimizer=optimizer,
-            dir_summary=dir_summary,
-            dir_checkpoint=dir_checkpoint,
+            summary_dir=summary_dir,
+            checkpoint_dir=checkpoint_dir,
             restore_from_checkpoint=restore_checkpoint,
             max_checkpoints=max_checkpoints,
             init_step=init_step,
@@ -136,7 +136,7 @@ class DeltaLossModel(BaseModel):
         Args:
             n_params (int): Number of underlying (cosmological) model parameters.
             n_same (int): Number of (uperturbed) summaries coming from the same parameter set, this is the same as the
-                (local) batch size
+                (base) batch size
             off_sets (np.ndarray): The off-sets used to perturb the original (fiducial) parameters. These are used as
                 the finite differences in the computation of the Jacobian.
             n_points (int, optional): Number of different "fiducial" parameters. Defaults to 1.
@@ -241,4 +241,5 @@ class DeltaLossModel(BaseModel):
                 l2_norm_weight=l2_norm_weight,
             )
 
+        LOGGER.info("Successfully set up the traing step of the delta loss")
         self.delta_train_step = delta_train_step

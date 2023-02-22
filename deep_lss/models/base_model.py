@@ -33,8 +33,8 @@ class BaseModel(object):
         network,
         input_shape=None,
         optimizer=None,
-        dir_summary=None,
-        dir_checkpoint=None,
+        summary_dir=None,
+        checkpoint_dir=None,
         restore_from_checkpoint=False,
         max_checkpoints=3,
         init_step=0,
@@ -46,8 +46,8 @@ class BaseModel(object):
             input_shape (tf.tensor, optional): Input shape of the network, necessary if one wants to restore the
                 model. Defaults to None.
             optimizer (tf.keras.optimizers.Optimizer, optional): Optimizer of the model. Defaults to None.
-            dir_summary (str, optional): Directory to save the summaries. Defaults to None.
-            dir_checkpoint (str, optional): Directory where to save the weights and optimizer. Defaults to None.
+            summary_dir (str, optional): Directory to save the summaries. Defaults to None.
+            checkpoint_dir (str, optional): Directory where to save the weights and optimizer. Defaults to None.
             restore_checkpoint (boo, optional): Whether to restore the network from a checkpoint, or initialize it.
                 Defaults to False.
             max_checkpoints (int, optional): The maximum number of checkpoints to keep. Older ones are automatically
@@ -60,8 +60,8 @@ class BaseModel(object):
 
         # save additional variables
         self.input_shape = input_shape
-        self.dir_summary = dir_summary
-        self.dir_checkpoint = dir_checkpoint
+        self.summary_dir = summary_dir
+        self.checkpoint_dir = checkpoint_dir
         self.restore_from_checkpoint = restore_from_checkpoint
         self.init_step = init_step
 
@@ -81,12 +81,12 @@ class BaseModel(object):
         tf.summary.experimental.set_step(self.train_step)
 
         # set up the checkpointing
-        if self.dir_checkpoint is not None:
-            os.makedirs(self.dir_checkpoint, exist_ok=True)
+        if self.checkpoint_dir is not None:
+            os.makedirs(self.checkpoint_dir, exist_ok=True)
             self.checkpoint = tf.train.Checkpoint(network=self.network, optimizer=self.optimizer, train_step=self.train_step)
             self.checkpoint_manager = tf.train.CheckpointManager(
                 self.checkpoint,
-                self.dir_checkpoint,
+                self.checkpoint_dir,
                 max_to_keep=max_checkpoints,
                 checkpoint_name="ckpt",
                 step_counter=self.train_step,
@@ -103,9 +103,9 @@ class BaseModel(object):
             )
 
         # set up summary writer
-        if self.dir_summary is not None:
-            os.makedirs(self.dir_summary, exist_ok=True)
-            self.summary_writer = tf.summary.create_file_writer(dir_summary)
+        if self.summary_dir is not None:
+            os.makedirs(self.summary_dir, exist_ok=True)
+            self.summary_writer = tf.summary.create_file_writer(summary_dir)
         else:
             self.summary_writer = None
 
@@ -133,13 +133,13 @@ class BaseModel(object):
             ValueError: If there's no checkpoint directory.
             Exception: When the model is initialized from scratch, but the given checkpoint directory is non-empty.
         """
-        if self.dir_checkpoint is None:
+        if self.checkpoint_dir is None:
             raise ValueError("No checkpoint directory was declared during the init of the model, it can not be saved.")
 
         else:
             if not self.restore_from_checkpoint and len(self.checkpoint_manager.checkpoints) != 0:
                 raise Exception(
-                    f"The specified checkpoint directory {self.dir_checkpoint} is not empty, can not save a model"
+                    f"The specified checkpoint directory {self.checkpoint_dir} is not empty, can not save a model"
                     f" initialized from scratch there."
                 )
             else:
@@ -152,7 +152,7 @@ class BaseModel(object):
         Raises:
             ValueError: If there's no checkpoint directory or it's empty.
         """
-        if self.dir_checkpoint is not None:
+        if self.checkpoint_dir is not None:
             dir_restore = self.checkpoint_manager.restore_or_initialize()
             LOGGER.info(f"Network successfully restored from checkpoint {dir_restore}.")
 
