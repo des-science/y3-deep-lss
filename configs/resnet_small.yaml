@@ -1,0 +1,25 @@
+# contains the model specific configuration parameters for training
+name: "resnet_small"
+
+training:
+  n_steps: 100
+  output_every: 10
+  checkpoint_every: null
+  eval_every: null
+  # for the delta loss, this is multiplied by 1 + 2 * n_params
+  batch_size: 4
+  learning_rate: 0.001
+  clip_by_value: null
+  clip_by_norm: null
+  clip_by_global_norm: 5.0
+
+model:
+  name: resnet
+  params:
+    n_base_channels: 32
+    # depth
+    n_downsampling: 3
+    n_cheby: 2
+    n_residuals: 2
+    # misc
+    poly_degree: 5

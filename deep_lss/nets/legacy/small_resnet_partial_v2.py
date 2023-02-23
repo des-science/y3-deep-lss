@@ -1,0 +1,62 @@
+import tensorflow as tf
+
+from deepsphere import healpy_layers
+
+"""
+This file contains the specifications for the training, e.g. the network layers
+"""
+
+# Define if this network is intended for baryons or not
+#######################################################
+
+with_bary = False
+
+# get the number of params according to bary
+if with_bary:
+    n_params = 6
+else:
+    n_params = 4
+
+# tags for training
+param_ind = [0, 1, 5, 6] 
+
+# Define the layers
+###################
+
+bn_kwargs = dict()
+layers = [healpy_layers.HealpyPseudoConv(p=1, Fout=32, activation=tf.nn.relu),
+          healpy_layers.HealpyPseudoConv(p=1, Fout=64, activation=tf.nn.relu),
+          healpy_layers.HealpyPseudoConv(p=1, Fout=128, activation=tf.nn.relu),
+          healpy_layers.HealpyChebyshev(K=5, Fout=256, activation=tf.nn.relu),
+          tf.keras.layers.LayerNormalization(axis=-1),
+          healpy_layers.HealpyPseudoConv(p=1, Fout=256, activation=tf.nn.relu),
+          healpy_layers.HealpyChebyshev(K=5, Fout=256, activation=tf.nn.relu),
+          tf.keras.layers.LayerNormalization(axis=-1),
+          healpy_layers.HealpyPseudoConv(p=1, Fout=256, activation=tf.nn.relu),
+          healpy_layers.Healpy_ResidualLayer("CHEBY", layer_kwargs={"K": 5, "activation": tf.nn.relu,
+                                                                    "use_bias": True},
+                                             use_bn=True, bn_kwargs=bn_kwargs, norm_type="layer_norm"),
+          tf.keras.layers.Conv1D(256, 16, strides=1, padding='same', activation="relu"),
+          healpy_layers.Healpy_ResidualLayer("CHEBY", layer_kwargs={"K": 5, "activation": tf.nn.relu,
+                                                                    "use_bias": True},
+                                             use_bn=True, bn_kwargs=bn_kwargs, norm_type="layer_norm"),
+          tf.keras.layers.Conv1D(256, 16, strides=1, padding='same', activation="relu"),
+          healpy_layers.Healpy_ResidualLayer("CHEBY", layer_kwargs={"K": 5, "activation": tf.nn.relu,
+                                                                    "use_bias": True},
+                                             use_bn=True, bn_kwargs=bn_kwargs, norm_type="layer_norm"),
+          tf.keras.layers.Conv1D(256, 16, strides=1, padding='same', activation="relu"),
+          healpy_layers.Healpy_ResidualLayer("CHEBY", layer_kwargs={"K": 5, "activation": tf.nn.relu,
+                                                                    "use_bias": True},
+                                             use_bn=True, bn_kwargs=bn_kwargs, norm_type="layer_norm"),
+          tf.keras.layers.Conv1D(256, 16, strides=1, padding='same', activation="relu"),
+          healpy_layers.Healpy_ResidualLayer("CHEBY", layer_kwargs={"K": 5, "activation": tf.nn.relu,
+                                                                    "use_bias": True},
+                                             use_bn=True, bn_kwargs=bn_kwargs, norm_type="layer_norm"),
+          tf.keras.layers.Conv1D(256, 16, strides=1, padding='same', activation="relu"),
+          healpy_layers.Healpy_ResidualLayer("CHEBY", layer_kwargs={"K": 5, "activation": tf.nn.relu,
+                                                                    "use_bias": True},
+                                             use_bn=True, bn_kwargs=bn_kwargs, norm_type="layer_norm"),
+          tf.keras.layers.Conv1D(256, 16, strides=1, padding='same', activation="relu"),
+          tf.keras.layers.Flatten(),
+          tf.keras.layers.LayerNormalization(axis=-1),
+          tf.keras.layers.Dense(n_params)]

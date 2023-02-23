@@ -366,7 +366,7 @@ def delta_loss(
     cov_det = tf.reduce_mean(cov_det)
     if training and summary_writer is not None:
         with summary_writer.as_default():
-            tf.summary.scalar("Cov_loss_det", cov_det)
+            tf.summary.scalar("Cov_det_loss", cov_det)
 
     # jacobian loss (log of this is unstable)
     if cov_weight:

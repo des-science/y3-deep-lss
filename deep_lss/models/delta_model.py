@@ -59,7 +59,7 @@ class DeltaLossModel(BaseModel):
                 Adam.
             summary_dir (str, optional): Directory to save the summaries. Defaults to None.
             checkpoint_dir (str, optional): Directory where to save the weights and optimizer. Defaults to None.
-            restore_checkpoint (boo, optional): Whether to restore the network from a checkpoint, or initialize it.
+            restore_checkpoint (bool, optional): Whether to restore the network from a checkpoint, or initialize it.
                 Defaults to False.
             init_step (int, optional): Initial step. Defaults to 0.
         """
@@ -83,6 +83,7 @@ class DeltaLossModel(BaseModel):
             max_checkpoints=max_checkpoints,
             init_step=init_step,
         )
+        LOGGER.info(f"Initialized the DeltaLossModel")
 
     def setup_delta_loss_step(
         self,
@@ -95,7 +96,7 @@ class DeltaLossModel(BaseModel):
         n_channels=1,
         # regularization
         force_params_value=0.0,
-        force__params_weight=1.0,
+        force_params_weight=1.0,
         jac_weight=100.0,
         jac_cond_weight=None,
         cov_weight=False,
@@ -196,7 +197,7 @@ class DeltaLossModel(BaseModel):
                 off_sets=off_sets,
                 # regularization
                 force_params_value=force_params_value,
-                force_params_weight=force__params_weight,
+                force_params_weight=force_params_weight,
                 jac_weight=jac_weight,
                 jac_cond_weight=jac_cond_weight,
                 cov_weight=cov_weight,
@@ -241,5 +242,5 @@ class DeltaLossModel(BaseModel):
                 l2_norm_weight=l2_norm_weight,
             )
 
-        LOGGER.info("Successfully set up the traing step of the delta loss")
+        LOGGER.info("Set up the traing step of the delta loss")
         self.delta_train_step = delta_train_step

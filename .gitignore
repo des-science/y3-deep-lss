@@ -3,12 +3,16 @@
 notebooks/temp
 
 # training
+run_files/*
 checkpoint/
 base_checkpoint/
 summary/
 
 # Mac specific
 .DS_Store
+
+# Arne Misc
+*.dat
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
