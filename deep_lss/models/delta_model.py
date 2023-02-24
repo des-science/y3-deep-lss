@@ -116,6 +116,8 @@ class DeltaLossModel(BaseModel):
         eps=1e-32,
         # tf.summary
         img_summary=False,
+        # distribution
+        strategy=None,
     ):
         """This sets up a function that performs one training step with the delta loss, which tries to maximize the
         information of the summary statistics. Note  it needs the maps need to be ordered in a specific way:
@@ -228,19 +230,39 @@ class DeltaLossModel(BaseModel):
             else:
                 in_shape = (n_batch, n_input, n_channels)
 
-        # tf function with fixed signature
-        @tf.function(input_signature=[tf.TensorSpec(shape=in_shape, dtype=current_float)])
-        def delta_train_step(input_batch):
-            LOGGER.warning(f"Tracing delta_train_step")
-            self.base_train_step(
-                input_tensor=input_batch,
-                loss_function=loss_func,
-                input_labels=None,
-                clip_by_value=clip_by_value,
-                clip_by_norm=clip_by_norm,
-                clip_by_global_norm=clip_by_global_norm,
-                l2_norm_weight=l2_norm_weight,
-            )
+        # non distributed
+        if strategy is None:
+            @tf.function(input_signature=[tf.TensorSpec(shape=in_shape, dtype=current_float)])
+            def delta_train_step(input_batch):
+                LOGGER.warning(f"Tracing delta_train_step")
+                self.base_train_step(
+                    input_tensor=input_batch,
+                    loss_function=loss_func,
+                    input_labels=None,
+                    clip_by_value=clip_by_value,
+                    clip_by_norm=clip_by_norm,
+                    clip_by_global_norm=clip_by_global_norm,
+                    l2_norm_weight=l2_norm_weight,
+                )
+
+        # distributed
+        elif isinstance(strategy, tf.distribute.Strategy):
+            @tf.function(input_signature=[tf.TensorSpec(shape=in_shape, dtype=current_float)])
+            def delta_train_step(input_batch):
+                LOGGER.warning(f"Tracing distributed delta_train_step")
+                self.distributed_train_step(
+                    strategy=strategy,
+                    input_tensor=input_batch,
+                    loss_function=loss_func,
+                    input_labels=None,
+                    clip_by_value=clip_by_value,
+                    clip_by_norm=clip_by_norm,
+                    clip_by_global_norm=clip_by_global_norm,
+                    l2_norm_weight=l2_norm_weight,
+                )
+                
+        else:
+            raise ValueError(f"Invalid strategy {strategy} was passed")
 
         LOGGER.info("Set up the traing step of the delta loss")
         self.delta_train_step = delta_train_step

@@ -1,6 +1,6 @@
 # contains the general, non model specific configuration parameters of the analysis
 training:
-  target_params: ["Om"]
+  target_params: ["Om", "s8"]
   delta_loss:
     # regularization
     force_params_value: 0.0
@@ -12,10 +12,6 @@ training:
     use_log_det: True
     tikhonov_regu: False
     eps: 1.0e-32
-
-networks:
-  # allowed values are 8, 20, 40 and 60. From HealpyGCNN class
-  n_neighbors: 20
 
 gp_abc:
   # kernel min value, Note: for float32 this is pretty close to the min logable val

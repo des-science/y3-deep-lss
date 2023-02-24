@@ -15,6 +15,7 @@ import tensorflow as tf
 import os, warnings
 
 from msfm.utils import logger
+
 # from deep_lss.utils.estimators import estimator_1st_order
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
@@ -83,7 +84,9 @@ class BaseModel(object):
         # set up the checkpointing
         if self.checkpoint_dir is not None:
             os.makedirs(self.checkpoint_dir, exist_ok=True)
-            self.checkpoint = tf.train.Checkpoint(network=self.network, optimizer=self.optimizer, train_step=self.train_step)
+            self.checkpoint = tf.train.Checkpoint(
+                network=self.network, optimizer=self.optimizer, train_step=self.train_step
+            )
             self.checkpoint_manager = tf.train.CheckpointManager(
                 self.checkpoint,
                 self.checkpoint_dir,
@@ -97,7 +100,7 @@ class BaseModel(object):
 
         if self.restore_from_checkpoint:
             self.restore_model()
-        elif len(self.checkpoint_manager.checkpoints) != 0:
+        elif (self.checkpoint_manager is not None) and (len(self.checkpoint_manager.checkpoints) != 0):
             LOGGER.warning(
                 f"The model can not be saved when it is initialized from scratch with a non-empty checkpoint directory"
             )
@@ -249,6 +252,54 @@ class BaseModel(object):
 
         # update the step
         self.update_step()
+
+    def distributed_train_step(
+        self,
+        strategy,
+        input_tensor,
+        loss_function,
+        input_labels=None,
+        clip_by_value=None,
+        clip_by_norm=None,
+        clip_by_global_norm=None,
+        l2_norm_weight=None,
+        # TODO temp
+        n_replicas = None,
+    ):
+        """like https://www.tensorflow.org/tutorials/distribute/custom_training
+        TODO
+        Args:
+            strategy (_type_): _description_
+            input_tensor (_type_): _description_
+            loss_function (_type_): _description_
+            input_labels (_type_, optional): _description_. Defaults to None.
+            clip_by_value (_type_, optional): _description_. Defaults to None.
+            clip_by_norm (_type_, optional): _description_. Defaults to None.
+            clip_by_global_norm (_type_, optional): _description_. Defaults to None.
+            l2_norm_weight (_type_, optional): _description_. Defaults to None.
+        """
+        # the means here are taken over the local batch
+        local_losses = strategy.run(
+            self.base_train_step,
+            args=(
+                input_tensor,
+                loss_function,
+                input_labels,
+                clip_by_value,
+                clip_by_norm,
+                clip_by_global_norm,
+                l2_norm_weight,
+            )
+        )
+
+        # aggregate by a sum, not mean
+        global_loss = strategy.reduce(tf.distribute.ReduceOp.SUM, local_losses, axis=None)
+
+        # like https://www.tensorflow.org/tutorials/distribute/custom_training#define_the_loss_function
+        n_replicas = strategy.num_replicas_in_sync
+        global_loss /= n_replicas
+        
+        return global_loss
 
     # # TODO: set up logic to save and restore estimators
     # def setup_1st_order_estimator(

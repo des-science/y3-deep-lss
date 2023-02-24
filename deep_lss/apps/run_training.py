@@ -10,10 +10,11 @@ maximizing loss to find an informative summary statistic.
 Meant for the GPU nodes of the Perlmutter cluster at NERSC.
 TODO implement distributed training
 TODO implement weights & biases versioning
+TODO make esub compatible? The index could correspond to a neural net architecture in the hyperparameter search
 """
 
 import tensorflow as tf
-import os, argparse, warnings, yaml
+import os, argparse, warnings, yaml, time
 
 from datetime import datetime
 
@@ -85,6 +86,7 @@ def setup(args):
         action="store_true",
         help="restore the model from a checkpoint instead of initializing it from scratch",
     )
+    parser.add_argument("--distributed", action="store_true", help="distribute the training")
     parser.add_argument("--debug", action="store_true", help="activate debug mode")
 
     args, _ = parser.parse_known_args(args)
@@ -95,27 +97,35 @@ def setup(args):
     if args.debug:
         tf.config.run_functions_eagerly(True)
         tf.config.set_soft_device_placement(False)
-        tf.debugging.set_log_device_placement(True)
+        # tf.debugging.set_log_device_placement(True)
         tf.data.experimental.enable_debug_mode()
         LOGGER.warning(f"!!!!! Running the training in test mode, TensorFlow is executed eagerly !!!!!")
 
     return args
 
 
-def main(indices, args):
+def main(args):
     args = setup(args)
     LOGGER.timer.start("main")
 
+    # check the devices
     try:
-        LOGGER.info(f"Running on {len(os.sched_getaffinity(0))} cores")
+        n_cpus = len(os.sched_getaffinity(0))
     except AttributeError:
-        pass
+        n_cpus = os.cpu_count()
+    LOGGER.info(f"Running on {n_cpus} CPU cores")
 
-    LOGGER.warning(f"tf.config.list_physical_devices | {tf.config.list_physical_devices()}")
+    n_gpus = len(tf.config.list_physical_devices("GPU"))
+    if n_gpus == 0:
+        LOGGER.warning(f"No GPU discovered, running on CPUs only")
+    else:
+        LOGGER.info(f"Running on {n_gpus} GPUs")
+
     try:
-        LOGGER.warning(f"os.environ['CUDA_VISIBLE_DEVICES'] | {os.environ['CUDA_VISIBLE_DEVICES']}")
+        n_gpus_cuda = len(os.environ["CUDA_VISIBLE_DEVICES"])
+        assert n_gpus == n_gpus_cuda
     except KeyError:
-        pass
+        LOGGER.warning(f"No CUDA enabled GPUs found")
 
     # read the different configs
     dlss_conf = utils.load_deep_lss_config(args.dlss_config)
@@ -132,85 +142,120 @@ def main(indices, args):
     n_side = msfm_conf["analysis"]["n_side"]
     data_vec_pix, _, _, _, _ = analysis.load_pixel_file(msfm_conf)
 
-    # TODO index corresponds to a neural net architecture in the hyperparameter search 
-    for index in indices:
-        # TODO somehow use index to select a net config
-        net_conf = input_output.read_yaml(args.net_config)
+    net_conf = input_output.read_yaml(args.net_config)
 
-        net_name = net_conf["name"]
-        n_steps = net_conf["training"]["n_steps"]
-        output_every = net_conf["training"]["output_every"]
-        checkpoint_every = net_conf["training"]["checkpoint_every"]
-        eval_every = net_conf["training"]["eval_every"]
+    net_name = net_conf["name"]
+    n_steps = net_conf["training"]["n_steps"]
+    output_every = net_conf["training"]["output_every"]
+    checkpoint_every = net_conf["training"]["checkpoint_every"]
+    eval_every = net_conf["training"]["eval_every"]
 
-        # create directories
-        if args.dir_out is None:
-            now = datetime.now().strftime("%Y-%m-%d_%H:%M:%S")
+    global_batch_size = net_conf["training"]["global_batch_size"]
 
-            file_dir = os.path.dirname(__file__)
-            repo_dir = os.path.abspath(os.path.join(file_dir, "../.."))
-            dir_out = os.path.join(repo_dir, f"run_files/{now}_{net_name}")
-            os.makedirs(dir_out, exist_ok=True)
-            LOGGER.info(f"Created base path {dir_out}")
+    # create directories
+    if args.dir_out is None:
+        now = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
-            args.dir_out = dir_out
+        file_dir = os.path.dirname(__file__)
+        repo_dir = os.path.abspath(os.path.join(file_dir, "../.."))
+        dir_out = os.path.join(repo_dir, f"run_files/{now}_{net_name}")
+        os.makedirs(dir_out, exist_ok=True)
+        LOGGER.info(f"Created base path {dir_out}")
 
-        checkpoint_dir = os.path.abspath(os.path.join(args.dir_out, "checkpoint"))
-        input_output.robust_makedirs(checkpoint_dir)
-        summary_dir = os.path.abspath(os.path.join(args.dir_out, "summary"))
-        input_output.robust_makedirs(summary_dir)
+        args.dir_out = dir_out
 
-        # save the configs
-        with open(os.path.join(args.dir_out, "configs.yaml"), "w") as f:
-            yaml.dump_all([net_conf, dlss_conf, msfm_conf], f)
+    checkpoint_dir = os.path.abspath(os.path.join(args.dir_out, "checkpoint"))
+    input_output.robust_makedirs(checkpoint_dir)
+    summary_dir = os.path.abspath(os.path.join(args.dir_out, "summary"))
+    input_output.robust_makedirs(summary_dir)
 
-        # TODO not hard code
-        n_z_bins = 4
+    # save the configs
+    with open(os.path.join(args.dir_out, "configs.yaml"), "w") as f:
+        yaml.dump_all([net_conf, dlss_conf, msfm_conf], f)
 
-        # network
-        batch_size = net_conf["training"]["batch_size"]
+    # TODO not hard code
+    n_z_bins = 4
 
-        # TODO implement some noise schedule?
-        # https://cosmo-gitlab.phys.ethz.ch/jafluri/arne_handover/-/blob/main/networks/train_net.py#L184
-        fiducial_dset = fiducial_pipeline.get_fiducial_dset(
-            tfr_pattern=args.tfr_pattern,
-            pert_labels=pert_labels,
-            batch_size=batch_size,
-            conf=msfm_conf,
-            # relevant for performance
-            n_readers=8,
-            n_prefetch=tf.data.AUTOTUNE,
-            file_name_shuffle_buffer=128,
-            examples_shuffle_buffer=128,
-        )
+    # TODO implement some noise schedule?
+    # https://cosmo-gitlab.phys.ethz.ch/jafluri/arne_handover/-/blob/main/networks/train_net.py#L184
+    fiducial_dset = fiducial_pipeline.get_fiducial_dset(
+        tfr_pattern=args.tfr_pattern,
+        pert_labels=pert_labels,
+        batch_size=global_batch_size,
+        conf=msfm_conf,
+        # relevant for performance
+        n_readers=8,
+        n_prefetch=tf.data.AUTOTUNE,
+        file_name_shuffle_buffer=128,
+        examples_shuffle_buffer=128,
+    )
 
-        network = NETWORKS[net_conf["model"]["name"]](output_shape=n_params, **net_conf["model"]["params"]).get_layers()
-        LOGGER.info(f"Loaded a network of type {NETWORKS[net_conf['model']['name']]}")
+    # TODO define the distribution strategy
+    if (n_gpus > 1) and (args.distributed) and (not args.debug):
+        cross_device_ops = tf.distribute.NcclAllReduce()
+        # cross_device_ops = tf.distribute.HierarchicalCopyAllReduce()
+        strategy = tf.distribute.MirroredStrategy(cross_device_ops=cross_device_ops)
+        n_gpus_strategy = strategy.num_replicas_in_sync
+        assert n_gpus_strategy == n_gpus
+        LOGGER.info(f"Training is distributed, using the MirroredStrategy")
+    else:
+        strategy = tf.distribute.get_strategy()
+        n_gpus_strategy = 1
+        LOGGER.warning(f"Training is not distributed, using the default strategy")
 
+    if global_batch_size % n_gpus_strategy == 0:
+        local_batch_size = global_batch_size // n_gpus_strategy
+    else:
+        raise ValueError(f"The global batch size has to be divisible by the number of replicas in the strategy")
+
+    with strategy.scope():
+        # distribute the dataset
+        fiducial_dset = strategy.experimental_distribute_dataset(fiducial_dset)
+
+        # load the layers
+        network = NETWORKS[net_conf["model"]["name"]](
+            output_shape=n_params, **net_conf["model"]["params"]
+        ).get_layers()
+        LOGGER.info(f"Loaded a network specification of type {NETWORKS[net_conf['model']['name']]}")
+
+        # build the model
         model = DeltaLossModel(
             network=network,
             n_side=n_side,
             indices=data_vec_pix,
-            n_neighbors=dlss_conf["networks"]["n_neighbors"],
+            n_neighbors=net_conf["model"]["n_neighbors"],
             input_shape=(None, len(data_vec_pix), n_z_bins),
             checkpoint_dir=checkpoint_dir,
             summary_dir=summary_dir,
             restore_checkpoint=args.restore_checkpoint,
         )
 
-        # use default parameters for now
+        # set up the training loss
         model.setup_delta_loss_step(
-            n_params, batch_size, perts, n_channels=n_z_bins, **dlss_conf["training"]["delta_loss"]
+            n_params,
+            global_batch_size,
+            perts,
+            n_channels=n_z_bins,
+            strategy=strategy,
+            # **dlss_conf["training"]["delta_loss"],
+            force_params_value = None,
+            jac_weight = 0.0,
+            # numerical stability
+            use_log_det = True,
+            tikhonov_regu = False,
         )
 
         LOGGER.info(f"Starting training")
         counter = 0
-        for data_vectors, index in fiducial_dset.take(n_steps):
+        LOGGER.timer.start("training")
+        for data_vectors, label in LOGGER.progressbar(fiducial_dset.take(n_steps), at_level="info", total=n_steps):
             model.delta_train_step(data_vectors)
 
             # output
             if (output_every is not None) and (counter % output_every == 0):
-                LOGGER.info(f"Done with {counter}/{n_steps} training steps")
+                LOGGER.info(
+                    f"Done with {counter}/{n_steps} training steps after {LOGGER.timer.elapsed('training')}"
+                )
 
             # checkpoint
             if (checkpoint_every is not None) and (counter % checkpoint_every == 0):
@@ -222,17 +267,24 @@ def main(indices, args):
 
             counter += 1
 
-        # TODO esub yield statement
-
-        LOGGER.info(f"Finished training after {n_steps} steps")
+        LOGGER.info(f"Finished training after {n_steps} steps and {LOGGER.timer.elapsed('training')}")
 
         # save everything at the end if necessary
         if (checkpoint_every is not None) and (counter % checkpoint_every != 0):
             LOGGER.info(f"Creating a final checkpoint")
             model.save_model()
+        elif checkpoint_every is not None:
+            LOGGER.info(f"A final checkpoint already exists")
         else:
-            LOGGER.info(f"A final checkpoint still exists")
+            LOGGER.info(f"No checkpoint has been saved")
 
-        yield index
+# only exists for debugging purposes
+if __name__ == "__main__":
 
-    LOGGER.info(f"Finished")
+    args = [
+        "--tfr_pattern=/Users/arne/data/DESY3/tfrecords/v2/DESy3_fiducial_000.tfrecord",
+        "--net_config=configs/resnet_small.yaml",
+        "--verbosity=debug",
+        "--distributed",
+    ]
+    main(args)
