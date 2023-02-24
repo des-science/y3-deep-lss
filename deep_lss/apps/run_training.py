@@ -131,7 +131,7 @@ def main(args):
     dlss_conf = utils.load_deep_lss_config(args.dlss_config)
     msfm_conf = analysis.load_config(args.msfm_config)
 
-    # define constants
+    # general constants
     target_params = dlss_conf["training"]["target_params"]
     n_params = len(target_params)
     pert_labels = parameters.get_fiducial_perturbation_labels(target_params)
@@ -142,15 +142,21 @@ def main(args):
     n_side = msfm_conf["analysis"]["n_side"]
     data_vec_pix, _, _, _, _ = analysis.load_pixel_file(msfm_conf)
 
+    # TODO could loop over esub indices here
+
     net_conf = input_output.read_yaml(args.net_config)
 
+    # network constants
     net_name = net_conf["name"]
     n_steps = net_conf["training"]["n_steps"]
     output_every = net_conf["training"]["output_every"]
     checkpoint_every = net_conf["training"]["checkpoint_every"]
     eval_every = net_conf["training"]["eval_every"]
 
-    global_batch_size = net_conf["training"]["global_batch_size"]
+    global_batch_size = net_conf["dset"]["global_batch_size"]
+    n_readers = net_conf["dset"]["n_readers"]
+    file_name_shuffle_buffer = net_conf["dset"]["file_name_shuffle_buffer"]
+    examples_shuffle_buffer = net_conf["dset"]["examples_shuffle_buffer"]
 
     # create directories
     if args.dir_out is None:
@@ -178,17 +184,23 @@ def main(args):
 
     # TODO implement some noise schedule?
     # https://cosmo-gitlab.phys.ethz.ch/jafluri/arne_handover/-/blob/main/networks/train_net.py#L184
-    fiducial_dset = fiducial_pipeline.get_fiducial_dset(
-        tfr_pattern=args.tfr_pattern,
-        pert_labels=pert_labels,
-        batch_size=global_batch_size,
-        conf=msfm_conf,
-        # relevant for performance
-        n_readers=8,
-        n_prefetch=tf.data.AUTOTUNE,
-        file_name_shuffle_buffer=128,
-        examples_shuffle_buffer=128,
-    )
+
+    # like https://www.tensorflow.org/tutorials/distribute/input#tfdistributestrategydistribute_datasets_from_function
+    def dataset_fn(input_context):
+        dset = fiducial_pipeline.get_fiducial_dset(
+            tfr_pattern=args.tfr_pattern,
+            pert_labels=pert_labels,
+            batch_size=global_batch_size,
+            conf=msfm_conf,
+            # relevant for performance
+            n_readers=n_readers,
+            n_prefetch=tf.data.AUTOTUNE,
+            file_name_shuffle_buffer=file_name_shuffle_buffer,
+            examples_shuffle_buffer=examples_shuffle_buffer,
+            input_context=input_context,
+        )
+
+        return dset
 
     # TODO define the distribution strategy
     if (n_gpus > 1) and (args.distributed) and (not args.debug):
@@ -203,14 +215,9 @@ def main(args):
         n_gpus_strategy = 1
         LOGGER.warning(f"Training is not distributed, using the default strategy")
 
-    if global_batch_size % n_gpus_strategy == 0:
-        local_batch_size = global_batch_size // n_gpus_strategy
-    else:
-        raise ValueError(f"The global batch size has to be divisible by the number of replicas in the strategy")
-
     with strategy.scope():
         # distribute the dataset
-        fiducial_dset = strategy.experimental_distribute_dataset(fiducial_dset)
+        dist_dset = strategy.distribute_datasets_from_function(dataset_fn)
 
         # load the layers
         network = NETWORKS[net_conf["model"]["name"]](
@@ -238,24 +245,22 @@ def main(args):
             n_channels=n_z_bins,
             strategy=strategy,
             # **dlss_conf["training"]["delta_loss"],
-            force_params_value = None,
-            jac_weight = 0.0,
+            force_params_value=None,
+            jac_weight=0.0,
             # numerical stability
-            use_log_det = True,
-            tikhonov_regu = False,
+            use_log_det=True,
+            tikhonov_regu=False,
         )
 
         LOGGER.info(f"Starting training")
         counter = 0
         LOGGER.timer.start("training")
-        for data_vectors, label in LOGGER.progressbar(fiducial_dset.take(n_steps), at_level="info", total=n_steps):
+        for data_vectors, label in LOGGER.progressbar(dist_dset.take(n_steps), at_level="info", total=n_steps):
             model.delta_train_step(data_vectors)
 
             # output
             if (output_every is not None) and (counter % output_every == 0):
-                LOGGER.info(
-                    f"Done with {counter}/{n_steps} training steps after {LOGGER.timer.elapsed('training')}"
-                )
+                LOGGER.info(f"Done with {counter}/{n_steps} training steps after {LOGGER.timer.elapsed('training')}")
 
             # checkpoint
             if (checkpoint_every is not None) and (counter % checkpoint_every == 0):
@@ -278,6 +283,7 @@ def main(args):
         else:
             LOGGER.info(f"No checkpoint has been saved")
 
+
 # only exists for debugging purposes
 if __name__ == "__main__":
 
@@ -286,5 +292,6 @@ if __name__ == "__main__":
         "--net_config=configs/resnet_small.yaml",
         "--verbosity=debug",
         "--distributed",
+        # "--debug"
     ]
     main(args)
