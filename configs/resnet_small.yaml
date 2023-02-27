@@ -2,16 +2,21 @@
 name: "resnet_small"
 
 training:
-  n_steps: 3
+  n_steps: 1000
   output_every: null
   checkpoint_every: null
   eval_every: null
-  # for the delta loss, this is multiplied by 1 + 2 * n_params
-  global_batch_size: 7
   learning_rate: 0.001
   clip_by_value: null
   clip_by_norm: null
   clip_by_global_norm: 5.0
+
+dset:
+  # for the delta loss, this is multiplied by 1 + 2 * n_params
+  global_batch_size: 4
+  n_readers: 1
+  file_name_shuffle_buffer: 128
+  examples_shuffle_buffer: 8
 
 model:
   name: resnet

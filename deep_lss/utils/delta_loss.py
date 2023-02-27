@@ -301,7 +301,7 @@ def delta_loss(
 
     if no_correlations and (n_output != n_params):
         raise ValueError("Independent summaries (no_correlations) is only possible if n_output == n_params")
-        
+
     if no_correlations and n_partial is not None:
         raise ValueError("Independent summaries (no_correlations) is only possible if n_partial is None")
 
@@ -377,7 +377,7 @@ def delta_loss(
         # do a weighted mean
         cov_det = tf.multiply(weights, cov_det)
 
-    # normal mean, this is taken if the output dimension of the summary statistic is different than the number of 
+    # normal mean, this is taken if the output dimension of the summary statistic is different than the number of
     # parameters. So nothing happens here if n_output = n_params, because then cov_det only has one entry.
     cov_det = tf.reduce_mean(cov_det)
     if training and summary_writer is not None:

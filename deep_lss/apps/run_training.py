@@ -244,12 +244,7 @@ def main(args):
             perts,
             n_channels=n_z_bins,
             strategy=strategy,
-            # **dlss_conf["training"]["delta_loss"],
-            force_params_value=None,
-            jac_weight=0.0,
-            # numerical stability
-            use_log_det=True,
-            tikhonov_regu=False,
+            **dlss_conf["training"]["delta_loss"],
         )
 
         LOGGER.info(f"Starting training")

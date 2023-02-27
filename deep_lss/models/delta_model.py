@@ -232,6 +232,7 @@ class DeltaLossModel(BaseModel):
 
         # non distributed
         if strategy is None:
+
             @tf.function(input_signature=[tf.TensorSpec(shape=in_shape, dtype=current_float)])
             def delta_train_step(input_batch):
                 LOGGER.warning(f"Tracing delta_train_step")
@@ -247,6 +248,7 @@ class DeltaLossModel(BaseModel):
 
         # distributed
         elif isinstance(strategy, tf.distribute.Strategy):
+
             @tf.function(input_signature=[tf.TensorSpec(shape=in_shape, dtype=current_float)])
             def delta_train_step(input_batch):
                 LOGGER.warning(f"Tracing distributed delta_train_step")
@@ -260,7 +262,7 @@ class DeltaLossModel(BaseModel):
                     clip_by_global_norm=clip_by_global_norm,
                     l2_norm_weight=l2_norm_weight,
                 )
-                
+
         else:
             raise ValueError(f"Invalid strategy {strategy} was passed")
 

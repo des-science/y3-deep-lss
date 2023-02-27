@@ -189,8 +189,8 @@ class BaseModel(object):
         l2_norm_weight=None,
     ):
         """A base train step given a loss funtion and an input tensor. The method evaluates the network and performs a
-        singleg adient decent step. Note it should be wrapped in a tf.function. If multiple clippings are requested,
-        the order will be:
+        single gradient decent step. Note that it should be wrapped in a tf.function. If multiple clippings are
+        requested, the order will be:
             * by value
             * by norm
             * by global norm
@@ -215,12 +215,12 @@ class BaseModel(object):
             predictions = self.network(input_tensor, training=True)
             # compute the loss
             if input_labels is None:
-                loss_val = loss_function(predictions)
+                loss = loss_function(predictions)
             else:
-                loss_val = loss_function(predictions, input_labels)
+                loss = loss_function(predictions, input_labels)
             if self.summary_writer is not None:
                 with self.summary_writer.as_default():
-                    tf.summary.scalar("loss", loss_val)
+                    tf.summary.scalar("loss", loss)
 
             # handle the l2 norm
             if l2_norm_weight is not None:
@@ -228,10 +228,10 @@ class BaseModel(object):
                 if self.summary_writer is not None:
                     with self.summary_writer.as_default():
                         tf.summary.scalar("l2_loss", l2_loss)
-                loss_val = loss_val + l2_norm_weight * l2_loss
+                loss = loss + l2_norm_weight * l2_loss
 
         # get the gradients
-        gradients = tape.gradient(loss_val, trainable_weights)
+        gradients = tape.gradient(loss, trainable_weights)
 
         # clip the gradients
         if clip_by_value is not None:
@@ -253,6 +253,8 @@ class BaseModel(object):
         # update the step
         self.update_step()
 
+        return loss
+
     def distributed_train_step(
         self,
         strategy,
@@ -263,22 +265,35 @@ class BaseModel(object):
         clip_by_norm=None,
         clip_by_global_norm=None,
         l2_norm_weight=None,
-        # TODO temp
-        n_replicas = None,
     ):
-        """like https://www.tensorflow.org/tutorials/distribute/custom_training
-        TODO
+        """A distributed train step to be used in conjunction with a tf.distribute.Strategy like in
+        https://www.tensorflow.org/tutorials/distribute/custom_training
+
+        The method evaluates the network and performs a single gadient decent step. Note it should be wrapped in a
+        tf.function. If multiple clippings are requested, the order will be:
+            * by value
+            * by norm
+            * by global norm
+
+        For correct normalization of the loss over multiple replicas/GPUs, the local batch size has to be the same
+        accross the replicas, which is the case when the global batch size is divisible by the number of replicas.
+        Note that there's no additional check for this.
+
         Args:
-            strategy (_type_): _description_
-            input_tensor (_type_): _description_
-            loss_function (_type_): _description_
-            input_labels (_type_, optional): _description_. Defaults to None.
-            clip_by_value (_type_, optional): _description_. Defaults to None.
-            clip_by_norm (_type_, optional): _description_. Defaults to None.
-            clip_by_global_norm (_type_, optional): _description_. Defaults to None.
-            l2_norm_weight (_type_, optional): _description_. Defaults to None.
+            strategy (tf.distribute.Strategy): The distribution strategy the model was created within
+            input_tensor (tf.tensor): The input to the network
+            loss_function (callable): The loss function, a callable that takes predictions of the network (and if
+                provided, the input_labels) as input and returns a loss
+            input_labels (tf.tensor, optional): Labels of the input_tensor. Defaults to None.
+            clip_by_value (tf.tensor, optional): Clip the gradients by given 1d array of values into the interval
+                [value[0], value[1]]. Defaults to None (no clipping).
+            clip_by_norm (tf.tensor, optional): Clip the gradients by norm. Defaults to None (no clipping).
+            clip_by_global_norm (tf.tensor, optional): Clip the gradients by global norm. Defaults to None (no
+                clipping).
+            l2_norm_weight (float, optional): Weight for the L2 norm of the trainable weights. Defaults to None
+                (no regularization).
         """
-        # the means here are taken over the local batch
+        # the means here are taken over the local batches
         local_losses = strategy.run(
             self.base_train_step,
             args=(
@@ -289,16 +304,17 @@ class BaseModel(object):
                 clip_by_norm,
                 clip_by_global_norm,
                 l2_norm_weight,
-            )
+            ),
         )
 
-        # aggregate by a sum, not mean
-        global_loss = strategy.reduce(tf.distribute.ReduceOp.SUM, local_losses, axis=None)
+        # the mean of means is equal to the overall mean if the subgroups all have the same number of samples
+        # https://en.wikipedia.org/wiki/Grand_mean
+        global_loss = strategy.reduce(tf.distribute.ReduceOp.MEAN, local_losses, axis=None)
+        LOGGER.warning(
+            f"The distributed_train_step makes the assumption that the global batch size is divisible by the number"
+            f" of replicas, ensure that this is the case"
+        )
 
-        # like https://www.tensorflow.org/tutorials/distribute/custom_training#define_the_loss_function
-        n_replicas = strategy.num_replicas_in_sync
-        global_loss /= n_replicas
-        
         return global_loss
 
     # # TODO: set up logic to save and restore estimators
