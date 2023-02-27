@@ -14,6 +14,10 @@ TensorFlow.
 import numpy as np
 import tensorflow as tf
 
+from msfm.utils import logger
+
+LOGGER = logger.get_logger(__file__)
+
 
 def _get_backend_floatx():
     """Returns the current backend float of the keras backend.
@@ -56,7 +60,7 @@ def get_jac_and_cov_matrix(
     a specific ordering of the predictions.
 
     Args:
-        predictions (tf.tensor): Predictions in a fixed ordering.
+        predictions (tf.tensor): Predictions of shape (n_same * (1 + 2 * n_params), n_params) in a fixed ordering.
         n_params (int): Number of underlying model parameters.
         n_same (int): Number of realizations of the same parameter (the perturbations don't count).
         off_sets (np.ndarray): The finite differences in the underlying parameters to calculate the Jacobian.
@@ -66,12 +70,13 @@ def get_jac_and_cov_matrix(
             writer is provided. Defaults to False.
 
     Returns:
-        tf.tensor: Covariances and Jacobians
+        tf.tensor: Covariances and Jacobians, these have shape (n_output/n_params, n_output, n_output), where n_output
+            is the dimensionality of the summary statistic.
     """
     # get the current backend
     current_float = _get_backend_floatx()
 
-    # needs to be a tf.tensor
+    # needs to be a tf.tensor, has shape (n_same * (1 + 2 * n_params), n_params)
     if isinstance(predictions, np.ndarray):
         predictions = tf.convert_to_tensor(predictions, dtype=current_float)
 
@@ -79,39 +84,45 @@ def get_jac_and_cov_matrix(
     if n_output is None:
         n_output = int(predictions.shape[-1])
 
-    # split the output
+    # split the output, len(splits) = (1 + 2 * n_params), split.shape = splits[0].shape = (?, n_same, n_output)
     splits = [
         tf.reshape(split, shape=[-1, n_same, n_output])
         for split in tf.split(predictions, num_or_size_splits=2 * n_params + 1, axis=0)
     ]
 
-    # TODO I don't know why this is here
-    n_cov = n_same - 1.0
-
     # summary
     if training:
+        # len(param_splits) = n_params, param_splits[0].shape = (?, n_same, n_output)
         param_splits = tf.split(splits[0], num_or_size_splits=n_output, axis=-1)
+
         for num, single_param in enumerate(param_splits):
             if summary_writer is not None:
                 with summary_writer.as_default():
                     tf.summary.histogram(f"Param_{num}_hist", single_param)
 
-    # get the covariance
+    # get the covariance NOTE the mean is taken over the n_same, the batch size
     mean = tf.reduce_mean(splits[0], axis=1, keepdims=True)
+
+    # shape (n_output/n_params, n_same, n_params)
     outmm = tf.subtract(splits[0], mean)
-    cov = tf.divide(tf.einsum("hjk,hjl->hkl", outmm, outmm), n_cov, name="COV")
+
+    # minus one because this is the sample covariance
+    cov_normalization = n_same - 1.0
+
+    # shape (n_output/n_params, n_output, n_output)
+    cov = tf.divide(tf.einsum("hjk,hjl->hkl", outmm, outmm), cov_normalization, name="COV")
 
     # handle off sets and renormalization
     off_sets = tf.convert_to_tensor(off_sets, dtype=current_float)
 
-    # get mean derivatives
+    # get mean derivatives NOTE the mean is taken over the n_same, the batch size
     derivatives = []
     for i in range(n_params):
         mean_minus = tf.reduce_mean(splits[2 * (i + 1) - 1], axis=1, keepdims=False)
         mean_plus = tf.reduce_mean(splits[2 * (i + 1)], axis=1, keepdims=False)
         derivatives.append(tf.divide(tf.subtract(mean_plus, mean_minus), tf.scalar_mul(2.0, off_sets[i])))
 
-    # stack the derivatives to form the Jacobian
+    # stack the derivatives to form the Jacobian, shape (n_output/n_params, n_output, n_output)
     jacobian = tf.stack(derivatives, axis=-1)
 
     return cov, jacobian
@@ -231,7 +242,7 @@ def delta_loss(
     # get the current float
     current_float = _get_backend_floatx()
 
-    # get cov and jac
+    # get cov and jac of shapes (n_output/n_params, n_output, n_output)
     cov, jacobian = get_jac_and_cov_matrix(
         predictions=predictions,
         n_params=n_params,
@@ -279,17 +290,18 @@ def delta_loss(
 
     # get number of outputs
     if n_output is None:
-        n_output = int(predictions.get_shape()[-1])
+        n_output = int(predictions.shape[-1])
 
     # note worthy stuff
     if n_output > n_params and jac_weight > 0.0:
-        print(
-            "WARNING: The weight of the Jacobian loss should be zero, if you have a summary that has a higher "
-            "dimension as the number of model params!",
-            flush=True,
+        LOGGER.warning(
+            "The weight of the Jacobian loss should be zero, if you have a summary that has a higher"
+            " dimension as the number of model params!"
         )
+
     if no_correlations and (n_output != n_params):
         raise ValueError("Independent summaries (no_correlations) is only possible if n_output == n_params")
+        
     if no_correlations and n_partial is not None:
         raise ValueError("Independent summaries (no_correlations) is only possible if n_partial is None")
 
@@ -304,9 +316,9 @@ def delta_loss(
             # the factor of 2 is in the square of the jac_diag
             cov_det = tf.reduce_mean(tf.subtract(cov_log_det, jac_log_det))
 
-        # use everything
+        # use everything, this is the default branch
         elif n_partial is None:
-            # tf.logdet is much better for the backprob, but fails if the det is zero
+            # tf.logdet is much better for the backprop, but fails if the det is zero
             # should we do cov + eps*identity?
             if tikhonov_regu:
                 identity = tf.scalar_mul(eps, tf.eye(n_params, batch_shape=[1], dtype=current_float))
@@ -325,6 +337,7 @@ def delta_loss(
                     jac_log_det = tf.math.log(tf.math.abs(tf.linalg.det(jacobian)) + eps)
                 with tf.name_scope("cov_logdet") as scope:
                     cov_det = tf.subtract(cov_log_det, tf.scalar_mul(2.0, jac_log_det))
+
         else:
             # we use only the first n_partial params
             j_part = jacobian[:, :, :n_partial]
@@ -349,11 +362,12 @@ def delta_loss(
                     cov_log_det = tf.math.log(tf.math.abs(tf.linalg.det(jt_cov_j)) + eps)
 
             cov_det = tf.subtract(cov_log_det, tf.scalar_mul(2.0, jac_log_det))
+
     else:
         # dividing by the jac_det (for info inequality) does not work...
-        print(
-            f"WARNING: You are using use_log_det=False. Only the determinant of the covariance matrix will be "
-            f"optimized. This loss might be unbouned and could lead to unstable training."
+        LOGGER.warning(
+            f"You are using use_log_det=False. Only the determinant of the covariance matrix will be"
+            f" optimized. This loss might be unbouned and could lead to unstable training."
         )
         cov_det = tf.linalg.det(cov)
 
@@ -362,7 +376,9 @@ def delta_loss(
         weights = tf.divide(weights, tf.reduce_sum(weights))
         # do a weighted mean
         cov_det = tf.multiply(weights, cov_det)
-    # normal mean
+
+    # normal mean, this is taken if the output dimension of the summary statistic is different than the number of 
+    # parameters. So nothing happens here if n_output = n_params, because then cov_det only has one entry.
     cov_det = tf.reduce_mean(cov_det)
     if training and summary_writer is not None:
         with summary_writer.as_default():
@@ -377,7 +393,9 @@ def delta_loss(
         diff = tf.subtract(tf.linalg.inv(cov), tf.expand_dims(tf.eye(n_output, n_output, dtype=current_float), axis=0))
         jac_loss += tf.reduce_mean(tf.square(diff), axis=(1, 2))
         jac_loss *= 0.5
+
     else:
+        # shape (n_output/n_params, n_output, n_output)
         diff = tf.subtract(jacobian, tf.expand_dims(tf.eye(n_output, n_params, dtype=current_float), axis=0))
         if n_partial is None:
             # use everything
@@ -388,7 +406,9 @@ def delta_loss(
 
     if weights is not None:
         jac_loss = tf.multiply(weights, jac_loss)
+
     jac_loss = tf.reduce_mean(jac_loss)
+
     if training and summary_writer is not None:
         with summary_writer.as_default():
             if cov_weight:
@@ -402,14 +422,19 @@ def delta_loss(
     if jac_cond_weight is not None:
         if n_partial is not None:
             c = tf_matrix_condition(jacobian[..., :n_partial])
+
         else:
             c = tf_matrix_condition(jacobian)
+
         if weights is not None:
             c = tf.multiply(weights, c)
+
         jac_cond_loss = tf.reduce_mean(c)
+
         if training and summary_writer is not None:
             with summary_writer.as_default():
                 tf.summary.scalar("Jacobian_Condition", jac_cond_loss)
+
         jac_cond_loss = tf.scalar_mul(jac_cond_weight, jac_cond_loss)
         loss = tf.add(loss, jac_cond_loss)
 
@@ -429,6 +454,7 @@ def delta_loss(
             diff_loss = tf.reduce_mean(diff_loss, axis=1)
             # weight and mean
             diff_loss = tf.multiply(diff_loss, weights)
+
         # simple mean reduction
         diff_loss = tf.reduce_mean(diff_loss)
 
