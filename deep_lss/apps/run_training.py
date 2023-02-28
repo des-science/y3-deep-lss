@@ -55,9 +55,17 @@ def setup(args):
         help="input root dir of the simulations",
     )
     parser.add_argument(
-        "--dir_out",
+        "--dir_base",
         type=str,
         default=None,
+        # TODO
+        help="dir where the models are saved. It is generated within the repo according to the date and time if set to None",
+    )
+    parser.add_argument(
+        "--dir_model",
+        type=str,
+        default=None,
+        # TODO
         help="dir where the models are saved. It is generated within the repo according to the date and time if set to None",
     )
     parser.add_argument(
@@ -159,24 +167,31 @@ def main(args):
     examples_shuffle_buffer = net_conf["dset"]["examples_shuffle_buffer"]
 
     # create directories
-    if args.dir_out is None:
-        now = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-
+    if args.dir_base is None:
         file_dir = os.path.dirname(__file__)
         repo_dir = os.path.abspath(os.path.join(file_dir, "../.."))
-        dir_out = os.path.join(repo_dir, f"run_files/{now}_{net_name}")
-        os.makedirs(dir_out, exist_ok=True)
-        LOGGER.info(f"Created base path {dir_out}")
+        dir_base = os.path.join(repo_dir, dlss_conf["dirs"]["base"])
+        os.makedirs(dir_base, exist_ok=True)
+        LOGGER.info(f"Created base directory {dir_base}")
 
-        args.dir_out = dir_out
+        args.dir_base = dir_base
 
-    checkpoint_dir = os.path.abspath(os.path.join(args.dir_out, "checkpoint"))
-    input_output.robust_makedirs(checkpoint_dir)
-    summary_dir = os.path.abspath(os.path.join(args.dir_out, "summary"))
-    input_output.robust_makedirs(summary_dir)
+    if args.dir_model is None:
+        now = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        args.dir_model = f"{now}_{net_name}"
+        LOGGER.info(f"Defined model directory {args.dir_model}")
+
+    dir_out = os.path.join(args.dir_base, args.dir_model)
+    os.makedirs(dir_out, exist_ok=True)
+    LOGGER.info(f"Created output directory {dir_out}")
+
+    checkpoint_dir = os.path.abspath(os.path.join(dir_out, "checkpoint"))
+    os.makedirs(checkpoint_dir, exist_ok=True)
+    summary_dir = os.path.abspath(os.path.join(dir_out, "summary"))
+    os.makedirs(summary_dir, exist_ok=True)
 
     # save the configs
-    with open(os.path.join(args.dir_out, "configs.yaml"), "w") as f:
+    with open(os.path.join(dir_out, "configs.yaml"), "w") as f:
         yaml.dump_all([net_conf, dlss_conf, msfm_conf], f)
 
     # TODO not hard code
@@ -287,6 +302,8 @@ if __name__ == "__main__":
         "--net_config=configs/resnet_small.yaml",
         "--verbosity=debug",
         "--distributed",
+        # "--dir_base=/Users/arne/data/DESY3/training"
+        # "--dir_model=/Users/arne/data/DESY3/training/2023-02-28_11-39-54_resnet_small"
         # "--debug"
     ]
     main(args)

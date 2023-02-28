@@ -1,3 +1,7 @@
+dirs:
+  # paths relative to the repo
+  base: "run_files"
+
 # contains the general, non model specific configuration parameters of the analysis
 training:
   target_params: ["Om", "s8"]
