@@ -35,7 +35,8 @@ LOGGER = logger.get_logger(__file__)
 #     return dict(main_memory=8192, main_time=4, main_scratch=0, main_n_cores=1)
 
 
-def setup(args):
+# def setup(args):
+def setup():
     description = "Train the specified network at the fiducial cosmology."
     parser = argparse.ArgumentParser(description=description, add_help=True)
 
@@ -297,13 +298,15 @@ def main(args):
 # only exists for debugging purposes
 if __name__ == "__main__":
 
-    args = [
-        "--tfr_pattern=/Users/arne/data/DESY3/tfrecords/v2/DESy3_fiducial_000.tfrecord",
-        "--net_config=configs/resnet_small.yaml",
-        "--verbosity=debug",
-        "--distributed",
-        # "--dir_base=/Users/arne/data/DESY3/training"
-        # "--dir_model=/Users/arne/data/DESY3/training/2023-02-28_11-39-54_resnet_small"
-        # "--debug"
-    ]
-    main(args)
+    args = setup()
+    print(args)
+    # args = [
+    #     "--tfr_pattern=/Users/arne/data/DESY3/tfrecords/v2/DESy3_fiducial_000.tfrecord",
+    #     "--net_config=configs/resnet_small.yaml",
+    #     "--verbosity=debug",
+    #     "--distributed",
+    #     # "--dir_base=/Users/arne/data/DESY3/training"
+    #     # "--dir_model=/Users/arne/data/DESY3/training/2023-02-28_11-39-54_resnet_small"
+    #     # "--debug"
+    # ]
+    # main(args)
