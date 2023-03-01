@@ -98,23 +98,26 @@ def setup():
     parser.add_argument("--distributed", action="store_true", help="distribute the training")
     parser.add_argument("--debug", action="store_true", help="activate debug mode")
 
-    args, _ = parser.parse_known_args(args)
+    # args, _ = parser.parse_known_args(args)
+    args, _ = parser.parse_known_args()
 
     # TODO create the model directory
     logger.set_all_loggers_level(args.verbosity)
 
     if args.debug:
         tf.config.run_functions_eagerly(True)
-        tf.config.set_soft_device_placement(False)
+        # tf.config.set_soft_device_placement(False)
         # tf.debugging.set_log_device_placement(True)
-        tf.data.experimental.enable_debug_mode()
+        # tf.data.experimental.enable_debug_mode()
         LOGGER.warning(f"!!!!! Running the training in test mode, TensorFlow is executed eagerly !!!!!")
 
     return args
 
 
-def main(args):
-    args = setup(args)
+# def main(args):
+def main():
+    # args = setup(args)
+    args = setup()
     LOGGER.timer.start("main")
 
     # check the devices
@@ -208,6 +211,7 @@ def main(args):
             pert_labels=pert_labels,
             batch_size=global_batch_size,
             conf=msfm_conf,
+            n_batches=n_steps,
             # relevant for performance
             n_readers=n_readers,
             n_prefetch=tf.data.AUTOTUNE,
@@ -266,7 +270,7 @@ def main(args):
         LOGGER.info(f"Starting training")
         counter = 0
         LOGGER.timer.start("training")
-        for data_vectors, label in LOGGER.progressbar(dist_dset.take(n_steps), at_level="info", total=n_steps):
+        for data_vectors, label in LOGGER.progressbar(dist_dset, at_level="info", total=n_steps):
             model.delta_train_step(data_vectors)
 
             # output
@@ -298,15 +302,13 @@ def main(args):
 # only exists for debugging purposes
 if __name__ == "__main__":
 
-    args = setup()
-    print(args)
     # args = [
     #     "--tfr_pattern=/Users/arne/data/DESY3/tfrecords/v2/DESy3_fiducial_000.tfrecord",
-    #     "--net_config=configs/resnet_small.yaml",
+    #     "--net_config=configs/resnet_debug.yaml",
     #     "--verbosity=debug",
     #     "--distributed",
     #     # "--dir_base=/Users/arne/data/DESY3/training"
     #     # "--dir_model=/Users/arne/data/DESY3/training/2023-02-28_11-39-54_resnet_small"
     #     # "--debug"
     # ]
-    # main(args)
+    main()
