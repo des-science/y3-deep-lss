@@ -37,7 +37,9 @@ conda activate deep_lss
 
 ### Setting up the `jupyter` kernel
 - Create a helper shell script to load the necessary modules before starting the kernel, see [here](https://docs.nersc.gov/services/jupyter/#customizing-kernels-with-a-helper-shell-script)
-- The `kernel.json` file is located at `/global/u2/a/athomsen/.local/share/jupyter/kernels/deep_lss` and looks like ```{
+- The `kernel.json` file is located at `/global/u2/a/athomsen/.local/share/jupyter/kernels/deep_lss` and looks like 
+```
+{
  "argv": [
   "{resource_dir}/kernel-helper.sh",
   "/global/common/software/des/athomsen/deep_lss/bin/python",
@@ -51,9 +53,13 @@ conda activate deep_lss
  "metadata": {
   "debugger": true
  }
-}```
-- `kernel-helper.sh` is located within the same directory and looks like ```#! /bin/bash
+}
+```
+- `kernel-helper.sh` is located within the same directory and looks like 
+```
+#! /bin/bash
 module load cudatoolkit
 module load cudnn
-exec "$@```
+exec "$@
+```
 
