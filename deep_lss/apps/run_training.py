@@ -48,13 +48,14 @@ def setup():
         choices=("critical", "error", "warning", "info", "debug"),
         help="logging level",
     )
-    parser.add_argument("--with_bary", action="store_true", help="include baryons")
     parser.add_argument(
         "--tfr_pattern",
         type=str,
-        default="/pscratch/sd/a/athomsen/DESY3/v2/fiducial",
+        default="/pscratch/sd/a/athomsen/DESY3/v2/fiducial/DESy3_fiducial_???.tfrecord",
         help="input root dir of the simulations",
     )
+    # TODO
+    # parser.add_argument("--with_bary", action="store_true", help="include baryons")
     parser.add_argument(
         "--dir_base",
         type=str,
@@ -104,6 +105,17 @@ def setup():
     # TODO create the model directory
     logger.set_all_loggers_level(args.verbosity)
 
+    LOGGER.debug(f"--verbosity = {args.verbosity}")
+    LOGGER.debug(f"--tfr_pattern = {args.tfr_pattern}")
+    LOGGER.debug(f"--dir_base = {args.dir_base}")
+    LOGGER.debug(f"--dir_model = {args.dir_model}")
+    LOGGER.debug(f"--net_config = {args.net_config}")
+    LOGGER.debug(f"--dlss_config = {args.dlss_config}")
+    LOGGER.debug(f"--msfm_config = {args.msfm_config}")
+    LOGGER.debug(f"--distributed = {args.distributed}")
+    LOGGER.debug(f"--restore_checkpoint = {args.restore_checkpoint}")
+    LOGGER.debug(f"--debug = {args.debug}")
+
     if args.debug:
         tf.config.run_functions_eagerly(True)
         # tf.config.set_soft_device_placement(False)
@@ -134,8 +146,10 @@ def main():
         LOGGER.info(f"Running on {n_gpus} GPUs")
 
     try:
-        n_gpus_cuda = len(os.environ["CUDA_VISIBLE_DEVICES"])
-        assert n_gpus == n_gpus_cuda
+        n_gpus_cuda = len(os.environ["CUDA_VISIBLE_DEVICES"].split(","))
+        assert (
+            n_gpus == n_gpus_cuda
+        ), f"The number of GPUs in TensorFlow {n_gpus} and CUDA {n_gpus_cuda} should be equal"
     except KeyError:
         LOGGER.warning(f"No CUDA enabled GPUs found")
 
@@ -222,8 +236,8 @@ def main():
 
         return dset
 
-    # TODO define the distribution strategy
-    if (n_gpus > 1) and (args.distributed) and (not args.debug):
+    # set up the distribution strategy
+    if n_gpus > 1 and args.distributed:
         cross_device_ops = tf.distribute.NcclAllReduce()
         # cross_device_ops = tf.distribute.HierarchicalCopyAllReduce()
         strategy = tf.distribute.MirroredStrategy(cross_device_ops=cross_device_ops)
@@ -234,6 +248,14 @@ def main():
         strategy = tf.distribute.get_strategy()
         n_gpus_strategy = 1
         LOGGER.warning(f"Training is not distributed, using the default strategy")
+
+    # adjust the batch size to the strategy
+    if global_batch_size % n_gpus == 0:
+        local_batch_size = global_batch_size // n_gpus
+    else:
+        raise ValueError(
+            f"The global batch size {global_batch_size} has to be divisible by the number of synced GPUs {n_gpus}"
+        )
 
     with strategy.scope():
         # distribute the dataset
@@ -260,48 +282,47 @@ def main():
         # set up the training loss
         model.setup_delta_loss_step(
             n_params,
-            global_batch_size,
+            local_batch_size,
             perts,
             n_channels=n_z_bins,
             strategy=strategy,
             **dlss_conf["training"]["delta_loss"],
         )
 
-        LOGGER.info(f"Starting training")
-        counter = 0
-        LOGGER.timer.start("training")
-        for data_vectors, label in LOGGER.progressbar(dist_dset, at_level="info", total=n_steps):
-            model.delta_train_step(data_vectors)
+    LOGGER.info(f"Starting training")
+    counter = 0
+    LOGGER.timer.start("training")
+    for data_vectors, index in LOGGER.progressbar(dist_dset, at_level="info", total=n_steps):
+        model.delta_train_step(data_vectors)
 
-            # output
-            if (output_every is not None) and (counter % output_every == 0):
-                LOGGER.info(f"Done with {counter}/{n_steps} training steps after {LOGGER.timer.elapsed('training')}")
+        # output
+        if (output_every is not None) and (counter % output_every == 0):
+            LOGGER.info(f"Done with {counter}/{n_steps} training steps after {LOGGER.timer.elapsed('training')}")
 
-            # checkpoint
-            if (checkpoint_every is not None) and (counter % checkpoint_every == 0):
-                model.save_model()
-
-            # evaluate
-            if (eval_every is not None) and (counter % eval_every == 0):
-                pass
-
-            counter += 1
-
-        LOGGER.info(f"Finished training after {n_steps} steps and {LOGGER.timer.elapsed('training')}")
-
-        # save everything at the end if necessary
-        if (checkpoint_every is not None) and (counter % checkpoint_every != 0):
-            LOGGER.info(f"Creating a final checkpoint")
+        # checkpoint
+        if (checkpoint_every is not None) and (counter % checkpoint_every == 0):
             model.save_model()
-        elif checkpoint_every is not None:
-            LOGGER.info(f"A final checkpoint already exists")
-        else:
-            LOGGER.info(f"No checkpoint has been saved")
+
+        # evaluate
+        if (eval_every is not None) and (counter % eval_every == 0):
+            pass
+
+        counter += 1
+
+    LOGGER.info(f"Finished training after {n_steps} steps and {LOGGER.timer.elapsed('training')}")
+
+    # save everything at the end if necessary
+    if (checkpoint_every is not None) and (counter % checkpoint_every != 0):
+        LOGGER.info(f"Creating a final checkpoint")
+        model.save_model()
+    elif checkpoint_every is not None:
+        LOGGER.info(f"A final checkpoint already exists")
+    else:
+        LOGGER.info(f"No checkpoint has been saved")
 
 
 # only exists for debugging purposes
 if __name__ == "__main__":
-
     # args = [
     #     "--tfr_pattern=/Users/arne/data/DESY3/tfrecords/v2/DESy3_fiducial_000.tfrecord",
     #     "--net_config=configs/resnet_debug.yaml",
