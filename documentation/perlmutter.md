@@ -9,20 +9,22 @@ module load python
 # make the environments discoverable
 conda config --append envs_dirs /global/common/software/des/athomsen
 
-# get the location of the tensorflow environment by running `module show tensorflow`
+# you can get the location of the tensorflow environment by running `module show tensorflow`
+
+# clone the NERSC provided tensorflow conda environment
 conda create --prefix /global/common/software/des/athomsen/deep_lss --clone /global/common/software/nersc/pm-2022q4/sw/tensorflow/2.9.0
 
 # install the jupyter kernel 
 python -m ipykernel install --user --name deep_lss
 
-# install packages and modify their version
-conda install healpy
-pip install numpy==1.23.5
-pip install tensorflow_probability==0.17.0
+# install packages, from now on try to only use pip (not conda)
+pip install --force-reinstall --no-cache-dir scipy==1.8
+pip install --force-reinstall --no-cache-dir healpy
+pip install --force-reinstall --no-cache-dir tensorflow_probability==0.17.0
 
 # TODO these don't work for some reason, clone the repo and `pip install -e .` instead
-python -m pip install --user 'PyGSP @ git+https://github.com/jafluri/pygsp.git@sphere-graphs'
-python -m pip install --user 'deepsphere @ git+https://github.com/deepsphere/deepsphere-cosmo-tf2.git'
+python -m pip install --force-reinstall --no-cache-dir 'PyGSP @ git+https://github.com/jafluri/pygsp.git@sphere-graphs'
+python -m pip install --force-reinstall --no-cache-dir 'deepsphere @ git+https://github.com/deepsphere/deepsphere-cosmo-tf2.git'
 ```
 
 ### Setting up the `.bash_profile`
