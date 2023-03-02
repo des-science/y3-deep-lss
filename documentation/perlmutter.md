@@ -2,9 +2,9 @@
 - Locate the environment in `/global/common/software` instead of `$HOME`, see [here](https://docs.nersc.gov/development/languages/python/nersc-python/#moving-your-conda-setup-to-globalcommonsoftware)
 - Clone their conda environment containing tensorflow, see [here](https://docs.nersc.gov/development/languages/python/nersc-python/#using-conda-clone)
 - Follow the best practices for using `pip` within a `conda` environment listed [here](https://www.anaconda.com/blog/using-pip-in-a-conda-environment)
- - First use conda, then only pip (don't go back and forth)
- - Don't use the `--user` flag in `pip install`
- - Use the `--upgrade-strategy only-if-needed` flag in `pip install`, but this is not necessary as it's the default
+  - First use conda, then only pip (don't go back and forth)
+  - Don't use the `--user` flag in `pip install`
+  - Use the `--upgrade-strategy only-if-needed` flag in `pip install`, but this is not necessary as it's the default
 - The cluster support recommends to use the `--force-reinstall` and `--no-cache-dir` flags in `pip install`, see [here](https://docs.nersc.gov/development/languages/python/nersc-python/#installing-libraries-via-pip)
 
 ```
