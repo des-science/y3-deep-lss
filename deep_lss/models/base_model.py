@@ -209,7 +209,7 @@ class BaseModel(object):
                 (no regularization).
         """
         LOGGER.warning("Performing a base_train_step in python instead of a tf.function")
-        trainable_weights = self.network.trainable_weights
+        trainable_variables = self.network.trainable_variables
 
         with tf.GradientTape() as tape:
             predictions = self.network(input_tensor, training=True)
@@ -224,14 +224,14 @@ class BaseModel(object):
 
             # handle the l2 norm
             if l2_norm_weight is not None:
-                l2_loss = tf.linalg.global_norm(trainable_weights)
+                l2_loss = tf.linalg.global_norm(trainable_variables)
                 if self.summary_writer is not None:
                     with self.summary_writer.as_default():
                         tf.summary.scalar("l2_loss", l2_loss)
                 loss = loss + l2_norm_weight * l2_loss
 
         # get the gradients
-        gradients = tape.gradient(loss, trainable_weights)
+        gradients = tape.gradient(loss, trainable_variables)
 
         # clip the gradients
         if clip_by_value is not None:
@@ -248,7 +248,7 @@ class BaseModel(object):
             gradients, _ = tf.clip_by_global_norm(gradients, clip_by_global_norm, use_norm=glob_norm)
 
         # apply gradients
-        self.optimizer.apply_gradients(zip(gradients, trainable_weights))
+        self.optimizer.apply_gradients(zip(gradients, trainable_variables))
 
         # update the step
         self.update_step()

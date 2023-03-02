@@ -190,6 +190,7 @@ class DeltaLossModel(BaseModel):
         Returns:
             callable: A callable function that performs one gradient descent step with respect to the delta loss.
         """
+
         # setup a loss function
         def loss_func(predictions):
             return delta_loss.delta_loss(
@@ -248,8 +249,9 @@ class DeltaLossModel(BaseModel):
 
         # distributed
         elif isinstance(strategy, tf.distribute.Strategy):
-
-            @tf.function(input_signature=[tf.TensorSpec(shape=in_shape, dtype=current_float)])
+            # NOTE passing an input_signature like above for a distributed dset leads the following error:
+            # AttributeError: 'PerReplica' object has no attribute 'dtype'
+            @tf.function
             def delta_train_step(input_batch):
                 LOGGER.warning(f"Tracing distributed delta_train_step")
                 self.distributed_train_step(
