@@ -94,13 +94,15 @@ class BaseModel(object):
                 checkpoint_name="ckpt",
                 step_counter=self.train_step,
             )
+            self.n_init_checkpoints = len(self.checkpoint_manager.checkpoints)
         else:
             self.checkpoint = None
             self.checkpoint_manager = None
+            self.n_init_checkpoints = None
 
         if self.restore_from_checkpoint:
             self.restore_model()
-        elif (self.checkpoint_manager is not None) and (len(self.checkpoint_manager.checkpoints) != 0):
+        elif (self.checkpoint_manager is not None) and (self.n_init_checkpoints != 0):
             LOGGER.warning(
                 f"The model can not be saved when it is initialized from scratch with a non-empty checkpoint directory"
             )
@@ -140,10 +142,10 @@ class BaseModel(object):
             raise ValueError("No checkpoint directory was declared during the init of the model, it can not be saved.")
 
         else:
-            if not self.restore_from_checkpoint and len(self.checkpoint_manager.checkpoints) != 0:
+            if not self.restore_from_checkpoint and self.n_init_checkpoints != 0:
                 raise Exception(
-                    f"The specified checkpoint directory {self.checkpoint_dir} is not empty, can not save a model"
-                    f" initialized from scratch there."
+                    f"The specified checkpoint directory {self.checkpoint_dir} was not empty at initialization, can not"
+                    f" save a model initialized from scratch there."
                 )
             else:
                 self.checkpoint_manager.save()

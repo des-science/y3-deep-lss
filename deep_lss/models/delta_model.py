@@ -251,6 +251,7 @@ class DeltaLossModel(BaseModel):
         elif isinstance(strategy, tf.distribute.Strategy):
             # NOTE passing an input_signature like above for a distributed dset leads the following error:
             # AttributeError: 'PerReplica' object has no attribute 'dtype'
+            # Instead do like  https://www.tensorflow.org/tutorials/distribute/input#using_the_element_spec_property
             @tf.function
             def delta_train_step(input_batch):
                 LOGGER.warning(f"Tracing distributed delta_train_step")
