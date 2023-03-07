@@ -14,9 +14,11 @@ TODO make esub compatible? The index could correspond to a neural net architectu
 """
 
 import tensorflow as tf
-import os, argparse, warnings, yaml, time
+import os, argparse, warnings, yaml, atexit
 
 from datetime import datetime
+from time import time
+from contextlib import nullcontext
 
 from msfm import fiducial_pipeline
 from msfm.utils import logger, input_output, analysis, parameters
@@ -61,14 +63,16 @@ def setup():
         type=str,
         default=None,
         # TODO
-        help="dir where the models are saved. It is generated within the repo according to the date and time if set to None",
+        help="base dir where the models are saved. If None, a dir within the repo is generated according to the config",
     )
     parser.add_argument(
         "--dir_model",
         type=str,
         default=None,
         # TODO
-        help="dir where the models are saved. It is generated within the repo according to the date and time if set to None",
+        help="dir where the model summaries and checkpoints are saved. If None, a dir is generated according to the"
+        " current date and time. This dir is appended to the dir_base as a relative path. Passing an absolute path"
+        " overrides this.",
     )
     parser.add_argument(
         "--net_config",
@@ -98,6 +102,7 @@ def setup():
     )
     parser.add_argument("--distributed", action="store_true", help="distribute the training")
     parser.add_argument("--debug", action="store_true", help="activate debug mode")
+    parser.add_argument("--profile", action="store_true", help="run the profiler")
 
     # args, _ = parser.parse_known_args(args)
     args, _ = parser.parse_known_args()
@@ -117,9 +122,9 @@ def setup():
     LOGGER.debug(f"--debug = {args.debug}")
 
     if args.debug:
-        tf.config.run_functions_eagerly(True)
+        # tf.config.run_functions_eagerly(True)
         # tf.config.set_soft_device_placement(False)
-        # tf.debugging.set_log_device_placement(True)
+        tf.debugging.set_log_device_placement(True)
         # tf.data.experimental.enable_debug_mode()
         LOGGER.warning(f"!!!!! Running the training in test mode, TensorFlow is executed eagerly !!!!!")
 
@@ -215,35 +220,19 @@ def main():
     # TODO not hard code
     n_z_bins = 4
 
-    # TODO implement some noise schedule?
-    # https://cosmo-gitlab.phys.ethz.ch/jafluri/arne_handover/-/blob/main/networks/train_net.py#L184
-
-    # like https://www.tensorflow.org/tutorials/distribute/input#tfdistributestrategydistribute_datasets_from_function
-    def dataset_fn(input_context):
-        dset = fiducial_pipeline.get_fiducial_dset(
-            tfr_pattern=args.tfr_pattern,
-            pert_labels=pert_labels,
-            batch_size=global_batch_size,
-            conf=msfm_conf,
-            n_batches=n_steps,
-            # relevant for performance
-            n_readers=n_readers,
-            n_prefetch=tf.data.AUTOTUNE,
-            file_name_shuffle_buffer=file_name_shuffle_buffer,
-            examples_shuffle_buffer=examples_shuffle_buffer,
-            input_context=input_context,
-        )
-
-        return dset
-
     # set up the distribution strategy
     if n_gpus > 1 and args.distributed:
-        cross_device_ops = tf.distribute.NcclAllReduce()
+        cross_device_ops = tf.distribute.NcclAllReduce(num_packs=1)
         # cross_device_ops = tf.distribute.HierarchicalCopyAllReduce()
+        # cross_device_ops = tf.distribute.ReductionToOneDevice()
         strategy = tf.distribute.MirroredStrategy(cross_device_ops=cross_device_ops)
+
         n_gpus_strategy = strategy.num_replicas_in_sync
         assert n_gpus_strategy == n_gpus
         LOGGER.info(f"Training is distributed, using the MirroredStrategy")
+
+        # correct exit behavior as in https://github.com/tensorflow/tensorflow/issues/50487#issuecomment-997304668
+        atexit.register(strategy._extended._collective_ops._pool.close)
     else:
         strategy = tf.distribute.get_strategy()
         n_gpus_strategy = 1
@@ -252,15 +241,39 @@ def main():
     # adjust the batch size to the strategy
     if global_batch_size % n_gpus == 0:
         local_batch_size = global_batch_size // n_gpus
+        LOGGER.info(f"Using the local batch size {local_batch_size}")
     else:
         raise ValueError(
             f"The global batch size {global_batch_size} has to be divisible by the number of synced GPUs {n_gpus}"
         )
 
-    with strategy.scope():
-        # distribute the dataset
-        dist_dset = strategy.distribute_datasets_from_function(dataset_fn)
+    # TODO implement some noise schedule?
+    # https://cosmo-gitlab.phys.ethz.ch/jafluri/arne_handover/-/blob/main/networks/train_net.py#L184
 
+    # like https://www.tensorflow.org/tutorials/distribute/input#tfdistributestrategydistribute_datasets_from_function
+    def dataset_fn(input_context):
+        dset = fiducial_pipeline.get_fiducial_dset(
+            tfr_pattern=args.tfr_pattern,
+            pert_labels=pert_labels,
+            local_batch_size=local_batch_size,
+            conf=msfm_conf,
+            n_batches=n_steps,
+            # n_noise=3,
+            # relevant for performance
+            n_readers=n_readers,
+            n_prefetch=tf.data.AUTOTUNE,
+            file_name_shuffle_buffer=file_name_shuffle_buffer,
+            examples_shuffle_buffer=examples_shuffle_buffer,
+            input_context=input_context,
+        )
+        return dset
+
+    dist_dset = strategy.distribute_datasets_from_function(dataset_fn)
+    # because of https://www.tensorflow.org/guide/profiler#profiling_custom_training_loops
+    dist_iter = iter(dist_dset)
+
+    # create all of the variables within the strategy's scope, such that they are mirrored
+    with strategy.scope():
         # load the layers
         network = NETWORKS[net_conf["model"]["name"]](
             output_shape=n_params, **net_conf["model"]["params"]
@@ -279,40 +292,57 @@ def main():
             restore_checkpoint=args.restore_checkpoint,
         )
 
-        # set up the training loss
-        model.setup_delta_loss_step(
-            n_params,
-            local_batch_size,
-            perts,
-            n_channels=n_z_bins,
-            strategy=strategy,
-            **dlss_conf["training"]["delta_loss"],
-        )
+    # set up the training loss
+    model.setup_delta_loss_step(
+        n_params,
+        local_batch_size,
+        perts,
+        n_channels=n_z_bins,
+        strategy=strategy,
+        **dlss_conf["training"]["delta_loss"],
+    )
 
     LOGGER.info(f"Starting training")
-    counter = 0
     LOGGER.timer.start("training")
-    for data_vectors, index in LOGGER.progressbar(dist_dset, at_level="info", total=n_steps):
-        model.delta_train_step(data_vectors)
+    t_prev = time()
 
-        # output
-        if (output_every is not None) and (counter % output_every == 0):
-            LOGGER.info(f"Done with {counter}/{n_steps} training steps after {LOGGER.timer.elapsed('training')}")
+    for step in LOGGER.progressbar(range(1, n_steps + 1), at_level="info", total=n_steps):
+        # optional context like https://stackoverflow.com/a/34798330
+        with tf.profiler.experimental.Trace("step", step_num=step, _r=1) if args.profile else nullcontext():
+            # train step
+            data_vectors, index = next(dist_iter)
+            model.delta_train_step(data_vectors)
 
-        # checkpoint
-        if (checkpoint_every is not None) and (counter % checkpoint_every == 0):
-            model.save_model()
+            # output
+            if (output_every is not None) and (step % output_every == 0):
+                LOGGER.info(f"Done with {step}/{n_steps} training steps after {LOGGER.timer.elapsed('training')}")
 
-        # evaluate
-        if (eval_every is not None) and (counter % eval_every == 0):
-            pass
+            # checkpoint
+            if (checkpoint_every is not None) and (step % checkpoint_every == 0):
+                model.save_model()
 
-        counter += 1
+            # evaluate
+            if (eval_every is not None) and (step % eval_every == 0):
+                pass
+
+            # profile
+            if args.profile and step == 50:
+                LOGGER.info(f"Starting to profile")
+                tf.profiler.experimental.start(model.summary_dir)
+            if args.profile and step == 60:
+                LOGGER.info(f"Stopping to profile")
+                tf.profiler.experimental.stop()
+
+            # log time per step
+            with model.summary_writer.as_default():
+                t_now = time()
+                tf.summary.scalar("step_time", t_now - t_prev)
+                t_prev = t_now
 
     LOGGER.info(f"Finished training after {n_steps} steps and {LOGGER.timer.elapsed('training')}")
 
     # save everything at the end if necessary
-    if (checkpoint_every is not None) and (counter % checkpoint_every != 0):
+    if (checkpoint_every is not None) and (step % checkpoint_every != 0):
         LOGGER.info(f"Creating a final checkpoint")
         model.save_model()
     elif checkpoint_every is not None:
