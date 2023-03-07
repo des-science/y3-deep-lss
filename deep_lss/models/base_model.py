@@ -158,8 +158,11 @@ class BaseModel(object):
             ValueError: If there's no checkpoint directory or it's empty.
         """
         if self.checkpoint_dir is not None:
-            dir_restore = self.checkpoint_manager.restore_or_initialize()
-            LOGGER.info(f"Network successfully restored from checkpoint {dir_restore}.")
+            if len(self.checkpoint_manager.checkpoints) > 0:
+                dir_restore = self.checkpoint_manager.restore_or_initialize()
+                LOGGER.info(f"Network successfully restored from checkpoint {dir_restore}.")
+            else:
+                raise ValueError(f"A non empty checkpoint_dir {self.checkpoint_dir} has to be passed")
 
         else:
             raise ValueError(f"No checkpoint directory was given, the network can not be restored.")

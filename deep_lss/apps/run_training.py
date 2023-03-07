@@ -39,7 +39,7 @@ LOGGER = logger.get_logger(__file__)
 # def setup(args):
 def setup():
     description = "Train the specified network at the fiducial cosmology."
-    parser = argparse.aArgumentParser(description=description, add_help=True)
+    parser = argparse.ArgumentParser(description=description, add_help=True)
 
     parser.add_argument(
         "-v",
@@ -99,7 +99,7 @@ def setup():
         action="store_true",
         help="restore the model from a checkpoint instead of initializing it from scratch",
     )
-    parser.add_argument("--distributed", action="store_true", help="distribute the training")
+    parser.add_argument("--local", action="store_true", help="distribute the training")
     parser.add_argument("--debug", action="store_true", help="activate debug mode")
     parser.add_argument("--profile", action="store_true", help="run the profiler")
 
@@ -116,9 +116,10 @@ def setup():
     LOGGER.debug(f"--net_config = {args.net_config}")
     LOGGER.debug(f"--dlss_config = {args.dlss_config}")
     LOGGER.debug(f"--msfm_config = {args.msfm_config}")
-    LOGGER.debug(f"--distributed = {args.distributed}")
     LOGGER.debug(f"--restore_checkpoint = {args.restore_checkpoint}")
+    LOGGER.debug(f"--local = {args.local}")
     LOGGER.debug(f"--debug = {args.debug}")
+    LOGGER.debug(f"--profile = {args.profile}")
 
     if args.debug:
         # tf.config.run_functions_eagerly(True)
@@ -129,8 +130,9 @@ def setup():
 
     return args
 
+
 # def main(args):
-def main():
+def training():
     # args = setup(args)
     args = setup()
     LOGGER.timer.start("main")
@@ -144,10 +146,8 @@ def main():
     # general constants
     target_params = dlss_conf["training"]["target_params"]
     n_params = len(target_params)
-    pert_labels = parameters.get_fiducial_perturbation_labels(target_params)
     perts = parameters.get_fiducial_perturbations(target_params)
     LOGGER.info(f"Training with respect to the parameters {target_params} with off sets {perts}")
-    LOGGER.debug(f"The labels are {pert_labels}")
 
     n_side = msfm_conf["analysis"]["n_side"]
     data_vec_pix, _, _, _, _ = analysis.load_pixel_file(msfm_conf)
@@ -199,17 +199,9 @@ def main():
     # TODO not hard code
     n_z_bins = 4
 
-    strategy = distribute.get_strategy(args.distributed)
-    n_replicas = strategy.num_replicas_in_sync
+    strategy = distribute.get_strategy(not args.local)
 
-    # adjust the batch size to the strategy
-    if global_batch_size % n_replicas == 0:
-        local_batch_size = global_batch_size // n_replicas
-        LOGGER.info(f"Using the local batch size {local_batch_size}")
-    else:
-        raise ValueError(
-            f"The global batch size {global_batch_size} has to be divisible by the number of synced replicas {n_replicas}"
-        )
+    local_batch_size = distribute.get_local_batch_size(strategy, global_batch_size)
 
     # TODO implement some noise schedule?
     # https://cosmo-gitlab.phys.ethz.ch/jafluri/arne_handover/-/blob/main/networks/train_net.py#L184
@@ -218,7 +210,7 @@ def main():
     def dataset_fn(input_context):
         dset = fiducial_pipeline.get_fiducial_dset(
             tfr_pattern=args.tfr_pattern,
-            pert_labels=pert_labels,
+            params=target_params,
             local_batch_size=local_batch_size,
             conf=msfm_conf,
             # n_noise=3,
@@ -227,6 +219,7 @@ def main():
             n_prefetch=tf.data.AUTOTUNE,
             file_name_shuffle_buffer=file_name_shuffle_buffer,
             examples_shuffle_buffer=examples_shuffle_buffer,
+            # distribution
             input_context=input_context,
         )
         return dset
@@ -275,8 +268,8 @@ def main():
         # optional context like https://stackoverflow.com/a/34798330
         with tf.profiler.experimental.Trace("step", step_num=step, _r=1) if args.profile else nullcontext():
             # train step
-            data_vectors, index = next(dist_iter)
-            model.delta_train_step(data_vectors)
+            dv_batch, index_batch = next(dist_iter)
+            model.delta_train_step(dv_batch)
 
             # output
             if (output_every is not None) and (step % output_every == 0):
@@ -327,4 +320,4 @@ if __name__ == "__main__":
     #     # "--dir_model=/Users/arne/data/DESY3/training/2023-02-28_11-39-54_resnet_small"
     #     # "--debug"
     # ]
-    main()
+    training()

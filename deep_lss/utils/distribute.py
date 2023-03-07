@@ -77,3 +77,29 @@ def get_strategy(distributed, strategy_type="mirrored", cross_device_ops=tf.dist
         LOGGER.warning(f"Training is not distributed, using the default strategy")
 
     return strategy
+
+def get_local_batch_size(strategy, global_batch_size):
+    """Calculates the local (per replica) batch size given a strategy and global batch size
+
+    Args:
+        strategy (tf.distribute.Strategy): The instance of the strategy.
+        global_batch_size (int): Batch size over all of the replicas.
+
+    Raises:
+        ValueError: If the global batch size is not divisible by the number of replicas
+
+    Returns:
+        int: The per replica batch size
+    """
+    n_replicas = strategy.num_replicas_in_sync
+
+    # adjust the batch size to the strategy
+    if global_batch_size % n_replicas == 0:
+        local_batch_size = global_batch_size // n_replicas
+        LOGGER.info(f"Using the local batch size {local_batch_size}")
+    else:
+        raise ValueError(
+            f"The global batch size {global_batch_size} has to be divisible by the number of synced replicas {n_replicas}"
+        )
+
+    return local_batch_size
