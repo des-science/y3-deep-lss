@@ -8,13 +8,12 @@ Train the DeepSphere graph neural networks at the fiducial cosmology and its per
 maximizing loss to find an informative summary statistic.
 
 Meant for the GPU nodes of the Perlmutter cluster at NERSC.
-TODO implement distributed training
 TODO implement weights & biases versioning
 TODO make esub compatible? The index could correspond to a neural net architecture in the hyperparameter search
 """
 
 import tensorflow as tf
-import os, argparse, warnings, yaml, atexit
+import os, argparse, warnings, yaml
 
 from datetime import datetime
 from time import time
@@ -23,7 +22,7 @@ from contextlib import nullcontext
 from msfm import fiducial_pipeline
 from msfm.utils import logger, input_output, analysis, parameters
 
-from deep_lss.utils import utils
+from deep_lss.utils import utils, distribute
 from deep_lss.models.delta_model import DeltaLossModel
 from deep_lss.nets import NETWORKS
 
@@ -40,7 +39,7 @@ LOGGER = logger.get_logger(__file__)
 # def setup(args):
 def setup():
     description = "Train the specified network at the fiducial cosmology."
-    parser = argparse.ArgumentParser(description=description, add_help=True)
+    parser = argparse.aArgumentParser(description=description, add_help=True)
 
     parser.add_argument(
         "-v",
@@ -130,33 +129,13 @@ def setup():
 
     return args
 
-
 # def main(args):
 def main():
     # args = setup(args)
     args = setup()
     LOGGER.timer.start("main")
 
-    # check the devices
-    try:
-        n_cpus = len(os.sched_getaffinity(0))
-    except AttributeError:
-        n_cpus = os.cpu_count()
-    LOGGER.info(f"Running on {n_cpus} CPU cores")
-
-    n_gpus = len(tf.config.list_physical_devices("GPU"))
-    if n_gpus == 0:
-        LOGGER.warning(f"No GPU discovered, running on CPUs only")
-    else:
-        LOGGER.info(f"Running on {n_gpus} GPUs")
-
-    try:
-        n_gpus_cuda = len(os.environ["CUDA_VISIBLE_DEVICES"].split(","))
-        assert (
-            n_gpus == n_gpus_cuda
-        ), f"The number of GPUs in TensorFlow {n_gpus} and CUDA {n_gpus_cuda} should be equal"
-    except KeyError:
-        LOGGER.warning(f"No CUDA enabled GPUs found")
+    _, _ = distribute.check_devices()
 
     # read the different configs
     dlss_conf = utils.load_deep_lss_config(args.dlss_config)
@@ -220,31 +199,16 @@ def main():
     # TODO not hard code
     n_z_bins = 4
 
-    # set up the distribution strategy
-    if n_gpus > 1 and args.distributed:
-        cross_device_ops = tf.distribute.NcclAllReduce(num_packs=1)
-        # cross_device_ops = tf.distribute.HierarchicalCopyAllReduce()
-        # cross_device_ops = tf.distribute.ReductionToOneDevice()
-        strategy = tf.distribute.MirroredStrategy(cross_device_ops=cross_device_ops)
-
-        n_gpus_strategy = strategy.num_replicas_in_sync
-        assert n_gpus_strategy == n_gpus
-        LOGGER.info(f"Training is distributed, using the MirroredStrategy")
-
-        # correct exit behavior as in https://github.com/tensorflow/tensorflow/issues/50487#issuecomment-997304668
-        atexit.register(strategy._extended._collective_ops._pool.close)
-    else:
-        strategy = tf.distribute.get_strategy()
-        n_gpus_strategy = 1
-        LOGGER.warning(f"Training is not distributed, using the default strategy")
+    strategy = distribute.get_strategy(args.distributed)
+    n_replicas = strategy.num_replicas_in_sync
 
     # adjust the batch size to the strategy
-    if global_batch_size % n_gpus == 0:
-        local_batch_size = global_batch_size // n_gpus
+    if global_batch_size % n_replicas == 0:
+        local_batch_size = global_batch_size // n_replicas
         LOGGER.info(f"Using the local batch size {local_batch_size}")
     else:
         raise ValueError(
-            f"The global batch size {global_batch_size} has to be divisible by the number of synced GPUs {n_gpus}"
+            f"The global batch size {global_batch_size} has to be divisible by the number of synced replicas {n_replicas}"
         )
 
     # TODO implement some noise schedule?
@@ -257,7 +221,6 @@ def main():
             pert_labels=pert_labels,
             local_batch_size=local_batch_size,
             conf=msfm_conf,
-            n_batches=n_steps,
             # n_noise=3,
             # relevant for performance
             n_readers=n_readers,
@@ -269,7 +232,6 @@ def main():
         return dset
 
     dist_dset = strategy.distribute_datasets_from_function(dataset_fn)
-    # because of https://www.tensorflow.org/guide/profiler#profiling_custom_training_loops
     dist_iter = iter(dist_dset)
 
     # create all of the variables within the strategy's scope, such that they are mirrored
@@ -286,6 +248,7 @@ def main():
             n_side=n_side,
             indices=data_vec_pix,
             n_neighbors=net_conf["model"]["n_neighbors"],
+            max_checkpoints=net_conf["model"]["max_checkpoints"],
             input_shape=(None, len(data_vec_pix), n_z_bins),
             checkpoint_dir=checkpoint_dir,
             summary_dir=summary_dir,
@@ -306,7 +269,9 @@ def main():
     LOGGER.timer.start("training")
     t_prev = time()
 
-    for step in LOGGER.progressbar(range(1, n_steps + 1), at_level="info", total=n_steps):
+    # TODO wrap in tf.function?
+    for step in LOGGER.progressbar(tf.range(1, n_steps + 1), at_level="info", total=n_steps):
+        # context for profiling like https://www.tensorflow.org/guide/profiler#profiling_custom_training_loops
         # optional context like https://stackoverflow.com/a/34798330
         with tf.profiler.experimental.Trace("step", step_num=step, _r=1) if args.profile else nullcontext():
             # train step
