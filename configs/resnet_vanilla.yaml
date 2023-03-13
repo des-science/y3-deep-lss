@@ -2,9 +2,9 @@
 name: "resnet_small"
 
 training:
-  n_steps: 1000
+  n_steps: 50000
   output_every: null
-  checkpoint_every: null
+  checkpoint_every: 10000
   eval_every: null
   learning_rate: 0.001
   clip_by_value: null
@@ -12,18 +12,28 @@ training:
   clip_by_global_norm: 5.0
 
 dset:
-  # for the delta loss, this is multiplied by 1 + 2 * n_params
-  global_batch_size: 64
-  n_readers: 8
-  file_name_shuffle_buffer: 128
-  examples_shuffle_buffer: 128
+  fiducial:
+    global_batch_size: 64
+    # for the delta loss, this is multiplied by 1 + 2 * n_params
+    kwargs:
+      is_cached: True
+      n_readers: 32
+      n_prefetch: null
+      file_name_shuffle_buffer: 128
+      examples_shuffle_buffer: 128
+  grid:
+    global_batch_size: 384
+    n_readers: 32
 
 model:
   name: resnet
   n_neighbors: 20
-  params:
+  max_checkpoints: 5
+  kwargs:
     n_base_channels: 32
     # depth
+    # n_downsampling: 5
+    # n_cheby: 0
     n_downsampling: 3
     n_cheby: 2
     n_residuals: 5

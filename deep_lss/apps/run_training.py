@@ -31,12 +31,10 @@ warnings.filterwarnings("ignore", category=RuntimeWarning)
 warnings.filterwarnings("once", category=UserWarning)
 LOGGER = logger.get_logger(__file__)
 
-# TODO
-# def resources(args):
-#     return dict(main_memory=8192, main_time=4, main_scratch=0, main_n_cores=1)
+# os.environ["TF_GPU_THREAD_MODE"] = "gpu_private"
+# os.environ["TF_GPU_THREAD_COUNT"] = "16"
 
 
-# def setup(args):
 def setup():
     description = "Train the specified network at the fiducial cosmology."
     parser = argparse.ArgumentParser(description=description, add_help=True)
@@ -103,7 +101,6 @@ def setup():
     parser.add_argument("--debug", action="store_true", help="activate debug mode")
     parser.add_argument("--profile", action="store_true", help="run the profiler")
 
-    # args, _ = parser.parse_known_args(args)
     args, _ = parser.parse_known_args()
 
     # TODO create the model directory
@@ -122,16 +119,15 @@ def setup():
     LOGGER.debug(f"--profile = {args.profile}")
 
     if args.debug:
-        # tf.config.run_functions_eagerly(True)
+        tf.config.run_functions_eagerly(True)
         # tf.config.set_soft_device_placement(False)
-        tf.debugging.set_log_device_placement(True)
+        # tf.debugging.set_log_device_placement(True)
         # tf.data.experimental.enable_debug_mode()
         LOGGER.warning(f"!!!!! Running the training in test mode, TensorFlow is executed eagerly !!!!!")
 
     return args
 
 
-# def main(args):
 def training():
     # args = setup(args)
     args = setup()
@@ -139,34 +135,30 @@ def training():
 
     _, _ = distribute.check_devices()
 
-    # read the different configs
+    # constants: deep-large-scale-structure
     dlss_conf = utils.load_deep_lss_config(args.dlss_config)
-    msfm_conf = analysis.load_config(args.msfm_config)
-
-    # general constants
     target_params = dlss_conf["training"]["target_params"]
     n_params = len(target_params)
     perts = parameters.get_fiducial_perturbations(target_params)
     LOGGER.info(f"Training with respect to the parameters {target_params} with off sets {perts}")
 
-    n_side = msfm_conf["analysis"]["n_side"]
+    # constants: multiprobe-simulation-forward-model
+    msfm_conf = analysis.load_config(args.msfm_config)
     data_vec_pix, _, _, _, _ = analysis.load_pixel_file(msfm_conf)
+    n_side = msfm_conf["analysis"]["n_side"]
+    n_noise_per_example = msfm_conf["analysis"]["fiducial"]["n_noise_per_example"]
 
     # TODO could loop over esub indices here
 
+    # constants: network
     net_conf = input_output.read_yaml(args.net_config)
-
-    # network constants
     net_name = net_conf["name"]
     n_steps = net_conf["training"]["n_steps"]
     output_every = net_conf["training"]["output_every"]
     checkpoint_every = net_conf["training"]["checkpoint_every"]
     eval_every = net_conf["training"]["eval_every"]
 
-    global_batch_size = net_conf["dset"]["global_batch_size"]
-    n_readers = net_conf["dset"]["n_readers"]
-    file_name_shuffle_buffer = net_conf["dset"]["file_name_shuffle_buffer"]
-    examples_shuffle_buffer = net_conf["dset"]["examples_shuffle_buffer"]
+    global_batch_size = net_conf["dset"]["fiducial"]["global_batch_size"]
 
     # create directories
     if args.dir_base is None:
@@ -199,6 +191,7 @@ def training():
     # TODO not hard code
     n_z_bins = 4
 
+    # strategy = distribute.get_strategy(not args.local, cross_device_ops=tf.distribute.HierarchicalCopyAllReduce(num_packs=1))
     strategy = distribute.get_strategy(not args.local)
 
     local_batch_size = distribute.get_local_batch_size(strategy, global_batch_size)
@@ -209,16 +202,13 @@ def training():
     # like https://www.tensorflow.org/tutorials/distribute/input#tfdistributestrategydistribute_datasets_from_function
     def dataset_fn(input_context):
         dset = fiducial_pipeline.get_fiducial_dset(
+        # dset = fiducial_pipeline.get_fiducial_multi_noise_dset(
             tfr_pattern=args.tfr_pattern,
             params=target_params,
             local_batch_size=local_batch_size,
             conf=msfm_conf,
-            # n_noise=3,
-            # relevant for performance
-            n_readers=n_readers,
-            n_prefetch=tf.data.AUTOTUNE,
-            file_name_shuffle_buffer=file_name_shuffle_buffer,
-            examples_shuffle_buffer=examples_shuffle_buffer,
+            # n_noise=n_noise_per_example,
+            **net_conf["dset"]["fiducial"]["kwargs"],
             # distribution
             input_context=input_context,
         )
@@ -231,7 +221,7 @@ def training():
     with strategy.scope():
         # load the layers
         network = NETWORKS[net_conf["model"]["name"]](
-            output_shape=n_params, **net_conf["model"]["params"]
+            output_shape=n_params, **net_conf["model"]["kwargs"]
         ).get_layers()
         LOGGER.info(f"Loaded a network specification of type {NETWORKS[net_conf['model']['name']]}")
 
@@ -262,8 +252,8 @@ def training():
     LOGGER.timer.start("training")
     t_prev = time()
 
-    # TODO wrap in tf.function?
-    for step in LOGGER.progressbar(tf.range(1, n_steps + 1), at_level="info", total=n_steps):
+    # TODO wrap in tf.function (also use tf.range in that case)?
+    for step in LOGGER.progressbar(range(1, n_steps + 1), at_level="info", total=n_steps):
         # context for profiling like https://www.tensorflow.org/guide/profiler#profiling_custom_training_loops
         # optional context like https://stackoverflow.com/a/34798330
         with tf.profiler.experimental.Trace("step", step_num=step, _r=1) if args.profile else nullcontext():
@@ -284,10 +274,10 @@ def training():
                 pass
 
             # profile
-            if args.profile and step == 50:
+            if args.profile and step == 200:
                 LOGGER.info(f"Starting to profile")
                 tf.profiler.experimental.start(model.summary_dir)
-            if args.profile and step == 60:
+            if args.profile and step == 205:
                 LOGGER.info(f"Stopping to profile")
                 tf.profiler.experimental.stop()
 

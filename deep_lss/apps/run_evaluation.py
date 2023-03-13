@@ -10,6 +10,7 @@ Meant for the GPU nodes of the Perlmutter cluster at NERSC.
 """
 
 import tensorflow as tf
+import numpy as np
 import os, argparse, warnings, h5py, math
 
 from msfm import grid_pipeline
@@ -95,7 +96,7 @@ def setup():
     return args
 
 
-def stack_cosmos(tensors, n_examples_per_cosmo):
+def stack_cosmos(tensors, sorted_indices, n_examples_per_cosmo):
     """TODO
 
     Args:
@@ -107,6 +108,8 @@ def stack_cosmos(tensors, n_examples_per_cosmo):
     """
     # concatenate all of the cosmologies into the first axis, shape (n_cosmos * n_examples_per_cosmo, n_output)
     tensors = tf.concat(tensors, axis=0)
+
+    tensors = tf.gather(tensors, sorted_indices)
     # split according to the cosmology, list of len n_cosmos with elements of shape (n_examples_per_cosmo, n_output)
     tensors = tf.split(tensors, tensors.shape[0] // n_examples_per_cosmo)
     # stack the cosmologies into the 0th axis, shape (n_cosmos, n_examples_per_cosmo, n_output)
@@ -133,7 +136,7 @@ def evaluation():
     LOGGER.info(f"The networks have output shape {n_output} and target {target_params}")
 
     # pipeline constants
-    n_cosmos = msfm_conf["grid"]["n_cosmos"]
+    n_cosmos = msfm_conf["analysis"]["grid"]["n_cosmos"]
     n_patches = msfm_conf["analysis"]["n_patches"]
     n_perms_per_cosmo = msfm_conf["analysis"]["grid"]["n_perms_per_cosmo"]
     n_noise_per_example = msfm_conf["analysis"]["grid"]["n_noise_per_example"]
@@ -146,22 +149,21 @@ def evaluation():
 
     # network constants
     net_name = net_conf["name"]
-    global_batch_size = net_conf["dset"]["evaluation"]["global_batch_size"]
-    n_readers = net_conf["dset"]["n_readers"]
+    global_batch_size = net_conf["dset"]["grid"]["global_batch_size"]
+    n_readers = net_conf["dset"]["grid"]["n_readers"]
 
     # set up directories
     checkpoint_dir = os.path.abspath(os.path.join(args.dir_model, "checkpoint"))
-    # evals_dir = os.path.abspath(os.path.join(args.dir_model, "evals"))
     evals_file = os.path.abspath(os.path.join(args.dir_model, "evals.h5"))
 
     # TODO not hard code
     n_z_bins = 4
 
-    strategy = distribute.get_strategy(not args.local)
+    strategy = distribute.get_strategy(not args.local, cross_device_ops=tf.distribute.ReductionToOneDevice())
 
     local_batch_size = distribute.get_local_batch_size(strategy, global_batch_size)
 
-    n_steps = math.ceil(n_examples, global_batch_size)
+    n_steps = math.ceil(n_examples / global_batch_size)
 
     # like https://www.tensorflow.org/tutorials/distribute/input#tfdistributestrategydistribute_datasets_from_function
     def dataset_fn(input_context):
@@ -170,7 +172,6 @@ def evaluation():
             local_batch_size=local_batch_size,
             n_params=len(all_params),
             conf=msfm_conf,
-            # n_noise=3,
             # relevant for performance
             n_readers=n_readers,
             n_prefetch=tf.data.AUTOTUNE,
@@ -185,7 +186,7 @@ def evaluation():
     with strategy.scope():
         # load the layers
         network = NETWORKS[net_conf["model"]["name"]](
-            output_shape=n_output, **net_conf["model"]["params"]
+            output_shape=n_output, **net_conf["model"]["kwargs"]
         ).get_layers()
         LOGGER.info(f"Loaded a network specification of type {NETWORKS[net_conf['model']['name']]}")
 
@@ -204,54 +205,46 @@ def evaluation():
     LOGGER.info(f"Starting evaluation")
     LOGGER.timer.start("eval")
 
-    step = 1
     preds = []
     cosmos = []
     sobols = []
+    noises = []
     for dv_batch, cosmo_batch, index_batch in LOGGER.progressbar(dist_dset, at_level="info", total=n_steps):
         # DistributedValues of shape (local_batch_size, n_output)
         pred_batch = strategy.run(model, args=(dv_batch,))
 
         # shape (global_batch_size, n_output)
         pred_batch = strategy.gather(pred_batch, axis=0)
-
-        print(pred_batch)
-
-        # TODO check order as https://www.tensorflow.org/tutorials/distribute/input#caveats
+        # shape (global_batch_size, n_params)
+        cosmo_batch = strategy.gather(cosmo_batch, axis=0)
+        # shape (global_batch_size,) NOTE it's important that gather takes place on the tensor (not tuple) level
+        sobol_batch = strategy.gather(index_batch[0], axis=0)
+        noise_batch = strategy.gather(index_batch[1], axis=0)
 
         preds.append(pred_batch)
         cosmos.append(cosmo_batch)
-        sobols.append(index_batch[0])
+        sobols.append(sobol_batch)
+        noises.append(noise_batch)
 
-        step += 1
+    # sort according to the sobol index
+    sorted_indices = tf.argsort(tf.concat(sobols, axis=0), axis=0)
 
-    LOGGER.info(
-        f"Finished looping over the whole dataset training after {step} steps and {LOGGER.timer.elapsed('eval')}"
-    )
-
-    preds = stack_cosmos(preds, n_examples_per_cosmo)
-
-    # should be (n_cosmos, n_examples_per_cosmo, n_output)
-    print(preds.shape)
-
-
-    cosmos = stack_cosmos(cosmos, n_examples_per_cosmo)
-    sobols = stack_cosmos(sobols, n_examples_per_cosmo)
+    preds = stack_cosmos(preds, sorted_indices, n_examples_per_cosmo)
+    cosmos = stack_cosmos(cosmos, sorted_indices, n_examples_per_cosmo)
+    sobols = stack_cosmos(sobols, sorted_indices, n_examples_per_cosmo)
+    noises = stack_cosmos(noises, sorted_indices, n_examples_per_cosmo)
     LOGGER.info(f"Reshaped the results")
-
 
     # TODO in evals_dir
     with h5py.File(evals_file, "w") as f:
-        f.create_dataset(name="pred", shape=(n_cosmos, n_examples_per_cosmo, n_output))
-        f["preds"] = preds.numpy()
+        f.create_dataset(name="preds", shape=(n_cosmos, n_examples_per_cosmo, n_output), data=preds)
+        f.create_dataset(name="cosmos", shape=(n_cosmos, n_examples_per_cosmo, len(all_params)), data=cosmos)
+        f.create_dataset(name="sobols", shape=(n_cosmos, n_examples_per_cosmo), data=sobols)
+        f.create_dataset(name="noises", shape=(n_cosmos, n_examples_per_cosmo), data=noises)
 
-        f.create_dataset(name="cosmos", shape=(n_cosmos, n_examples_per_cosmo, len(all_params)))
-        f["cosmos"] = cosmos.numpy()
-        
-        f.create_dataset(name="sobols", shape=(n_cosmos, n_examples_per_cosmo))
-        f["sobols"] = sobols.numpy()
+    LOGGER.info(f"Saved the resulting tensors in {evals_file}")
 
-    LOGGER.info(f"Saved the resulting tensors")
+# def evaluate(model, strategy, local_batch_size, msfm_conf, n_output):
 
 
 
