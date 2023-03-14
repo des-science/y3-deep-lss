@@ -2,7 +2,7 @@
 name: "resnet_small"
 
 training:
-  n_steps: 1000
+  n_steps: 10000
   output_every: null
   checkpoint_every: null
   eval_every: null
@@ -26,6 +26,6 @@ model:
     # depth
     n_downsampling: 3
     n_cheby: 2
-    n_residuals: 2
+    n_residuals: 5
     # misc
     poly_degree: 5

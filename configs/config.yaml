@@ -1,6 +1,6 @@
 dirs:
   # paths relative to the repo
-  base: "run_files"
+  base: "run_files"  
 
 # contains the general, non model specific configuration parameters of the analysis
 training:
