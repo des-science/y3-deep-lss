@@ -1,32 +1,44 @@
-# Copyright (C) 2022 ETH Zurich, Institute for Particle Physics and Astrophysics
-"""
-This file contains function with the mpmath library featuring arbitrary precise floats
+# Copyright (C) 2023 ETH Zurich, Institute for Particle Physics and Astrophysics
 
-Based on
+"""
+Created March 2023
+Author: Arne Thomsen, Janis Fluri
+
+The kernels implemented in this file use the mpmath library to employ arbitrarily precise floats.
+
+Adapted from
 https://cosmo-gitlab.phys.ethz.ch/jafluri/cosmogrid_kids1000/-/blob/master/kids1000_analysis/kernels.py
 by Janis Fluri
 """
 
-import mpmath as mp
 import numpy as np
+import mpmath as mp
 
-# TODO move to some config instead of hard coding here
-kernel_min_val = 1e-42
+from msfm.utils import logger
+from deep_lss.utils.utils import load_deep_lss_config
+
+LOGGER = logger.get_logger(__file__)
+
+kernel_min_val = load_deep_lss_config()
+LOGGER.info(f"Setting the minimum value of the kernel function to {kernel_min_val} for the mpmath library")
 
 
 @mp.workdps(100)
 def gaussian_kernel(d, scale=0.05, use_mp=False, return_mp=False):
-    """
-    Gaussian kernel with scale
-    :param d: the input of the kernel, might be numpy array but not mp matrix
-    :param scale: the scale
-    :param use_mp: if True use mpmath
-    :param return_mp: if True return mpf object
-    :return: the kernel evaluated at d and scale
+    """Gaussian kernel with scale parameter (mean is zero).
+
+    Args:
+        d (np.ndarray): The input of the kernel (a distance, usually Fisher), might be numpy array but not mp matrix.
+        scale (float, optional): The scale parameter, aka h. Defaults to 0.05.
+        use_mp (bool, optional): Use arbitrary floating point precision using mpmath. Defaults to False.
+        return_mp (bool, optional): If True, return mpf object. Defaults to False, then a numpy object is returned.
+
+    Returns:
+        np.ndarray, mp: The Gaussian kernel evaluated at d for the scale.
     """
     if not use_mp:
         if return_mp:
-            print("To return an mpf object, set use_mp=True, returning numpy object...")
+            LOGGER.warning(f"To return an mpf object, set use_mp=True. Returning numpy object")
         norm = np.sqrt(2 * np.pi) * scale
         chi = -0.5 * (d / scale) ** 2
         return np.maximum(np.exp(chi) / (norm), kernel_min_val)
@@ -35,6 +47,7 @@ def gaussian_kernel(d, scale=0.05, use_mp=False, return_mp=False):
         if isinstance(d, np.ndarray):
             is_array = True
             shape = d.shape
+            # the array has to be 1D for the mpmath loop below
             d = d.ravel().astype(np.float64)
         else:
             is_array = False
@@ -60,17 +73,20 @@ def gaussian_kernel(d, scale=0.05, use_mp=False, return_mp=False):
 
 @mp.workdps(100)
 def logistic_kernel(d, scale=0.05, use_mp=False, return_mp=False):
-    """
-    logistic kernel with scale
-    :param d: the input of the kernel, might be numpy array but not mp matrix
-    :param scale: the scale
-    :param use_mp: if True use mpmath
-    :param return_mp: if True return mpf object
-    :return: the kernel evaluated at d and scale
+    """Logistic kernel with scale parameter.
+
+    Args:
+        d (np.ndarray): The input of the kernel (a distance, usually Fisher), might be numpy array but not mp matrix.
+        scale (float, optional): The scale parameter, aka h. Defaults to 0.05.
+        use_mp (bool, optional): Use arbitrary floating point precision using mpmath. Defaults to False.
+        return_mp (bool, optional): If True, return mpf object. Defaults to False, then a numpy object is returned.
+
+    Returns:
+        np.ndarray, mp: The Gaussian kernel evaluated at d for the scale.
     """
     if not use_mp:
         if return_mp:
-            print("To return an mpf object, set use_mp=True, returning numpy object...")
+            LOGGER.warning(f"To return an mpf object, set use_mp=True. Returning numpy object")
         pos_exp = np.exp(d / scale)
         neg_exp = np.exp(-d / scale)
         return np.maximum(1.0 / (scale * (pos_exp + neg_exp + 2)), kernel_min_val)
@@ -79,6 +95,7 @@ def logistic_kernel(d, scale=0.05, use_mp=False, return_mp=False):
         if isinstance(d, np.ndarray):
             is_array = True
             shape = d.shape
+            # the array has to be 1D for the mpmath loop below
             d = d.ravel().astype(np.float64)
         else:
             is_array = False
@@ -104,14 +121,18 @@ def logistic_kernel(d, scale=0.05, use_mp=False, return_mp=False):
 
 @mp.workdps(100)
 def sigmoid_kernel(d, scale=0.05, use_mp=False, return_mp=False):
+    """Sigmoid kernel with scale parameter. Like in Section F of https://arxiv.org/pdf/2107.09002.pdf.
+
+    Args:
+        d (np.ndarray): The input of the kernel (a distance, usually Fisher), might be numpy array but not mp matrix.
+        scale (float, optional): The scale parameter, aka h. Defaults to 0.05.
+        use_mp (bool, optional): Use arbitrary floating point precision using mpmath. Defaults to False.
+        return_mp (bool, optional): If True, return mpf object. Defaults to False, then a numpy object is returned.
+
+    Returns:
+        np.ndarray, mp: The Gaussian kernel evaluated at d for the scale.
     """
-    Sigmoid kernel with scale
-    :param d: the input of the kernel, might be numpy array but not mp matrix
-    :param scale: the scale
-    :param use_mp: if True use mpmath
-    :param return_mp: if True return mpf object
-    :return: the kernel evaluated at d and scale
-    """
+
     if not use_mp:
         if return_mp:
             print("To return an mpf object, set use_mp=True, returning numpy object...")
@@ -123,6 +144,7 @@ def sigmoid_kernel(d, scale=0.05, use_mp=False, return_mp=False):
         if isinstance(d, np.ndarray):
             is_array = True
             shape = d.shape
+            # the array has to be 1D for the mpmath loop below
             d = d.ravel().astype(np.float64)
         else:
             is_array = False
@@ -146,13 +168,18 @@ def sigmoid_kernel(d, scale=0.05, use_mp=False, return_mp=False):
                 return np.float64(res[0])
 
 
-# mpmath functions
+# mpmath helper functions #############################################################################################
+
+
 @mp.workdps(100)
 def mp_mean(arr):
-    """
-    Calculates the mean of the array of mpf values
-    :param arr: array of mp.mpf floats
-    :return: the mean as mpf
+    """Calculates the mean of the array of mpf values..
+
+    Args:
+        arr (mp.mpf): array of mp.mpf floats.
+
+    Returns:
+        mp.mpf: The sample mean.
     """
     arr = arr.ravel()
     N = arr.size
@@ -166,12 +193,15 @@ def mp_mean(arr):
 
 @mp.workdps(100)
 def mp_std(arr, ddof=0):
-    """
-    Calculates the standard deviation of the array of mpf values
-    :param arr: array of mp.mpf floats
-    :param ddof: Means Delta Degrees of Freedom. The divisor used in calculations is N - ddof,
-    where N represents the number of elements. By default ddof is zero. (np.std convention)
-    :return: the mean as mpf
+    """Calculates the standard deviation of the array of mpf values.
+
+    Args:
+        arr (_type_): array of mp.mpf floats.
+        ddof (int, optional): Means Delta Degrees of Freedom. The divisor used in calculations is N - ddof,
+            here N represents the number of elements. Defaults to 0 (np.std convention).
+
+    Returns:
+        mp.mpf: The sample standard deviation.
     """
     arr = arr.ravel()
     N = arr.size
