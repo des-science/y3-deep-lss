@@ -22,7 +22,7 @@ from contextlib import nullcontext
 from msfm import fiducial_pipeline
 from msfm.utils import logger, input_output, analysis, parameters
 
-from deep_lss.utils import utils, distribute
+from deep_lss.utils import utils, distribute, eval
 from deep_lss.models.delta_model import DeltaLossModel
 from deep_lss.nets import NETWORKS
 
@@ -48,10 +48,16 @@ def setup():
         help="logging level",
     )
     parser.add_argument(
-        "--tfr_pattern",
+        "--fid_tfr_pattern",
         type=str,
         default="/pscratch/sd/a/athomsen/DESY3/v2/fiducial/DESy3_fiducial_???.tfrecord",
-        help="input root dir of the simulations",
+        help="input root dir of the fiducial data vectors",
+    )
+    parser.add_argument(
+        "--grid_tfr_pattern",
+        type=str,
+        default="/pscratch/sd/a/athomsen/DESY3/v2/grid/DESy3_grid_???.tfrecord",
+        help="input root dir of the grid data vectors",
     )
     # TODO
     # parser.add_argument("--with_bary", action="store_true", help="include baryons")
@@ -107,7 +113,8 @@ def setup():
     logger.set_all_loggers_level(args.verbosity)
 
     LOGGER.debug(f"--verbosity = {args.verbosity}")
-    LOGGER.debug(f"--tfr_pattern = {args.tfr_pattern}")
+    LOGGER.debug(f"--fid_tfr_pattern = {args.fid_tfr_pattern}")
+    LOGGER.debug(f"--grid_tfr_pattern = {args.grid_tfr_pattern}")
     LOGGER.debug(f"--dir_base = {args.dir_base}")
     LOGGER.debug(f"--dir_model = {args.dir_model}")
     LOGGER.debug(f"--net_config = {args.net_config}")
@@ -146,7 +153,6 @@ def training():
     msfm_conf = analysis.load_config(args.msfm_config)
     data_vec_pix, _, _, _, _ = analysis.load_pixel_file(msfm_conf)
     n_side = msfm_conf["analysis"]["n_side"]
-    n_noise_per_example = msfm_conf["analysis"]["fiducial"]["n_noise_per_example"]
 
     # TODO could loop over esub indices here
 
@@ -157,8 +163,6 @@ def training():
     output_every = net_conf["training"]["output_every"]
     checkpoint_every = net_conf["training"]["checkpoint_every"]
     eval_every = net_conf["training"]["eval_every"]
-
-    global_batch_size = net_conf["dset"]["fiducial"]["global_batch_size"]
 
     # create directories
     if args.dir_base is None:
@@ -194,21 +198,18 @@ def training():
     # strategy = distribute.get_strategy(not args.local, cross_device_ops=tf.distribute.HierarchicalCopyAllReduce(num_packs=1))
     strategy = distribute.get_strategy(not args.local)
 
-    local_batch_size = distribute.get_local_batch_size(strategy, global_batch_size)
-
     # TODO implement some noise schedule?
     # https://cosmo-gitlab.phys.ethz.ch/jafluri/arne_handover/-/blob/main/networks/train_net.py#L184
 
     # like https://www.tensorflow.org/tutorials/distribute/input#tfdistributestrategydistribute_datasets_from_function
     def dataset_fn(input_context):
         dset = fiducial_pipeline.get_fiducial_dset(
-        # dset = fiducial_pipeline.get_fiducial_multi_noise_dset(
-            tfr_pattern=args.tfr_pattern,
+            # dset = fiducial_pipeline.get_fiducial_multi_noise_dset(
+            tfr_pattern=args.fid_tfr_pattern,
             params=target_params,
-            local_batch_size=local_batch_size,
             conf=msfm_conf,
             # n_noise=n_noise_per_example,
-            **net_conf["dset"]["fiducial"]["kwargs"],
+            **net_conf["dset"]["training"],
             # distribution
             input_context=input_context,
         )
@@ -241,7 +242,7 @@ def training():
     # set up the training loss
     model.setup_delta_loss_step(
         n_params,
-        local_batch_size,
+        net_conf["dset"]["training"]["local_batch_size"],
         perts,
         n_channels=n_z_bins,
         strategy=strategy,
@@ -253,7 +254,7 @@ def training():
     t_prev = time()
 
     # TODO wrap in tf.function (also use tf.range in that case)?
-    for step in LOGGER.progressbar(range(1, n_steps + 1), at_level="info", total=n_steps):
+    for step in LOGGER.progressbar(range(1, n_steps + 1), at_level="info", total=n_steps, desc="training at fiducial"):
         # context for profiling like https://www.tensorflow.org/guide/profiler#profiling_custom_training_loops
         # optional context like https://stackoverflow.com/a/34798330
         with tf.profiler.experimental.Trace("step", step_num=step, _r=1) if args.profile else nullcontext():
@@ -263,6 +264,7 @@ def training():
 
             # output
             if (output_every is not None) and (step % output_every == 0):
+                print("\n")
                 LOGGER.info(f"Done with {step}/{n_steps} training steps after {LOGGER.timer.elapsed('training')}")
 
             # checkpoint
@@ -271,13 +273,33 @@ def training():
 
             # evaluate
             if (eval_every is not None) and (step % eval_every == 0):
-                pass
+                eval.evaluate_grid(
+                    model=model,
+                    strategy=strategy,
+                    tfr_pattern=args.grid_tfr_pattern,
+                    msfm_conf=msfm_conf,
+                    net_conf=net_conf,
+                    dir_out=dir_out,
+                    step=step
+                )
+
+                eval.evaluate_fiducial(
+                    model=model,
+                    strategy=strategy,
+                    tfr_pattern=args.fid_tfr_pattern,
+                    msfm_conf=msfm_conf,
+                    net_conf=net_conf,
+                    dir_out=dir_out,
+                    step=step
+                )
 
             # profile
             if args.profile and step == 200:
+                print("\n")
                 LOGGER.info(f"Starting to profile")
                 tf.profiler.experimental.start(model.summary_dir)
             if args.profile and step == 205:
+                print("\n")
                 LOGGER.info(f"Stopping to profile")
                 tf.profiler.experimental.stop()
 

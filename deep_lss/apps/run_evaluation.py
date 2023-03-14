@@ -10,13 +10,12 @@ Meant for the GPU nodes of the Perlmutter cluster at NERSC.
 """
 
 import tensorflow as tf
-import numpy as np
 import os, argparse, warnings, h5py, math
 
 from msfm import grid_pipeline
-from msfm.utils import logger, input_output, analysis, parameters
+from msfm.utils import logger, input_output, analysis
 
-from deep_lss.utils import utils, distribute
+from deep_lss.utils import utils, distribute, eval
 from deep_lss.models.delta_model import DeltaLossModel
 from deep_lss.nets import NETWORKS
 
@@ -39,10 +38,16 @@ def setup():
         help="logging level",
     )
     parser.add_argument(
-        "--tfr_pattern",
+        "--fid_tfr_pattern",
         type=str,
         default="/pscratch/sd/a/athomsen/DESY3/v2/fiducial/DESy3_fiducial_???.tfrecord",
         help="input root dir of the simulations",
+    )
+    parser.add_argument(
+        "--grid_tfr_pattern",
+        type=str,
+        default="/pscratch/sd/a/athomsen/DESY3/v2/grid/DESy3_grid_???.tfrecord",
+        help="input root dir of the grid data vectors",
     )
     # TODO
     # parser.add_argument("--with_bary", action="store_true", help="include baryons")
@@ -78,7 +83,8 @@ def setup():
     logger.set_all_loggers_level(args.verbosity)
 
     LOGGER.debug(f"--verbosity = {args.verbosity}")
-    LOGGER.debug(f"--tfr_pattern = {args.tfr_pattern}")
+    LOGGER.debug(f"--fid_tfr_pattern = {args.fid_tfr_pattern}")
+    LOGGER.debug(f"--grid_tfr_pattern = {args.grid_tfr_pattern}")
     LOGGER.debug(f"--dir_model = {args.dir_model}")
     LOGGER.debug(f"--net_config = {args.net_config}")
     LOGGER.debug(f"--dlss_config = {args.dlss_config}")
@@ -96,29 +102,7 @@ def setup():
     return args
 
 
-def stack_cosmos(tensors, sorted_indices, n_examples_per_cosmo):
-    """TODO
-
-    Args:
-        tensors (_type_): _description_
-        n_examples_per_cosmo (_type_): _description_
-
-    Returns:
-        _type_: _description_
-    """
-    # concatenate all of the cosmologies into the first axis, shape (n_cosmos * n_examples_per_cosmo, n_output)
-    tensors = tf.concat(tensors, axis=0)
-
-    tensors = tf.gather(tensors, sorted_indices)
-    # split according to the cosmology, list of len n_cosmos with elements of shape (n_examples_per_cosmo, n_output)
-    tensors = tf.split(tensors, tensors.shape[0] // n_examples_per_cosmo)
-    # stack the cosmologies into the 0th axis, shape (n_cosmos, n_examples_per_cosmo, n_output)
-    tensors = tf.stack(tensors, axis=0)
-
-    return tensors
-
-
-def evaluation():
+if __name__ == "__main__":
     args = setup()
     LOGGER.timer.start("main")
 
@@ -136,51 +120,16 @@ def evaluation():
     LOGGER.info(f"The networks have output shape {n_output} and target {target_params}")
 
     # pipeline constants
-    n_cosmos = msfm_conf["analysis"]["grid"]["n_cosmos"]
-    n_patches = msfm_conf["analysis"]["n_patches"]
-    n_perms_per_cosmo = msfm_conf["analysis"]["grid"]["n_perms_per_cosmo"]
-    n_noise_per_example = msfm_conf["analysis"]["grid"]["n_noise_per_example"]
-    n_examples_per_cosmo = n_patches * n_perms_per_cosmo * n_noise_per_example
-    n_examples = n_cosmos * n_examples_per_cosmo
-    LOGGER.info(f"There's a total of {n_examples} to be evaluated")
-
     n_side = msfm_conf["analysis"]["n_side"]
     data_vec_pix, _, _, _, _ = analysis.load_pixel_file(msfm_conf)
 
-    # network constants
-    net_name = net_conf["name"]
-    global_batch_size = net_conf["dset"]["grid"]["global_batch_size"]
-    n_readers = net_conf["dset"]["grid"]["n_readers"]
-
     # set up directories
     checkpoint_dir = os.path.abspath(os.path.join(args.dir_model, "checkpoint"))
-    evals_file = os.path.abspath(os.path.join(args.dir_model, "evals.h5"))
 
     # TODO not hard code
     n_z_bins = 4
 
     strategy = distribute.get_strategy(not args.local, cross_device_ops=tf.distribute.ReductionToOneDevice())
-
-    local_batch_size = distribute.get_local_batch_size(strategy, global_batch_size)
-
-    n_steps = math.ceil(n_examples / global_batch_size)
-
-    # like https://www.tensorflow.org/tutorials/distribute/input#tfdistributestrategydistribute_datasets_from_function
-    def dataset_fn(input_context):
-        dset = grid_pipeline.get_grid_dset(
-            tfr_pattern=args.tfr_pattern,
-            local_batch_size=local_batch_size,
-            n_params=len(all_params),
-            conf=msfm_conf,
-            # relevant for performance
-            n_readers=n_readers,
-            n_prefetch=tf.data.AUTOTUNE,
-            # distribution
-            input_context=input_context,
-        )
-        return dset
-
-    dist_dset = strategy.distribute_datasets_from_function(dataset_fn)
 
     # create all of the variables within the strategy's scope, such that they are mirrored
     with strategy.scope():
@@ -202,51 +151,20 @@ def evaluation():
             restore_checkpoint=True,
         )
 
-    LOGGER.info(f"Starting evaluation")
-    LOGGER.timer.start("eval")
+    eval.evaluate_grid(
+        model=model,
+        strategy=strategy,
+        tfr_pattern=args.grid_tfr_pattern,
+        msfm_conf=msfm_conf,
+        net_conf=net_conf,
+        dir_out=args.dir_model,
+    )
 
-    preds = []
-    cosmos = []
-    sobols = []
-    noises = []
-    for dv_batch, cosmo_batch, index_batch in LOGGER.progressbar(dist_dset, at_level="info", total=n_steps):
-        # DistributedValues of shape (local_batch_size, n_output)
-        pred_batch = strategy.run(model, args=(dv_batch,))
-
-        # shape (global_batch_size, n_output)
-        pred_batch = strategy.gather(pred_batch, axis=0)
-        # shape (global_batch_size, n_params)
-        cosmo_batch = strategy.gather(cosmo_batch, axis=0)
-        # shape (global_batch_size,) NOTE it's important that gather takes place on the tensor (not tuple) level
-        sobol_batch = strategy.gather(index_batch[0], axis=0)
-        noise_batch = strategy.gather(index_batch[1], axis=0)
-
-        preds.append(pred_batch)
-        cosmos.append(cosmo_batch)
-        sobols.append(sobol_batch)
-        noises.append(noise_batch)
-
-    # sort according to the sobol index
-    sorted_indices = tf.argsort(tf.concat(sobols, axis=0), axis=0)
-
-    preds = stack_cosmos(preds, sorted_indices, n_examples_per_cosmo)
-    cosmos = stack_cosmos(cosmos, sorted_indices, n_examples_per_cosmo)
-    sobols = stack_cosmos(sobols, sorted_indices, n_examples_per_cosmo)
-    noises = stack_cosmos(noises, sorted_indices, n_examples_per_cosmo)
-    LOGGER.info(f"Reshaped the results")
-
-    # TODO in evals_dir
-    with h5py.File(evals_file, "w") as f:
-        f.create_dataset(name="preds", shape=(n_cosmos, n_examples_per_cosmo, n_output), data=preds)
-        f.create_dataset(name="cosmos", shape=(n_cosmos, n_examples_per_cosmo, len(all_params)), data=cosmos)
-        f.create_dataset(name="sobols", shape=(n_cosmos, n_examples_per_cosmo), data=sobols)
-        f.create_dataset(name="noises", shape=(n_cosmos, n_examples_per_cosmo), data=noises)
-
-    LOGGER.info(f"Saved the resulting tensors in {evals_file}")
-
-# def evaluate(model, strategy, local_batch_size, msfm_conf, n_output):
-
-
-
-if __name__ == "__main__":
-    evaluation()
+    eval.evaluate_fiducial(
+        model=model,
+        strategy=strategy,
+        tfr_pattern=args.fid_tfr_pattern,
+        msfm_conf=msfm_conf,
+        net_conf=net_conf,
+        dir_out=args.dir_model,
+    )
