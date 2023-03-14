@@ -10,9 +10,8 @@ Meant for the GPU nodes of the Perlmutter cluster at NERSC.
 """
 
 import tensorflow as tf
-import os, argparse, warnings, h5py, math
+import os, argparse, warnings
 
-from msfm import grid_pipeline
 from msfm.utils import logger, input_output, analysis
 
 from deep_lss.utils import utils, distribute, eval

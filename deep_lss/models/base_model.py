@@ -4,11 +4,11 @@
 Created December 2022
 Author: Arne Thomsen
 
-Closely follows
+Adapted from
 https://cosmo-gitlab.phys.ethz.ch/jafluri/cosmogrid_kids1000/-/blob/master/kids1000_analysis/base_model.py
 by Janis Fluri, 
-the main difference is that I don't work with horovod and instead use the builtin distribution strategies of
-TensorFlow.
+the main difference is that here, the distribution happens via tf.distribute.Strategy instead of horovod. Furthermore,
+checkpointing is handled differently.
 """
 
 import tensorflow as tf
@@ -415,3 +415,21 @@ class BaseModel(object):
             return preds.numpy()
         else:
             return preds
+
+    @tf.function
+    def tf_call(self, input_tensor, training=False, *args, **kwargs):
+        """Calls the network underlying the model as a tf.function
+
+        Args:
+            input_tensor (tf.tensor, np.ndarray): the tensor (or array) to call on
+            training (bool, optional): Whether we are training or evaluating (e.g. necessary for batch norm). Defaults
+                to False.
+
+        Returns:
+            tf.tensor, np.ndarray: Tensor or array, depending on the numpy argument
+        """
+        LOGGER.warning(f"Tracing tf_call")
+
+        preds = self.network(input_tensor, training=training, *args, **kwargs)
+
+        return preds
