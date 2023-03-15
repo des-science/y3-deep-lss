@@ -68,6 +68,6 @@ conda activate deep_lss
 #! /bin/bash
 module load cudatoolkit
 module load cudnn
-exec "$@
+exec "$@"
 ```
 
