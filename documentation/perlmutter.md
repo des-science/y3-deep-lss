@@ -70,4 +70,5 @@ module load cudatoolkit
 module load cudnn
 exec "$@"
 ```
+- `kernel-helper.sh` has to be made executable with `chmod u+x kernel-helper.sh`
 
