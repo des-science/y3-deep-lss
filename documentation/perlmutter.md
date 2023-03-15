@@ -68,6 +68,7 @@ conda activate deep_lss
 #! /bin/bash
 module load cudatoolkit
 module load cudnn
-exec "$@
+exec "$@"
 ```
+- `kernel-helper.sh` has to be made executable with `chmod u+x kernel-helper.sh`
 
