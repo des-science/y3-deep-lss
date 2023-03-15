@@ -1,25 +1,38 @@
+# Copyright (C) 2023 ETH Zurich, Institute for Particle Physics and Astrophysics
+
+"""
+Created March 2023
+Author: Arne Thomsen, Janis Fluri
+
+Implements a Gaussian Process regrossor, which is used like an emulator. For details, see Section F in
+https://arxiv.org/pdf/2107.09002.pdf
+
+Adapted from
+https://cosmo-gitlab.phys.ethz.ch/jafluri/cosmogrid_kids1000/-/blob/master/kids1000_analysis/gp_emulator.py
+by Janis Fluri
+"""
+
 import numpy as np
-
+import tensorflow as tf
+import tensorflow_probability as tfp
 import GPyOpt
-
 import gpflow
 
 from gpflow.optimizers import NaturalGradient
 from gpflow.utilities import print_summary
 
-import tensorflow as tf
-import tensorflow_probability as tfp
-
 from time import time
-
 from tqdm import tqdm
-
 import os
+
+# tf.config.run_functions_eagerly(True)
 
 class HeteroskedasticGaussian(gpflow.likelihoods.Likelihood):
     """
-    Likelihood for varying noise amplitude in the data
+    Likelihood for varying noise amplitude in the data, see the docs of GPflow
+    https://gpflow.github.io/GPflow/2.4.0/notebooks/advanced/heteroskedastic.html#Heteroskedastic-Regression
     """
+
     def __init__(self, **kwargs):
         # this likelihood expects a single latent function F, and two columns in the data matrix Y:
         super().__init__(latent_dim=1, observation_dim=2, **kwargs)
@@ -33,18 +46,16 @@ class HeteroskedasticGaussian(gpflow.likelihoods.Likelihood):
         print(F.shape)
         return gpflow.logdensities.gaussian(Y, F, NoiseVar)
 
-    def _variational_expectations(self, Fmu, Fvar, Y):
+    # def _variational_expectations(self, Fmu, Fvar, Y):
+    def _variational_expectations(self, X, Fmu, Fvar, Y):
         Y, NoiseVar = Y[:, 0], Y[:, 1]
-        Fmu = Fmu[:,0]
-        Fvar = Fvar[:,0]
+        Fmu = Fmu[:, 0]
+        Fvar = Fvar[:, 0]
         return (
-            -0.5 * np.log(2 * np.pi)
-            - 0.5 * tf.math.log(NoiseVar)
-            - 0.5 * (tf.math.square(Y - Fmu) + Fvar) / NoiseVar
+            -0.5 * np.log(2 * np.pi) - 0.5 * tf.math.log(NoiseVar) - 0.5 * (tf.math.square(Y - Fmu) + Fvar) / NoiseVar
         )
 
-    # The following two methods are abstract in the base class.
-    # They need to be implemented even if not used.
+    # The following two methods are abstract in the base class and therefore need to be implemented even if not used.
 
     def _predict_log_density(self, Fmu, Fvar, Y):
         raise NotImplementedError
@@ -53,7 +64,7 @@ class HeteroskedasticGaussian(gpflow.likelihoods.Likelihood):
         raise NotImplementedError
 
 
-class VGP_Emu():
+class VGP_Emu:
     # default types
     default_np_float = gpflow.default_float()
     if gpflow.default_float() is np.float32:
@@ -66,10 +77,27 @@ class VGP_Emu():
     else:
         default_tf_int = tf.int64
 
-    def __init__(self, objective=None, space=None, N_init=20, X_init=None, Y_init=None, normalize_X=True,
-                 normalize_Y=True, mean_only=False, alpha=0.01, kern="matern52", num_restarts=10, verbosity=0,
-                 max_opt_iter=1000, full_restart=False, ARD=False, learning_rate=1e-4, parameter_noise_scale=0.1,
-                 minimum_variance=1e-3):
+    def __init__(
+        self,
+        objective=None,
+        space=None,
+        N_init=20,
+        X_init=None,
+        Y_init=None,
+        normalize_X=True,
+        normalize_Y=True,
+        mean_only=False,
+        alpha=0.01,
+        kern="matern52",
+        num_restarts=10,
+        verbosity=0,
+        max_opt_iter=1000,
+        full_restart=False,
+        ARD=False,
+        learning_rate=1e-4,
+        parameter_noise_scale=0.1,
+        minimum_variance=1e-3,
+    ):
         """
         An class that fits a Gaussian process to a given objective function
         :param objective: function used for the fitting (needs to estimate the noise as well!)
@@ -101,7 +129,7 @@ class VGP_Emu():
         self.verbosity = verbosity
         # how to start
         if X_init is None:
-            initial_design = GPyOpt.experiment_design.initial_design('latin', space, N_init)
+            initial_design = GPyOpt.experiment_design.initial_design("latin", space, N_init)
             initial_Y = objective(initial_design)
         elif Y_init is None:
             initial_design = X_init
@@ -136,12 +164,13 @@ class VGP_Emu():
         self.mean_only = mean_only
 
         # now we need to take care of the variance estimates
-        self.var_estimates = initial_var / self.Y_std ** 2
+        self.var_estimates = initial_var / self.Y_std**2
 
         # normalization
         self.normalize_X = normalize_X
-        self.params, self.rot_mat, self.rot_mean, self.rot_std = self.normalize_params(initial_design,
-                                                                                       norm=self.normalize_X)
+        self.params, self.rot_mat, self.rot_mean, self.rot_std = self.normalize_params(
+            initial_design, norm=self.normalize_X
+        )
 
         # kernel
         self.dims = int(X_init.shape[-1])
@@ -167,14 +196,19 @@ class VGP_Emu():
             self.num_restarts = self.default_np_int(num_restarts)
 
         # get the likelihood
-        self.likelihood = HeteroskedasticGaussian()
+        # self.likelihood = HeteroskedasticGaussian()
+        # TODO
+        self.likelihood = HeteroskedasticGaussian(input_dim=X_init.shape[1])
 
         # model (if you get a matrix inversion error here increase number of initial params)
         self.minimum_variance = minimum_variance
         data = np.concatenate([self.Y_all, np.maximum(self.var_estimates, self.minimum_variance)], axis=1)
-        self.model = gpflow.models.VGP((self.params.astype(self.default_np_float),
-                                        data.astype(self.default_np_float)),
-                                       kernel=self.kern, likelihood=self.likelihood, num_latent_gps=1)
+        self.model = gpflow.models.VGP(
+            (self.params.astype(self.default_np_float), data.astype(self.default_np_float)),
+            kernel=self.kern,
+            likelihood=self.likelihood,
+            num_latent_gps=1,
+        )
 
         # We turn off training for q as it is trained with natgrad
         gpflow.utilities.set_trainable(self.model.q_mu, False)
@@ -188,7 +222,7 @@ class VGP_Emu():
         self.parameter_noise_scale = parameter_noise_scale
         self.max_opt_iter = max_opt_iter
         self.full_restart = full_restart
-        self.optimize_model()
+        # self.optimize_model()
 
         # for acquisition
         self.current_transform = lambda x: self.transform_params(x, self.rot_mat, self.rot_mean, self.rot_std)
@@ -226,8 +260,12 @@ class VGP_Emu():
         :return: tupel of params
         """
 
-        params = (self.model.kernel.variance.numpy(), self.model.kernel.lengthscales.numpy(), self.model.q_mu.numpy(),
-                  self.model.q_sqrt.numpy())
+        params = (
+            self.model.kernel.variance.numpy(),
+            self.model.kernel.lengthscales.numpy(),
+            self.model.q_mu.numpy(),
+            self.model.q_sqrt.numpy(),
+        )
 
         return params
 
@@ -254,7 +292,6 @@ class VGP_Emu():
         original_params = self._readout_params()
 
         for i in range(self.num_restarts):
-
             # we need to create a new optimizer since Adam has params itself
             self.opt = tf.optimizers.Adam(self.learning_rate)
 
@@ -263,28 +300,52 @@ class VGP_Emu():
                 if self.full_restart:
                     # This is used in GPy opt if no prior is specified (see model.randomize() defined in paramz pack)
                     self.model.kernel.variance.assign(
-                        tf.maximum(tf.random.normal(shape=(), dtype=self.default_tf_float, mean=scale,
-                                                    stddev=self.parameter_noise_scale),
-                                   tf.constant(0.1, dtype=self.default_tf_float)))
+                        tf.maximum(
+                            tf.random.normal(
+                                shape=(), dtype=self.default_tf_float, mean=scale, stddev=self.parameter_noise_scale
+                            ),
+                            tf.constant(0.1, dtype=self.default_tf_float),
+                        )
+                    )
                     self.model.kernel.lengthscales.assign(
-                        tf.maximum(tf.random.normal(shape=self.lengthscale_shape,
-                                                    dtype=self.default_tf_float, mean=scale,
-                                                    stddev=self.parameter_noise_scale),
-                                   tf.constant(0.1, dtype=self.default_tf_float)))
+                        tf.maximum(
+                            tf.random.normal(
+                                shape=self.lengthscale_shape,
+                                dtype=self.default_tf_float,
+                                mean=scale,
+                                stddev=self.parameter_noise_scale,
+                            ),
+                            tf.constant(0.1, dtype=self.default_tf_float),
+                        )
+                    )
                     self.model.q_mu.assign(tf.zeros_like(self.model.q_mu))
-                    self.model.q_sqrt.assign(tf.eye(len(original_params[2]), batch_shape=[1],
-                                                    dtype=self.default_tf_float))
+                    self.model.q_sqrt.assign(
+                        tf.eye(len(original_params[2]), batch_shape=[1], dtype=self.default_tf_float)
+                    )
                 else:
-                    self.model.kernel.variance.assign(tf.maximum(original_params[0] +
-                                                                 tf.random.normal(shape=(),
-                                                                                  dtype=self.default_tf_float,
-                                                                                  stddev=self.parameter_noise_scale),
-                                                                 tf.constant(0.1, dtype=self.default_tf_float, )))
-                    self.model.kernel.lengthscales.assign(tf.maximum(original_params[1] +
-                                                                     tf.random.normal(shape=self.lengthscale_shape,
-                                                                                      dtype=self.default_tf_float,
-                                                                                      stddev=self.parameter_noise_scale),
-                                                                     tf.constant(0.1, dtype=self.default_tf_float)))
+                    self.model.kernel.variance.assign(
+                        tf.maximum(
+                            original_params[0]
+                            + tf.random.normal(
+                                shape=(), dtype=self.default_tf_float, stddev=self.parameter_noise_scale
+                            ),
+                            tf.constant(
+                                0.1,
+                                dtype=self.default_tf_float,
+                            ),
+                        )
+                    )
+                    self.model.kernel.lengthscales.assign(
+                        tf.maximum(
+                            original_params[1]
+                            + tf.random.normal(
+                                shape=self.lengthscale_shape,
+                                dtype=self.default_tf_float,
+                                stddev=self.parameter_noise_scale,
+                            ),
+                            tf.constant(0.1, dtype=self.default_tf_float),
+                        )
+                    )
                     self.model.q_mu.assign(original_params[2])
                     self.model.q_sqrt.assign(original_params[3])
 
@@ -302,7 +363,6 @@ class VGP_Emu():
         # set to minimum
         min_index = np.argmin(func_vals)
         self._set_params(model_params[min_index])
-
 
     @classmethod
     def normalize_params(self, params, norm=True):
@@ -342,7 +402,6 @@ class VGP_Emu():
         new_params = (rot_params - rot_mean) / rot_std
         return new_params
 
-
     @classmethod
     def unnormalize_params(self, params, rot_mat, rot_mean, rot_std):
         """
@@ -352,7 +411,6 @@ class VGP_Emu():
         # inverse rotation
         new_params = np.einsum("ij,aj->ai", rot_mat.T, new_params)
         return new_params
-
 
     def save_model(self, save_dir):
         """
@@ -364,23 +422,28 @@ class VGP_Emu():
         q_mu = self.model.q_mu.numpy()
         q_sqrt = self.model.q_sqrt.numpy()
         # save model params
-        save_dict = {self.kern_type + "_var": self.model.kernel.variance.numpy(),
-                     self.kern_type + "_scale": self.model.kernel.lengthscales.numpy(),
-                     "q_mu": q_mu,
-                     "q_sqrt": q_sqrt,
-                     "min_var": np.array([self.minimum_variance], dtype=self.default_np_float)}
+        save_dict = {
+            self.kern_type + "_var": self.model.kernel.variance.numpy(),
+            self.kern_type + "_scale": self.model.kernel.lengthscales.numpy(),
+            "q_mu": q_mu,
+            "q_sqrt": q_sqrt,
+            "min_var": np.array([self.minimum_variance], dtype=self.default_np_float),
+        }
         # save params
         params = self.unnormalize_params(self.params, self.rot_mat, self.rot_mean, self.rot_std)
-        save_dict.update({"norm_params": self.normalize_X,
-                          "params": params})
+        save_dict.update({"norm_params": self.normalize_X, "params": params})
 
         # save the evals
         Y_all = self.Y_all * self.Y_std + self.Y_mean
-        var_estimates = self.var_estimates * self.Y_std ** 2
-        save_dict.update({"normalize_Y": self.normalize_Y,
-                          "mean_only": self.mean_only,
-                          "Y_all": Y_all,
-                          "var_estimates": var_estimates})
+        var_estimates = self.var_estimates * self.Y_std**2
+        save_dict.update(
+            {
+                "normalize_Y": self.normalize_Y,
+                "mean_only": self.mean_only,
+                "Y_all": Y_all,
+                "var_estimates": var_estimates,
+            }
+        )
 
         # save everyting
         np.savez(os.path.join(save_dir, "gp_emu.npz"), **save_dict)
@@ -459,15 +522,19 @@ class VGP_Emu():
         # build the model
         likelihood = HeteroskedasticGaussian()
         data = np.concatenate([Y_all, np.maximum(var_estimates, min_variance)], axis=1)
-        model = gpflow.models.VGP((params.astype(self.default_np_float),
-                                   data.astype(self.default_np_float)),
-                                  kernel=kernel, likelihood=likelihood, num_latent_gps=1)
+        model = gpflow.models.VGP(
+            (params.astype(self.default_np_float), data.astype(self.default_np_float)),
+            kernel=kernel,
+            likelihood=likelihood,
+            num_latent_gps=1,
+        )
 
         # assign variables
         model.q_mu.assign(q_mu)
         model.q_sqrt.assign(q_sqrt)
 
         if numpy:
+
             def noiseless_predictor(X):
                 X = transform(X)
                 preds = model.predict_f(X)[0].numpy()
