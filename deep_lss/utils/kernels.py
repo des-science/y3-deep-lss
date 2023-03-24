@@ -19,7 +19,8 @@ from deep_lss.utils.utils import load_deep_lss_config
 
 LOGGER = logger.get_logger(__file__)
 
-kernel_min_val = load_deep_lss_config()
+conf = load_deep_lss_config()
+kernel_min_val = conf["inference"]["abc"]["kernel_min_val"]
 LOGGER.info(f"Setting the minimum value of the kernel function to {kernel_min_val} for the mpmath library")
 
 
