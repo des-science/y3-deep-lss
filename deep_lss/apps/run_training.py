@@ -280,7 +280,7 @@ def training():
                     msfm_conf=msfm_conf,
                     net_conf=net_conf,
                     dir_out=dir_out,
-                    step=step
+                    file_label=step
                 )
 
                 eval.evaluate_fiducial(
@@ -290,7 +290,7 @@ def training():
                     msfm_conf=msfm_conf,
                     net_conf=net_conf,
                     dir_out=dir_out,
-                    step=step
+                    file_label=step
                 )
 
             # profile

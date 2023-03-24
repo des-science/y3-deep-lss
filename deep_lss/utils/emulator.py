@@ -8,6 +8,8 @@ Implements a Gaussian Process regrossor, which is used as an emulator. For detai
 https://arxiv.org/pdf/2107.09002.pdf. The GP used is from 
 https://gpflow.github.io/GPflow/2.4.0/notebooks/advanced/varying_noise.html
 and allows for varying input noise.
+Note that this model is absent from
+https://gpflow.github.io/GPflow/2.7.0/notebooks/advanced/varying_noise.html
 
 Adapted from
 https://cosmo-gitlab.phys.ethz.ch/jafluri/cosmogrid_kids1000/-/blob/master/kids1000_analysis/gp_emulator.py
@@ -161,17 +163,13 @@ class VGP_Emu:
             num_latent_gps=1,
         )
 
-        # turn off training for q as it is trained with natgrad
+        # turn off training for the variational parameters as they are trained with natgrad
         gpflow.utilities.set_trainable(self.model.q_mu, False)
         gpflow.utilities.set_trainable(self.model.q_sqrt, False)
 
         self.print_summary()
 
     # general #########################################################################################################
-
-    def print_summary(self):
-        """Print a summary of the (trained) model parameters."""
-        gpflow.utilities.print_summary(self.model)
 
     def __call__(self, X):
         X = self.transform_X(X)
@@ -181,6 +179,10 @@ class VGP_Emu:
 
         Y_val = self.inv_transform_Y(Y_val)
         return Y_val
+
+    def print_summary(self):
+        """Print a summary of the (trained) model parameters."""
+        gpflow.utilities.print_summary(self.model)
 
     def save_model(self, out_file: str):
         """Save the model as a pickle object.
@@ -507,7 +509,10 @@ class VGP_Emu:
             params (Tuple): Tuple of arrays in the same ordering as in _readout_params.
         """
 
+        # scale in y axis, see https://gpflow.github.io/GPflow/2.7.0/notebooks/getting_started/kernels.html#Kernel-parameters
         self.model.kernel.variance.assign(params[0])
+        # scale in x axis
         self.model.kernel.lengthscales.assign(params[1])
+        # variational parameters of the VGP
         self.model.q_mu.assign(params[2])
         self.model.q_sqrt.assign(params[3])
