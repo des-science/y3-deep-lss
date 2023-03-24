@@ -17,6 +17,8 @@ training:
     tikhonov_regu: False
     eps: 1.0e-32
 
-gp_abc:
-  # kernel min value, Note: for float32 this is pretty close to the min logable val
-  kernel_min_val: 1.0e-42
+inference:
+  abc:
+    # for float32 this is close to the minimum logable value
+    kernel_min_val: 1.0e-42
+  gaussian_process:
