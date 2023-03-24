@@ -4,9 +4,10 @@
 Created March 2023
 Author: Arne Thomsen
 
-Evaluate the DeepSphere graph neural networks on the grid of cosmologies sampled in the CosmoGrid
+Evaluate the DeepSphere graph neural networks on the CosmoGrid
 """
 
+import numpy as np
 import tensorflow as tf
 import os, warnings, h5py, math, logging
 
@@ -26,17 +27,17 @@ logging.getLogger("tensorflow").addFilter(
 )
 
 
-def _get_out_file(dir_out, step):
-    if step is None:
+def _get_out_file(dir_out, label):
+    if label is None:
         out_file = f"preds.h5"
     else:
-        out_file = f"preds_{step}.h5"
+        out_file = f"preds_{label}.h5"
 
     return os.path.join(dir_out, out_file)
 
 
 def stack_grid_cosmos(tensors, sorted_indices, n_examples_per_cosmo):
-    """Reshapes the batched evaluations into the correct shape
+    """Reshapes the batched evaluations into the correct shape.
 
     Args:
         tensors (list): List of tensors, where axis 0 of each element is the global batch size and len(tensors) is
@@ -60,7 +61,41 @@ def stack_grid_cosmos(tensors, sorted_indices, n_examples_per_cosmo):
     return tensors
 
 
-def evaluate_grid(model, strategy, tfr_pattern, msfm_conf, net_conf, dir_out, step=None):
+def remove_example_axis(array):
+    """Takes in a tensor of shape (n_cosmos, n_examples_per_cosmo, None) and checks whether the value along axis 1 is
+    constant to remove that redundant axis.
+
+    Args:
+        tensor (np.ndarray): Shape (n_cosmos, n_examples_per_cosmo, None)
+
+    Raises:
+        RuntimeError: If the values along the axis of length n_examples_per_cosmo are not all equal
+
+    returns:
+        array: Shape (n_cosmos, None), where the redundancy has been removed
+    """
+    # double check that the cosmologies are sorted correctly and remove the redundant axis
+    if np.all([np.equal(array[:, i, :], array[:, i + 1, :]) for i in range(array.shape[1] - 1)]):
+        array = array[:, 0, :]
+    else:
+        raise RuntimeError(f"The cosmologies are not sorted correctly")
+
+    return array
+
+
+def evaluate_grid(model, strategy, tfr_pattern, msfm_conf, net_conf, dir_out, file_label=None):
+    """Evaluate the model on the grid part of the CosmoGrid.
+
+    Args:
+        model (DeltaLossModel): Model to be evaluated.
+        strategy (tf.distribute.Strategy): Distribution strategy instance within which the model has been created. This
+            is used to distribute the dataset.
+        tfr_pattern (str): Glob pattern of the .tfrecord files containing the data.
+        msfm_conf (dict): Configuration file of the msfm pipeline.
+        net_conf (dict): Configuration file of the specific model.
+        dir_out (str): Output directory, this is where the evaluations will be saved.
+        file_label (str, optional): Optional suffix to append to the output file names. Defaults to None.
+    """
     print("\n")
     LOGGER.info(f"Starting evaluation of the grid")
 
@@ -122,13 +157,19 @@ def evaluate_grid(model, strategy, tfr_pattern, msfm_conf, net_conf, dir_out, st
     # sort according to the sobol index
     sorted_indices = tf.argsort(tf.concat(sobols, axis=0), axis=0)
 
-    preds = stack_grid_cosmos(preds, sorted_indices, n_examples_per_cosmo)
-    cosmos = stack_grid_cosmos(cosmos, sorted_indices, n_examples_per_cosmo)
-    sobols = stack_grid_cosmos(sobols, sorted_indices, n_examples_per_cosmo)
-    noises = stack_grid_cosmos(noises, sorted_indices, n_examples_per_cosmo)
+    # shape (n_cosmos, n_examples_per_cosmo, None)
+    preds = stack_grid_cosmos(preds, sorted_indices, n_examples_per_cosmo).numpy()
+    cosmos = stack_grid_cosmos(cosmos, sorted_indices, n_examples_per_cosmo).numpy()
+    sobols = stack_grid_cosmos(sobols, sorted_indices, n_examples_per_cosmo).numpy()
+    noises = stack_grid_cosmos(noises, sorted_indices, n_examples_per_cosmo).numpy()
     LOGGER.info(f"Reshaped the results")
 
-    out_file = _get_out_file(dir_out, step)
+    # double check that the cosmologies are sorted correctly and remove the redundant axis
+    cosmos = remove_example_axis(cosmos)
+    sobols = remove_example_axis(sobols)
+    noises = remove_example_axis(noises)
+
+    out_file = _get_out_file(dir_out, file_label)
     with h5py.File(out_file, "a") as f:
         f.create_dataset(name="grid/preds", data=preds)
         f.create_dataset(name="grid/cosmos", data=cosmos)
@@ -138,7 +179,19 @@ def evaluate_grid(model, strategy, tfr_pattern, msfm_conf, net_conf, dir_out, st
     LOGGER.info(f"Evaluation of the grid has finished, saved the predictions in {out_file}")
 
 
-def evaluate_fiducial(model, strategy, tfr_pattern, msfm_conf, net_conf, dir_out, step=None):
+def evaluate_fiducial(model, strategy, tfr_pattern, msfm_conf, net_conf, dir_out, file_label=None):
+    """Evaluate the model on the fiducial part of the CosmoGrid.
+
+    Args:
+        model (DeltaLossModel): Model to be evaluated.
+        strategy (tf.distribute.Strategy): Distribution strategy instance within which the model has been created. This
+            is used to distribute the dataset.
+        tfr_pattern (str): Glob pattern of the .tfrecord files containing the data.
+        msfm_conf (dict): Configuration file of the msfm pipeline.
+        net_conf (dict): Configuration file of the specific model.
+        dir_out (str): Output directory, this is where the evaluations will be saved.
+        file_label (str, optional): Optional suffix to append to the output file names. Defaults to None.
+    """
     print("\n")
     LOGGER.info(f"Starting evaluation of the fiducial")
 
@@ -188,7 +241,7 @@ def evaluate_fiducial(model, strategy, tfr_pattern, msfm_conf, net_conf, dir_out
     indices = tf.concat(indices, axis=0)
     LOGGER.info(f"Reshaped the results")
 
-    out_file = _get_out_file(dir_out, step)
+    out_file = _get_out_file(dir_out, file_label)
     with h5py.File(out_file, "a") as f:
         f.create_dataset(name="fiducial/preds", data=preds)
         f.create_dataset(name="fiducial/indices", data=indices)
