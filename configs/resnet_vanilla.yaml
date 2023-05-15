@@ -14,15 +14,15 @@ training:
 dset:
   training:
     # for the delta loss, this is multiplied by 1 + 2 * n_params
-    local_batch_size: 16
+    local_batch_size: 8
     is_cached: True
-    n_readers: 32
+    n_readers: 16
     n_prefetch: null
     file_name_shuffle_buffer: 128
-    examples_shuffle_buffer: 128
+    examples_shuffle_buffer: 64
   eval:
     fiducial:
-      local_batch_size: 100
+      local_batch_size: 64
       params: []
       i_noise: 2
       is_cached: False

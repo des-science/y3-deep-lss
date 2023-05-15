@@ -24,7 +24,7 @@ def load_deep_lss_config(conf=None):
     if conf is None:
         file_dir = os.path.dirname(__file__)
         repo_dir = os.path.abspath(os.path.join(file_dir, "../.."))
-        conf = os.path.join(repo_dir, "configs/config.yaml")
+        conf = os.path.join(repo_dir, "configs/dlss_config.yaml")
         conf = input_output.read_yaml(conf)
 
     # load a config specified by a path

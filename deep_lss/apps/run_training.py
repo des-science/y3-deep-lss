@@ -19,8 +19,8 @@ from datetime import datetime
 from time import time
 from contextlib import nullcontext
 
-from msfm import fiducial_pipeline
-from msfm.utils import logger, input_output, analysis, parameters
+from msfm.fiducial_pipeline import FiducialPipeline
+from msfm.utils import logger, input_output, files, parameters
 
 from deep_lss.utils import utils, distribute, eval
 from deep_lss.models.delta_model import DeltaLossModel
@@ -103,7 +103,7 @@ def setup():
         action="store_true",
         help="restore the model from a checkpoint instead of initializing it from scratch",
     )
-    parser.add_argument("--local", action="store_true", help="distribute the training")
+    parser.add_argument("--local", action="store_true", help="don't distribute the training")
     parser.add_argument("--debug", action="store_true", help="activate debug mode")
     parser.add_argument("--profile", action="store_true", help="run the profiler")
 
@@ -136,7 +136,6 @@ def setup():
 
 
 def training():
-    # args = setup(args)
     args = setup()
     LOGGER.timer.start("main")
 
@@ -144,15 +143,21 @@ def training():
 
     # constants: deep-large-scale-structure
     dlss_conf = utils.load_deep_lss_config(args.dlss_config)
-    target_params = dlss_conf["training"]["target_params"]
-    n_params = len(target_params)
-    perts = parameters.get_fiducial_perturbations(target_params)
-    LOGGER.info(f"Training with respect to the parameters {target_params} with off sets {perts}")
+    params = dlss_conf["dset"]["params"]
+    n_params = len(params)
+    perts = parameters.get_fiducial_perturbations(params)
+    LOGGER.info(f"Training with respect to the parameters {params} with off sets {perts}")
 
     # constants: multiprobe-simulation-forward-model
-    msfm_conf = analysis.load_config(args.msfm_config)
-    data_vec_pix, _, _, _, _ = analysis.load_pixel_file(msfm_conf)
+    msfm_conf = files.load_config(args.msfm_config)
+    data_vec_pix, _, _, _ = files.load_pixel_file(msfm_conf)
     n_side = msfm_conf["analysis"]["n_side"]
+
+    n_z_bins = 0
+    if dlss_conf["dset"]["with_lensing"]:
+        n_z_bins += len(msfm_conf["survey"]["metacal"]["z_bins"])
+    if dlss_conf["dset"]["with_clustering"]:
+        n_z_bins += len(msfm_conf["survey"]["maglim"]["z_bins"])
 
     # TODO could loop over esub indices here
 
@@ -192,23 +197,19 @@ def training():
     with open(os.path.join(dir_out, "configs.yaml"), "w") as f:
         yaml.dump_all([net_conf, dlss_conf, msfm_conf], f)
 
-    # TODO not hard code
-    n_z_bins = 4
-
     # strategy = distribute.get_strategy(not args.local, cross_device_ops=tf.distribute.HierarchicalCopyAllReduce(num_packs=1))
     strategy = distribute.get_strategy(not args.local)
 
     # TODO implement some noise schedule?
     # https://cosmo-gitlab.phys.ethz.ch/jafluri/arne_handover/-/blob/main/networks/train_net.py#L184
 
+    fiducial_pipeline = FiducialPipeline(conf=msfm_conf, **dlss_conf["dset"])
+
     # like https://www.tensorflow.org/tutorials/distribute/input#tfdistributestrategydistribute_datasets_from_function
     def dataset_fn(input_context):
-        dset = fiducial_pipeline.get_fiducial_dset(
-            # dset = fiducial_pipeline.get_fiducial_multi_noise_dset(
+        # dset = fiducial_pipeline.get_multi_noise_dset(
+        dset = fiducial_pipeline.get_dset(
             tfr_pattern=args.fid_tfr_pattern,
-            params=target_params,
-            conf=msfm_conf,
-            # n_noise=n_noise_per_example,
             **net_conf["dset"]["training"],
             # distribution
             input_context=input_context,
@@ -246,7 +247,7 @@ def training():
         perts,
         n_channels=n_z_bins,
         strategy=strategy,
-        **dlss_conf["training"]["delta_loss"],
+        **dlss_conf["delta_loss"],
     )
 
     LOGGER.info(f"Starting training")
@@ -259,7 +260,7 @@ def training():
         # optional context like https://stackoverflow.com/a/34798330
         with tf.profiler.experimental.Trace("step", step_num=step, _r=1) if args.profile else nullcontext():
             # train step
-            dv_batch, index_batch = next(dist_iter)
+            dv_batch, _ = next(dist_iter)
             model.delta_train_step(dv_batch)
 
             # output
@@ -280,7 +281,7 @@ def training():
                     msfm_conf=msfm_conf,
                     net_conf=net_conf,
                     dir_out=dir_out,
-                    file_label=step
+                    file_label=step,
                 )
 
                 eval.evaluate_fiducial(
@@ -290,7 +291,7 @@ def training():
                     msfm_conf=msfm_conf,
                     net_conf=net_conf,
                     dir_out=dir_out,
-                    file_label=step
+                    file_label=step,
                 )
 
             # profile
@@ -321,15 +322,5 @@ def training():
         LOGGER.info(f"No checkpoint has been saved")
 
 
-# only exists for debugging purposes
 if __name__ == "__main__":
-    # args = [
-    #     "--tfr_pattern=/Users/arne/data/DESY3/tfrecords/v2/DESy3_fiducial_000.tfrecord",
-    #     "--net_config=configs/resnet_debug.yaml",
-    #     "--verbosity=debug",
-    #     "--distributed",
-    #     # "--dir_base=/Users/arne/data/DESY3/training"
-    #     # "--dir_model=/Users/arne/data/DESY3/training/2023-02-28_11-39-54_resnet_small"
-    #     # "--debug"
-    # ]
     training()
