@@ -1,3 +1,6 @@
+### Interactive job
+- `salloc --nodes 1 --qos interactive --time 01:00:00 --constraint gpu --gpus 4 --account=des_g`
+
 ### Setting up the `conda` environment
 - Locate the environment in `/global/common/software` instead of `$HOME`, see [here](https://docs.nersc.gov/development/languages/python/nersc-python/#moving-your-conda-setup-to-globalcommonsoftware)
 - Clone their conda environment containing tensorflow, see [here](https://docs.nersc.gov/development/languages/python/nersc-python/#using-conda-clone)
