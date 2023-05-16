@@ -1,0 +1,2 @@
+- `sbatch training.sh "/pscratch/sd/a/athomsen/DESY3/v3/DESy3_fiducial_???.tfrecord" "/global/u2/a/athomsen/y3-deep-lss/configs/resnet_vanilla.yaml" "/pscratch/sd/a/athomsen/run_files/v3"`
+- `sbatch training.sh "/pscratch/sd/a/athomsen/DESY3/v3/DESy3_fiducial_???.tfrecord" "/global/u2/a/athomsen/y3-deep-lss/configs/probe_combination/resnet_vanilla.yaml" "/pscratch/sd/a/athomsen/run_files/probe_combination"`
