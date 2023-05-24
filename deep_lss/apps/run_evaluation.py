@@ -12,7 +12,7 @@ Meant for the GPU nodes of the Perlmutter cluster at NERSC.
 import tensorflow as tf
 import os, argparse, warnings
 
-from msfm.utils import logger, input_output, analysis
+from msfm.utils import logger, input_output, files
 
 from deep_lss.utils import utils, distribute, eval
 from deep_lss.models.delta_model import DeltaLossModel
@@ -39,14 +39,14 @@ def setup():
     parser.add_argument(
         "--fid_tfr_pattern",
         type=str,
-        default="/pscratch/sd/a/athomsen/DESY3/v2/fiducial/DESy3_fiducial_???.tfrecord",
-        help="input root dir of the simulations",
+        default=None,
+        help="pattern of the fiducial .tfrecord files, not evaluated if None",
     )
     parser.add_argument(
         "--grid_tfr_pattern",
         type=str,
-        default="/pscratch/sd/a/athomsen/DESY3/v2/grid/DESy3_grid_???.tfrecord",
-        help="input root dir of the grid data vectors",
+        default=None,
+        help="pattern of the grid .tfrecord files, not evaluated if None",
     )
     # TODO
     # parser.add_argument("--with_bary", action="store_true", help="include baryons")
@@ -109,24 +109,27 @@ if __name__ == "__main__":
 
     # read the different configs
     dlss_conf = utils.load_deep_lss_config(args.dlss_config)
-    msfm_conf = analysis.load_config(args.msfm_config)
+    msfm_conf = files.load_config(args.msfm_config)
     net_conf = input_output.read_yaml(args.net_config)
 
     # general constants
     all_params = msfm_conf["analysis"]["params"]
-    target_params = dlss_conf["training"]["target_params"]
+    target_params = dlss_conf["dset"]["training"]["params"]
     n_output = len(target_params)
     LOGGER.info(f"The networks have output shape {n_output} and target {target_params}")
 
     # pipeline constants
     n_side = msfm_conf["analysis"]["n_side"]
-    data_vec_pix, _, _, _, _ = analysis.load_pixel_file(msfm_conf)
+    data_vec_pix, _, _, _ = files.load_pixel_file(msfm_conf)
+
+    n_z_bins = 0
+    if dlss_conf["dset"]["general"]["with_lensing"]:
+        n_z_bins += len(msfm_conf["survey"]["metacal"]["z_bins"])
+    if dlss_conf["dset"]["general"]["with_clustering"]:
+        n_z_bins += len(msfm_conf["survey"]["maglim"]["z_bins"])
 
     # set up directories
     checkpoint_dir = os.path.abspath(os.path.join(args.dir_model, "checkpoint"))
-
-    # TODO not hard code
-    n_z_bins = 4
 
     strategy = distribute.get_strategy(not args.local, cross_device_ops=tf.distribute.ReductionToOneDevice())
 
@@ -150,20 +153,24 @@ if __name__ == "__main__":
             restore_checkpoint=True,
         )
 
-    eval.evaluate_grid(
-        model=model,
-        strategy=strategy,
-        tfr_pattern=args.grid_tfr_pattern,
-        msfm_conf=msfm_conf,
-        net_conf=net_conf,
-        dir_out=args.dir_model,
-    )
+    if args.grid_tfr_pattern is not None:
+        eval.evaluate_grid(
+            model=model,
+            strategy=strategy,
+            tfr_pattern=args.grid_tfr_pattern,
+            msfm_conf=msfm_conf,
+            dlss_conf=dlss_conf,
+            net_conf=net_conf,
+            dir_out=args.dir_model,
+        )
 
-    eval.evaluate_fiducial(
-        model=model,
-        strategy=strategy,
-        tfr_pattern=args.fid_tfr_pattern,
-        msfm_conf=msfm_conf,
-        net_conf=net_conf,
-        dir_out=args.dir_model,
-    )
+    if args.fid_tfr_pattern is not None:
+        eval.evaluate_fiducial(
+            model=model,
+            strategy=strategy,
+            tfr_pattern=args.fid_tfr_pattern,
+            msfm_conf=msfm_conf,
+            dlss_conf=dlss_conf,
+            net_conf=net_conf,
+            dir_out=args.dir_model,
+        )

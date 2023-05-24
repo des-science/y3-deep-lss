@@ -4,10 +4,18 @@ dirs:
 
 # contains the general, non model specific configuration parameters of the analysis
 dset:
-  params: ["Om", "s8", "bg", "n_bg"]
-  with_lensing: False
-  with_clustering: True
-  apply_norm: True
+  general:
+    with_lensing: False
+    with_clustering: True
+    apply_norm: True
+  training:
+    params: ["Om", "s8", "bg", "n_bg"]
+  eval:
+    fiducial:
+      params: []
+    grid:
+      params: ["Om", "s8", "bg", "n_bg"]
+
 
 delta_loss:
   # regularization

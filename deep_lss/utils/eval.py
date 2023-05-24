@@ -11,7 +11,8 @@ import numpy as np
 import tensorflow as tf
 import os, warnings, h5py, math, logging
 
-from msfm import fiducial_pipeline, grid_pipeline
+from msfm.fiducial_pipeline import FiducialPipeline
+from msfm.grid_pipeline import GridPipeline
 from msfm.utils import logger
 
 from deep_lss.utils import distribute
@@ -62,8 +63,8 @@ def stack_grid_cosmos(tensors, sorted_indices, n_examples_per_cosmo):
 
 
 def remove_example_axis(array):
-    """Takes in a tensor of shape (n_cosmos, n_examples_per_cosmo, None) and checks whether the value along axis 1 is
-    constant to remove that redundant axis.
+    """Takes in a tensor of shape (n_cosmos, n_examples_per_cosmo, None) or (n_cosmos, n_examples_per_cosmo) and checks 
+    whether the value along axis 1 is constant to remove that redundant axis.
 
     Args:
         tensor (np.ndarray): Shape (n_cosmos, n_examples_per_cosmo, None)
@@ -75,15 +76,15 @@ def remove_example_axis(array):
         array: Shape (n_cosmos, None), where the redundancy has been removed
     """
     # double check that the cosmologies are sorted correctly and remove the redundant axis
-    if np.all([np.equal(array[:, i, :], array[:, i + 1, :]) for i in range(array.shape[1] - 1)]):
-        array = array[:, 0, :]
+    if np.all([np.equal(array[:, i], array[:, i + 1]) for i in range(array.shape[1] - 1)]):
+        array = array[:, 0]
     else:
         raise RuntimeError(f"The cosmologies are not sorted correctly")
 
     return array
 
 
-def evaluate_grid(model, strategy, tfr_pattern, msfm_conf, net_conf, dir_out, file_label=None):
+def evaluate_grid(model, strategy, tfr_pattern, msfm_conf, dlss_conf, net_conf, dir_out, file_label=None):
     """Evaluate the model on the grid part of the CosmoGrid.
 
     Args:
@@ -100,12 +101,15 @@ def evaluate_grid(model, strategy, tfr_pattern, msfm_conf, net_conf, dir_out, fi
     LOGGER.info(f"Starting evaluation of the grid")
 
     # pipeline constants
-    n_params = len(msfm_conf["analysis"]["params"])
     n_cosmos = msfm_conf["analysis"]["grid"]["n_cosmos"]
     n_patches = msfm_conf["analysis"]["n_patches"]
     n_perms_per_cosmo = msfm_conf["analysis"]["grid"]["n_perms_per_cosmo"]
-    n_noise_per_example = msfm_conf["analysis"]["grid"]["n_noise_per_example"]
-    n_examples_per_cosmo = n_patches * n_perms_per_cosmo * n_noise_per_example
+
+    # TODO multiple shape noise realisations
+    # n_noise_per_example = msfm_conf["analysis"]["grid"]["n_noise_per_example"]
+    # n_examples_per_cosmo = n_patches * n_perms_per_cosmo * n_noise_per_example
+    
+    n_examples_per_cosmo = n_patches * n_perms_per_cosmo
     n_examples = n_cosmos * n_examples_per_cosmo
     LOGGER.info(f"There's a total of {n_examples} data vectors to be evaluated")
 
@@ -115,12 +119,14 @@ def evaluate_grid(model, strategy, tfr_pattern, msfm_conf, net_conf, dir_out, fi
     )
     n_steps = math.ceil(n_examples / global_batch_size)
 
+    grid_pipeline = GridPipeline(
+        conf=msfm_conf, **{**dlss_conf["dset"]["general"], **dlss_conf["dset"]["eval"]["grid"]}
+    )
+
     # like https://www.tensorflow.org/tutorials/distribute/input#tfdistributestrategydistribute_datasets_from_function
     def dataset_fn(input_context):
-        dset = grid_pipeline.get_grid_dset(
+        dset = grid_pipeline.get_dset(
             tfr_pattern=tfr_pattern,
-            n_params=n_params,
-            conf=msfm_conf,
             **net_conf["dset"]["eval"]["grid"],
             # distribution
             input_context=input_context,
@@ -146,13 +152,13 @@ def evaluate_grid(model, strategy, tfr_pattern, msfm_conf, net_conf, dir_out, fi
         # shape (global_batch_size, n_params)
         cosmo_batch = strategy.gather(cosmo_batch, axis=0)
         # shape (global_batch_size,) NOTE it's important that gather takes place on the tensor (not tuple) level
-        sobol_batch = strategy.gather(index_batch[0], axis=0)
-        noise_batch = strategy.gather(index_batch[1], axis=0)
+        i_sobol_batch = strategy.gather(index_batch[0], axis=0)
+        i_noise_batch = strategy.gather(index_batch[1], axis=0)
 
         preds.append(pred_batch)
         cosmos.append(cosmo_batch)
-        sobols.append(sobol_batch)
-        noises.append(noise_batch)
+        sobols.append(i_sobol_batch)
+        noises.append(i_noise_batch)
 
     # sort according to the sobol index
     sorted_indices = tf.argsort(tf.concat(sobols, axis=0), axis=0)
@@ -173,13 +179,13 @@ def evaluate_grid(model, strategy, tfr_pattern, msfm_conf, net_conf, dir_out, fi
     with h5py.File(out_file, "a") as f:
         f.create_dataset(name="grid/preds", data=preds)
         f.create_dataset(name="grid/cosmos", data=cosmos)
-        f.create_dataset(name="grid/sobols", data=sobols)
-        f.create_dataset(name="grid/noises", data=noises)
+        f.create_dataset(name="grid/i_sobol", data=sobols)
+        f.create_dataset(name="grid/i_noise", data=noises)
 
     LOGGER.info(f"Evaluation of the grid has finished, saved the predictions in {out_file}")
 
 
-def evaluate_fiducial(model, strategy, tfr_pattern, msfm_conf, net_conf, dir_out, file_label=None):
+def evaluate_fiducial(model, strategy, tfr_pattern, msfm_conf, dlss_conf, net_conf, dir_out, file_label=None):
     """Evaluate the model on the fiducial part of the CosmoGrid.
 
     Args:
@@ -209,9 +215,13 @@ def evaluate_fiducial(model, strategy, tfr_pattern, msfm_conf, net_conf, dir_out
     )
     n_steps = math.ceil(n_examples / global_batch_size)
 
+    fiducial_pipeline = FiducialPipeline(
+        conf=msfm_conf, **{**dlss_conf["dset"]["general"], **dlss_conf["dset"]["eval"]["fiducial"]}
+    )
+
     # like https://www.tensorflow.org/tutorials/distribute/input#tfdistributestrategydistribute_datasets_from_function
     def dataset_fn(input_context):
-        dset = fiducial_pipeline.get_fiducial_dset(
+        dset = fiducial_pipeline.get_dset(
             tfr_pattern=tfr_pattern,
             **net_conf["dset"]["eval"]["fiducial"],
             # distribution

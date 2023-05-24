@@ -154,9 +154,9 @@ def training():
     n_side = msfm_conf["analysis"]["n_side"]
 
     n_z_bins = 0
-    if dlss_conf["dset"]["with_lensing"]:
+    if dlss_conf["dset"]["general"]["with_lensing"]:
         n_z_bins += len(msfm_conf["survey"]["metacal"]["z_bins"])
-    if dlss_conf["dset"]["with_clustering"]:
+    if dlss_conf["dset"]["general"]["with_clustering"]:
         n_z_bins += len(msfm_conf["survey"]["maglim"]["z_bins"])
 
     # TODO could loop over esub indices here
@@ -178,6 +178,7 @@ def training():
         LOGGER.info(f"Created base directory {dir_base}")
 
         args.dir_base = dir_base
+    LOGGER.info(f"Working in the base directory {args.dir_base}")
 
     if args.dir_model is None:
         now = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
@@ -203,7 +204,9 @@ def training():
     # TODO implement some noise schedule?
     # https://cosmo-gitlab.phys.ethz.ch/jafluri/arne_handover/-/blob/main/networks/train_net.py#L184
 
-    fiducial_pipeline = FiducialPipeline(conf=msfm_conf, **dlss_conf["dset"])
+    fiducial_pipeline = FiducialPipeline(
+        conf=msfm_conf, **{**dlss_conf["dset"]["general"], **dlss_conf["dset"]["training"]}
+    )
 
     # like https://www.tensorflow.org/tutorials/distribute/input#tfdistributestrategydistribute_datasets_from_function
     def dataset_fn(input_context):
@@ -250,6 +253,9 @@ def training():
         **dlss_conf["delta_loss"],
     )
 
+    LOGGER.warning(f"os.cpu_cout = {os.cpu_count()}")
+    LOGGER.warning(f"len(os.sched_getaffinity(0)) = {len(os.sched_getaffinity(0))}")
+
     LOGGER.info(f"Starting training")
     LOGGER.timer.start("training")
     t_prev = time()
@@ -279,6 +285,7 @@ def training():
                     strategy=strategy,
                     tfr_pattern=args.grid_tfr_pattern,
                     msfm_conf=msfm_conf,
+                    dlss_conf=dlss_conf,
                     net_conf=net_conf,
                     dir_out=dir_out,
                     file_label=step,
@@ -288,6 +295,7 @@ def training():
                     model=model,
                     strategy=strategy,
                     tfr_pattern=args.fid_tfr_pattern,
+                    dlss_conf=dlss_conf,
                     msfm_conf=msfm_conf,
                     net_conf=net_conf,
                     dir_out=dir_out,
@@ -323,4 +331,5 @@ def training():
 
 
 if __name__ == "__main__":
+    LOGGER.warning(f"Running on {os.cpu_count()} CPUs")
     training()
