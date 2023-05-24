@@ -12,3 +12,7 @@
   - Om, s8, Aia, n_Aia 
   - lensing only
   - evaluation every 5000 steps
+- `2023-05-24_06-39-40_resnet_vanilla`
+  - Om, s8
+  - lensing only
+  - evaluation every 5000 steps
