@@ -1,0 +1,14 @@
+`/pscratch/sd/a/athomsen/run_files/v3`
+- `2023-05-15_07-04-57_resnet_vanilla`
+  - Om, s8, bg, n_bg 
+  - clustering only
+  - 130k steps
+  - only 800 fiducial examples (no multiple noise realizations), so probably very overfit
+-  `2023-05-24_05-18-42_resnet_vanilla`
+  - Om, s8, bg, n_bg 
+  - clustering only
+  - evaluation every 5000 steps
+-  `2023-05-24_05-26-55_resnet_vanilla`
+  - Om, s8, Aia, n_Aia 
+  - lensing only
+  - evaluation every 5000 steps
