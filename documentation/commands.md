@@ -1,0 +1,1 @@
+- `rsync --prune-empty-dirs --include={"*/","*.png"} --exclude="*" athomsen@perlmutter-p1.nersc.gov:/pscratch/sd/a/athomsen/run_files/v3 /Users/arne/data/DESY3/plots/contours`
