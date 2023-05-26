@@ -48,16 +48,22 @@ def setup():
         help="logging level",
     )
     parser.add_argument(
-        "--fid_tfr_pattern",
+        "--fidu_tfr_pattern",
         type=str,
-        default="/pscratch/sd/a/athomsen/DESY3/v2/fiducial/DESy3_fiducial_???.tfrecord",
-        help="input root dir of the fiducial data vectors",
+        required=True,
+        help="input root dir of the fiducial data vectors (training)",
     )
     parser.add_argument(
-        "--grid_tfr_pattern",
+        "--fidu_vali_tfr_pattern",
         type=str,
-        default="/pscratch/sd/a/athomsen/DESY3/v2/grid/DESy3_grid_???.tfrecord",
-        help="input root dir of the grid data vectors",
+        default=None,
+        help="input root dir of the fiducial data vectors (validation)",
+    )
+    parser.add_argument(
+        "--grid_vali_tfr_pattern",
+        type=str,
+        default=None,
+        help="input root dir of the grid data vectors (validation)",
     )
     # TODO
     # parser.add_argument("--with_bary", action="store_true", help="include baryons")
@@ -65,14 +71,12 @@ def setup():
         "--dir_base",
         type=str,
         default=None,
-        # TODO
         help="base dir where the models are saved. If None, a dir within the repo is generated according to the config",
     )
     parser.add_argument(
         "--dir_model",
         type=str,
         default=None,
-        # TODO
         help="dir where the model summaries and checkpoints are saved. If None, a dir is generated according to the"
         " current date and time. This dir is appended to the dir_base as a relative path. Passing an absolute path"
         " overrides this.",
@@ -80,14 +84,20 @@ def setup():
     parser.add_argument(
         "--net_config",
         type=str,
-        required=True,
-        help="configuration .yaml file of the model to be trained",
+        default=None,
+        help=(
+            "configuration .yaml file of the model to be trained. None can only be provided if there's a config in"
+            " the dir_model and restore_checkpoint is true."
+        ),
     )
     parser.add_argument(
         "--dlss_config",
         type=str,
         default=None,
-        help="configuration .yaml file of this repo",
+        help=(
+            "configuration .yaml file of this repo. None means that the standard configuration file in"
+            " configs/dlss_config.yaml relative to this repo is loaded."
+        ),
     )
     parser.add_argument(
         "--msfm_config",
@@ -101,7 +111,10 @@ def setup():
     parser.add_argument(
         "--restore_checkpoint",
         action="store_true",
-        help="restore the model from a checkpoint instead of initializing it from scratch",
+        help=(
+            "restore the model from a checkpoint instead of initializing it from scratch."
+            " Additionally, the configs are loaded from the path in this case"
+        ),
     )
     parser.add_argument("--local", action="store_true", help="don't distribute the training")
     parser.add_argument("--debug", action="store_true", help="activate debug mode")
@@ -109,21 +122,18 @@ def setup():
 
     args, _ = parser.parse_known_args()
 
-    # TODO create the model directory
-    logger.set_all_loggers_level(args.verbosity)
+    # set up directories
+    if args.dir_base is None:
+        file_dir = os.path.dirname(__file__)
+        args.repo_dir = os.path.abspath(os.path.join(file_dir, "../.."))
+        args.dir_base = os.path.join(args.repo_dir, "run_files")
+        os.makedirs(args.dir_base, exist_ok=True)
+        LOGGER.info(f"Created base directory {args.dir_base}")
 
-    LOGGER.debug(f"--verbosity = {args.verbosity}")
-    LOGGER.debug(f"--fid_tfr_pattern = {args.fid_tfr_pattern}")
-    LOGGER.debug(f"--grid_tfr_pattern = {args.grid_tfr_pattern}")
-    LOGGER.debug(f"--dir_base = {args.dir_base}")
-    LOGGER.debug(f"--dir_model = {args.dir_model}")
-    LOGGER.debug(f"--net_config = {args.net_config}")
-    LOGGER.debug(f"--dlss_config = {args.dlss_config}")
-    LOGGER.debug(f"--msfm_config = {args.msfm_config}")
-    LOGGER.debug(f"--restore_checkpoint = {args.restore_checkpoint}")
-    LOGGER.debug(f"--local = {args.local}")
-    LOGGER.debug(f"--debug = {args.debug}")
-    LOGGER.debug(f"--profile = {args.profile}")
+    # print arguments
+    logger.set_all_loggers_level(args.verbosity)
+    for key, value in vars(args).items():
+        LOGGER.info(f"{key} = {value}")
 
     if args.debug:
         tf.config.run_functions_eagerly(True)
@@ -136,20 +146,70 @@ def setup():
 
 
 def training():
-    args = setup()
     LOGGER.timer.start("main")
+
+    args = setup()
 
     _, _ = distribute.check_devices()
 
-    # constants: deep-large-scale-structure
-    dlss_conf = utils.load_deep_lss_config(args.dlss_config)
-    params = dlss_conf["dset"]["params"]
+    # initialize a fresh model
+    if not args.restore_checkpoint:
+        # load the configs
+        net_conf = input_output.read_yaml(os.path.join(args.repo_dir, args.net_config))
+        dlss_conf = utils.load_deep_lss_config(args.dlss_config)
+        msfm_conf = files.load_config(args.msfm_config)
+        LOGGER.info(f"Loaded configs from the provided paths")
+
+        if args.dir_model is None:
+            now = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            args.dir_model = f"{now}_{net_name}"
+            LOGGER.info(f"Created model directory {args.dir_model}")
+
+        # make output directory
+        dir_out = os.path.join(args.dir_base, args.dir_model)
+        os.makedirs(dir_out, exist_ok=True)
+        LOGGER.info(f"Created output directory {dir_out}")
+
+        # save the configs
+        with open(os.path.join(dir_out, "configs.yaml"), "w") as f:
+            yaml.dump_all([net_conf, dlss_conf, msfm_conf], f)
+
+    # restore a saved model
+    elif args.restore_checkpoint and (args.dir_model is not None):
+        # make output directory
+        dir_out = os.path.join(args.dir_base, args.dir_model)
+        os.makedirs(dir_out, exist_ok=True)
+        LOGGER.info(f"Created output directory {dir_out}")
+
+        # load the configs
+        with open(os.path.join(dir_out, "configs.yaml"), "r") as f:
+            net_conf, dlss_conf, msfm_conf = list(yaml.load_all(f, Loader=yaml.FullLoader))
+
+        LOGGER.info(f"Loaded configs from the model directory")
+
+    else:
+        raise ValueError(f"Can't restore the model from an unspecified dir_model")
+
+    # set up subdirectories
+    checkpoint_dir = os.path.abspath(os.path.join(dir_out, "checkpoint"))
+    os.makedirs(checkpoint_dir, exist_ok=True)
+    summary_dir = os.path.abspath(os.path.join(dir_out, "summary"))
+    os.makedirs(summary_dir, exist_ok=True)
+
+    # constants: network
+    net_name = net_conf["name"]
+    n_steps = net_conf["training"]["n_steps"]
+    output_every = net_conf["training"]["output_every"]
+    checkpoint_every = net_conf["training"]["checkpoint_every"]
+    eval_every = net_conf["training"]["eval_every"]
+
+    # constants: deep_lss
+    params = dlss_conf["dset"]["training"]["params"]
     n_params = len(params)
     perts = parameters.get_fiducial_perturbations(params)
     LOGGER.info(f"Training with respect to the parameters {params} with off sets {perts}")
 
-    # constants: multiprobe-simulation-forward-model
-    msfm_conf = files.load_config(args.msfm_config)
+    # constants: msfm
     data_vec_pix, _, _, _ = files.load_pixel_file(msfm_conf)
     n_side = msfm_conf["analysis"]["n_side"]
 
@@ -158,45 +218,6 @@ def training():
         n_z_bins += len(msfm_conf["survey"]["metacal"]["z_bins"])
     if dlss_conf["dset"]["general"]["with_clustering"]:
         n_z_bins += len(msfm_conf["survey"]["maglim"]["z_bins"])
-
-    # TODO could loop over esub indices here
-
-    # constants: network
-    net_conf = input_output.read_yaml(args.net_config)
-    net_name = net_conf["name"]
-    n_steps = net_conf["training"]["n_steps"]
-    output_every = net_conf["training"]["output_every"]
-    checkpoint_every = net_conf["training"]["checkpoint_every"]
-    eval_every = net_conf["training"]["eval_every"]
-
-    # create directories
-    if args.dir_base is None:
-        file_dir = os.path.dirname(__file__)
-        repo_dir = os.path.abspath(os.path.join(file_dir, "../.."))
-        dir_base = os.path.join(repo_dir, dlss_conf["dirs"]["base"])
-        os.makedirs(dir_base, exist_ok=True)
-        LOGGER.info(f"Created base directory {dir_base}")
-
-        args.dir_base = dir_base
-    LOGGER.info(f"Working in the base directory {args.dir_base}")
-
-    if args.dir_model is None:
-        now = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        args.dir_model = f"{now}_{net_name}"
-        LOGGER.info(f"Defined model directory {args.dir_model}")
-
-    dir_out = os.path.join(args.dir_base, args.dir_model)
-    os.makedirs(dir_out, exist_ok=True)
-    LOGGER.info(f"Created output directory {dir_out}")
-
-    checkpoint_dir = os.path.abspath(os.path.join(dir_out, "checkpoint"))
-    os.makedirs(checkpoint_dir, exist_ok=True)
-    summary_dir = os.path.abspath(os.path.join(dir_out, "summary"))
-    os.makedirs(summary_dir, exist_ok=True)
-
-    # save the configs
-    with open(os.path.join(dir_out, "configs.yaml"), "w") as f:
-        yaml.dump_all([net_conf, dlss_conf, msfm_conf], f)
 
     # strategy = distribute.get_strategy(not args.local, cross_device_ops=tf.distribute.HierarchicalCopyAllReduce(num_packs=1))
     strategy = distribute.get_strategy(not args.local)
@@ -212,7 +233,7 @@ def training():
     def dataset_fn(input_context):
         # dset = fiducial_pipeline.get_multi_noise_dset(
         dset = fiducial_pipeline.get_dset(
-            tfr_pattern=args.fid_tfr_pattern,
+            tfr_pattern=args.fidu_tfr_pattern,
             **net_conf["dset"]["training"],
             # distribution
             input_context=input_context,
@@ -253,9 +274,6 @@ def training():
         **dlss_conf["delta_loss"],
     )
 
-    LOGGER.warning(f"os.cpu_cout = {os.cpu_count()}")
-    LOGGER.warning(f"len(os.sched_getaffinity(0)) = {len(os.sched_getaffinity(0))}")
-
     LOGGER.info(f"Starting training")
     LOGGER.timer.start("training")
     t_prev = time()
@@ -280,27 +298,49 @@ def training():
 
             # evaluate
             if (eval_every is not None) and (step % eval_every == 0):
-                eval.evaluate_grid(
-                    model=model,
-                    strategy=strategy,
-                    tfr_pattern=args.grid_tfr_pattern,
-                    msfm_conf=msfm_conf,
-                    dlss_conf=dlss_conf,
-                    net_conf=net_conf,
-                    dir_out=dir_out,
-                    file_label=step,
-                )
-
+                # fiducial training
                 eval.evaluate_fiducial(
                     model=model,
                     strategy=strategy,
-                    tfr_pattern=args.fid_tfr_pattern,
-                    dlss_conf=dlss_conf,
+                    tfr_pattern=args.fidu_tfr_pattern,
                     msfm_conf=msfm_conf,
+                    dlss_conf=dlss_conf,
                     net_conf=net_conf,
                     dir_out=dir_out,
                     file_label=step,
+                    training=True,
                 )
+
+                # fiducial validation
+                if args.fidu_val_tfr_pattern is not None:
+                    eval.evaluate_fiducial(
+                        model=model,
+                        strategy=strategy,
+                        tfr_pattern=args.fidu_val_tfr_pattern,
+                        msfm_conf=msfm_conf,
+                        dlss_conf=dlss_conf,
+                        net_conf=net_conf,
+                        dir_out=dir_out,
+                        file_label=step,
+                        training=False,
+                    )
+                else:
+                    LOGGER.warning(f"Skipping evaluation of the fiducial validation set")
+
+                # grid validation
+                if args.grid_vali_tfr_pattern is not None:
+                    eval.evaluate_grid(
+                        model=model,
+                        strategy=strategy,
+                        tfr_pattern=args.grid_vali_tfr_pattern,
+                        msfm_conf=msfm_conf,
+                        dlss_conf=dlss_conf,
+                        net_conf=net_conf,
+                        dir_out=dir_out,
+                        file_label=step,
+                    )
+                else:
+                    LOGGER.warning(f"Skipping evaluation of the fiducial validation set")
 
             # profile
             if args.profile and step == 200:
@@ -331,5 +371,4 @@ def training():
 
 
 if __name__ == "__main__":
-    LOGGER.warning(f"Running on {os.cpu_count()} CPUs")
     training()

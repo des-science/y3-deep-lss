@@ -63,7 +63,7 @@ def stack_grid_cosmos(tensors, sorted_indices, n_examples_per_cosmo):
 
 
 def remove_example_axis(array):
-    """Takes in a tensor of shape (n_cosmos, n_examples_per_cosmo, None) or (n_cosmos, n_examples_per_cosmo) and checks 
+    """Takes in a tensor of shape (n_cosmos, n_examples_per_cosmo, None) or (n_cosmos, n_examples_per_cosmo) and checks
     whether the value along axis 1 is constant to remove that redundant axis.
 
     Args:
@@ -108,7 +108,7 @@ def evaluate_grid(model, strategy, tfr_pattern, msfm_conf, dlss_conf, net_conf, 
     # TODO multiple shape noise realisations
     # n_noise_per_example = msfm_conf["analysis"]["grid"]["n_noise_per_example"]
     # n_examples_per_cosmo = n_patches * n_perms_per_cosmo * n_noise_per_example
-    
+
     n_examples_per_cosmo = n_patches * n_perms_per_cosmo
     n_examples = n_cosmos * n_examples_per_cosmo
     LOGGER.info(f"There's a total of {n_examples} data vectors to be evaluated")
@@ -177,15 +177,17 @@ def evaluate_grid(model, strategy, tfr_pattern, msfm_conf, dlss_conf, net_conf, 
 
     out_file = _get_out_file(dir_out, file_label)
     with h5py.File(out_file, "a") as f:
-        f.create_dataset(name="grid/preds", data=preds)
-        f.create_dataset(name="grid/cosmos", data=cosmos)
+        f.create_dataset(name="grid/pred", data=preds)
+        f.create_dataset(name="grid/cosmo", data=cosmos)
         f.create_dataset(name="grid/i_sobol", data=sobols)
         f.create_dataset(name="grid/i_noise", data=noises)
 
     LOGGER.info(f"Evaluation of the grid has finished, saved the predictions in {out_file}")
 
 
-def evaluate_fiducial(model, strategy, tfr_pattern, msfm_conf, dlss_conf, net_conf, dir_out, file_label=None):
+def evaluate_fiducial(
+    model, strategy, tfr_pattern, msfm_conf, dlss_conf, net_conf, dir_out, file_label=None, training=True
+):
     """Evaluate the model on the fiducial part of the CosmoGrid.
 
     Args:
@@ -197,6 +199,7 @@ def evaluate_fiducial(model, strategy, tfr_pattern, msfm_conf, dlss_conf, net_co
         net_conf (dict): Configuration file of the specific model.
         dir_out (str): Output directory, this is where the evaluations will be saved.
         file_label (str, optional): Optional suffix to append to the output file names. Defaults to None.
+        training (bool, optional): Whether it's a training or validation set. This changes how the result is stored.
     """
     print("\n")
     LOGGER.info(f"Starting evaluation of the fiducial")
@@ -232,7 +235,7 @@ def evaluate_fiducial(model, strategy, tfr_pattern, msfm_conf, dlss_conf, net_co
     dist_dset = strategy.distribute_datasets_from_function(dataset_fn)
 
     preds = []
-    indices = []
+    i_examples = []
     for dv_batch, index_batch in LOGGER.progressbar(
         dist_dset, at_level="info", total=n_steps, desc="evaluating at the fiducial"
     ):
@@ -242,18 +245,22 @@ def evaluate_fiducial(model, strategy, tfr_pattern, msfm_conf, dlss_conf, net_co
         # shape (global_batch_size, n_output)
         pred_batch = strategy.gather(pred_batch, axis=0)
         # shape (global_batch_size)
-        index_batch = strategy.gather(index_batch[0], axis=0)
+        i_example_batch = strategy.gather(index_batch[0], axis=0)
 
         preds.append(pred_batch)
-        indices.append(index_batch)
+        i_examples.append(i_example_batch)
 
     preds = tf.concat(preds, axis=0)
-    indices = tf.concat(indices, axis=0)
+    i_examples = tf.concat(i_examples, axis=0)
     LOGGER.info(f"Reshaped the results")
 
     out_file = _get_out_file(dir_out, file_label)
     with h5py.File(out_file, "a") as f:
-        f.create_dataset(name="fiducial/preds", data=preds)
-        f.create_dataset(name="fiducial/indices", data=indices)
+        if training:
+            f.create_dataset(name="fiducial/train/pred", data=preds)
+            f.create_dataset(name="fiducial/train/i_example", data=i_examples)
+        else:
+            f.create_dataset(name="fiducial/vali/pred", data=preds)
+            f.create_dataset(name="fiducial/vali/i_example", data=i_examples)
 
     LOGGER.info(f"Evaluation of the fiducial has finished, saved the predictions in {out_file}")

@@ -106,6 +106,8 @@ class BaseModel(object):
             LOGGER.warning(
                 f"The model can not be saved when it is initialized from scratch with a non-empty checkpoint directory"
             )
+        else:
+            LOGGER.info(f"The network is initialized from scratch.")
 
         # set up summary writer
         if self.summary_dir is not None:

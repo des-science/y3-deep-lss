@@ -2,10 +2,10 @@
 name: "resnet_vanilla"
 
 training:
-  n_steps: 50000
+  n_steps: 20000
   output_every: null
   checkpoint_every: 5000
-  eval_every: null
+  eval_every: 5000
   learning_rate: 0.001
   clip_by_value: null
   clip_by_norm: null
