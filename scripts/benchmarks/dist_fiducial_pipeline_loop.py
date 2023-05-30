@@ -9,35 +9,37 @@ from msfm.utils import logger
 
 LOGGER = logger.get_logger(__file__)
 
-global_batch_size = 64
-tfr_pattern = "/pscratch/sd/a/athomsen/DESY3/v3/DESy3_fiducial_???.tfrecord"
-target_params = ["Om", "s8", "bg", "n_bg"]
-n_steps = 500
+tfr_pattern = "/pscratch/sd/a/athomsen/DESY3/v3/fiducial/DESy3_fiducial_???.tfrecord"
+n_steps = 200
+global_batch_size = 16
 profile = False
 
+_, _ = distribute.check_devices()
 strategy = distribute.get_strategy(True)
 local_batch_size = distribute.get_local_batch_size(strategy, global_batch_size)
 
-
 fiducial_pipeline = FiducialPipeline(
-    params=target_params,
-    with_lensing=False,
+    # params=["Om", "s8"],
+    # params=["Om", "s8", "bg", "n_bg"],
+    # params=["Om", "s8", "Aia", "n_Aia"],
+    params=["Om", "s8", "Aia", "n_Aia", "bg", "n_bg"],
+    with_lensing=True,
     with_clustering=True,
-    apply_norm=False,
+    apply_norm=True,
 )
 
 
 # like https://www.tensorflow.org/tutorials/distribute/input#tfdistributestrategydistribute_datasets_from_function
 def dataset_fn(input_context):
-    # dset = fiducial_pipeline.get_dset(
-    dset = fiducial_pipeline.get_multi_noise_dset(
+    dset = fiducial_pipeline.get_dset(
+        # dset = fiducial_pipeline.get_multi_noise_dset(
+        # n_noise=3,
         tfr_pattern=tfr_pattern,
-        local_batch_size=8,
+        local_batch_size=local_batch_size,
         is_cached=False,
         n_readers=4,
-        n_prefetch=3,
-        n_noise=3,
-        file_name_shuffle_buffer=128,
+        n_prefetch=None,
+        file_name_shuffle_buffer=16,
         examples_shuffle_buffer=None,
         # distribution
         input_context=input_context,

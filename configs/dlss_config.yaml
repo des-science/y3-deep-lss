@@ -1,17 +1,16 @@
 # contains the general, non model specific configuration parameters of the analysis
 dset:
   general:
-    with_lensing: True
-    with_clustering: False
+    with_lensing: False
+    with_clustering: True
     apply_norm: True
   training:
-    params: ["Om", "s8"]
+    params: ["Om", "s8", "bg", "n_bg"]
   eval:
     fiducial:
       params: []
     grid:
-      params: ["Om", "s8"]
-
+      params: ["Om", "s8", "bg", "n_bg"]
 
 delta_loss:
   # regularization
@@ -24,9 +23,3 @@ delta_loss:
   use_log_det: True
   tikhonov_regu: False
   eps: 1.0e-32
-
-inference:
-  abc:
-    # for float32 this is close to the minimum logable value
-    kernel_min_val: 1.0e-42
-  gaussian_process:

@@ -123,9 +123,10 @@ def setup():
     args, _ = parser.parse_known_args()
 
     # set up directories
+    file_dir = os.path.dirname(__file__)
+    args.repo_dir = os.path.abspath(os.path.join(file_dir, "../.."))
+    
     if args.dir_base is None:
-        file_dir = os.path.dirname(__file__)
-        args.repo_dir = os.path.abspath(os.path.join(file_dir, "../.."))
         args.dir_base = os.path.join(args.repo_dir, "run_files")
         os.makedirs(args.dir_base, exist_ok=True)
         LOGGER.info(f"Created base directory {args.dir_base}")
@@ -161,6 +162,7 @@ def training():
         LOGGER.info(f"Loaded configs from the provided paths")
 
         if args.dir_model is None:
+            net_name = net_conf["name"]
             now = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
             args.dir_model = f"{now}_{net_name}"
             LOGGER.info(f"Created model directory {args.dir_model}")
@@ -278,6 +280,8 @@ def training():
     LOGGER.timer.start("training")
     t_prev = time()
 
+    # dv_batch, _ = next(dist_iter)
+
     # TODO wrap in tf.function (also use tf.range in that case)?
     for step in LOGGER.progressbar(range(1, n_steps + 1), at_level="info", total=n_steps, desc="training at fiducial"):
         # context for profiling like https://www.tensorflow.org/guide/profiler#profiling_custom_training_loops
@@ -298,6 +302,9 @@ def training():
 
             # evaluate
             if (eval_every is not None) and (step % eval_every == 0):
+                train_step = strategy.gather(model.train_step, axis=0)[0].numpy()
+                LOGGER.info(f"Evaluating the model after a total of {train_step} training steps")
+
                 # fiducial training
                 eval.evaluate_fiducial(
                     model=model,
@@ -307,21 +314,21 @@ def training():
                     dlss_conf=dlss_conf,
                     net_conf=net_conf,
                     dir_out=dir_out,
-                    file_label=step,
+                    file_label=train_step,
                     training=True,
                 )
 
                 # fiducial validation
-                if args.fidu_val_tfr_pattern is not None:
+                if args.fidu_vali_tfr_pattern is not None:
                     eval.evaluate_fiducial(
                         model=model,
                         strategy=strategy,
-                        tfr_pattern=args.fidu_val_tfr_pattern,
+                        tfr_pattern=args.fidu_vali_tfr_pattern,
                         msfm_conf=msfm_conf,
                         dlss_conf=dlss_conf,
                         net_conf=net_conf,
                         dir_out=dir_out,
-                        file_label=step,
+                        file_label=train_step,
                         training=False,
                     )
                 else:
@@ -337,7 +344,7 @@ def training():
                         dlss_conf=dlss_conf,
                         net_conf=net_conf,
                         dir_out=dir_out,
-                        file_label=step,
+                        file_label=train_step,
                     )
                 else:
                     LOGGER.warning(f"Skipping evaluation of the fiducial validation set")
