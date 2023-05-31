@@ -2,6 +2,8 @@
 - addition of a fiducial validation set
   - clustering only (Om, s8, bg, n_bg)
     - `2023-05-30_01-48-23_resnet_vanilla`
+    - `2023-05-31_05-41-15_resnet_vanilla`
+      - Covariance and Jacobian matrices averaged over the global instead of local batch size
   - lensing only (Om, s8, Aia, n_Aia)
     - `2023-05-29_09-55-49_resnet_vanilla` 
   - probe combination (Om, s8, Aia, n_Aia, bg, n_bg)
