@@ -209,7 +209,7 @@ def training():
     params = dlss_conf["dset"]["training"]["params"]
     n_params = len(params)
     perts = parameters.get_fiducial_perturbations(params)
-    LOGGER.info(f"Training with respect to the parameters {params} with off sets {perts}")
+    LOGGER.info(f"Training with respect to the {n_params} parameters {params} with off sets {perts}")
 
     # constants: msfm
     data_vec_pix, _, _, _ = files.load_pixel_file(msfm_conf)
@@ -282,7 +282,6 @@ def training():
 
     # dv_batch, _ = next(dist_iter)
 
-    # TODO wrap in tf.function (also use tf.range in that case)?
     for step in LOGGER.progressbar(range(1, n_steps + 1), at_level="info", total=n_steps, desc="training at fiducial"):
         # context for profiling like https://www.tensorflow.org/guide/profiler#profiling_custom_training_loops
         # optional context like https://stackoverflow.com/a/34798330

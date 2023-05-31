@@ -185,6 +185,7 @@ class DeltaLossModel(BaseModel):
             eps (float, optional): A small positive value used for regularization of things like logs etc. This should
                 only be increased if tikhonov_regu is used and a error is raised. Defaults to 1e-32.
             img_summary (bool, optional): Save image summaries of the Jacobian and the covariance. Defaults to False.
+            strategy (tf.distribute.Strategy): The distribution strategy the model was created within
 
         Returns:
             callable: A callable function that performs one gradient descent step with respect to the delta loss.
@@ -216,6 +217,8 @@ class DeltaLossModel(BaseModel):
                 training=True,
                 summary_writer=self.summary_writer,
                 img_summary=img_summary,
+                # distribution
+                strategy=strategy,
             )
 
         # get the backend float and input shape
@@ -232,7 +235,6 @@ class DeltaLossModel(BaseModel):
 
         # non distributed
         if strategy is None:
-
             @tf.function(input_signature=[tf.TensorSpec(shape=in_shape, dtype=current_float)])
             def delta_train_step(input_batch):
                 LOGGER.warning(f"Tracing delta_train_step")

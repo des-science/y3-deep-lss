@@ -53,7 +53,7 @@ def tf_matrix_condition(m):
 
 
 def get_jac_and_cov_matrix(
-    predictions, n_params, n_same, off_sets, n_output=None, summary_writer=None, training=False
+    predictions, n_params, n_same, off_sets, n_output=None, summary_writer=None, training=False, strategy=None
 ):
     """Calculates the covariance of the fiducial predictions and the jacobians of the means and returns it. It assumes
     a specific ordering of the predictions.
@@ -67,6 +67,7 @@ def get_jac_and_cov_matrix(
         summary_writer (tf.summary.SummaryWriter, optional): Used to write tensorboard summaries. Defaults to None.
         training (bool, optional): Wheter the network is currently training. If False, no summary is written even if a
             writer is provided. Defaults to False.
+        strategy (tf.distribute.Strategy): The distribution strategy the model was created within
 
     Returns:
         tf.tensor: Covariances and Jacobians, these have shape (n_output/n_params, n_output, n_output), where n_output
@@ -83,11 +84,25 @@ def get_jac_and_cov_matrix(
     if n_output is None:
         n_output = int(predictions.shape[-1])
 
-    # split the output, len(splits) = (1 + 2 * n_params), split.shape = splits[0].shape = (?, n_same, n_output)
+    # split the local output, len(splits) = (1 + 2 * n_params), split.shape = splits[0].shape = (?, n_same, n_output)
     splits = [
         tf.reshape(split, shape=[-1, n_same, n_output])
         for split in tf.split(predictions, num_or_size_splits=2 * n_params + 1, axis=0)
     ]
+
+    # non distributed
+    if strategy is None:
+        # minus one because this is the sample covariance
+        cov_normalization = n_same - 1.0
+
+    # distributed
+    elif isinstance(strategy, tf.distribute.Strategy):
+        # gather from the replicas to get a more stable estimate of the covariance and jacobian
+        splits = [tf.distribute.get_replica_context().all_gather(split, axis=1) for split in splits]
+        cov_normalization = strategy.num_replicas_in_sync * n_same - 1.0
+
+    else:
+        raise ValueError(f"Invalid strategy {strategy} was passed")
 
     # summary
     if training:
@@ -99,14 +114,11 @@ def get_jac_and_cov_matrix(
                 with summary_writer.as_default():
                     tf.summary.histogram(f"Param_{num}_hist", single_param)
 
-    # get the covariance NOTE the mean is taken over the n_same, the batch size
+    # get the covariance NOTE the mean is taken over the n_same, the (local/global) batch size
     mean = tf.reduce_mean(splits[0], axis=1, keepdims=True)
 
     # shape (n_output/n_params, n_same, n_params)
     outmm = tf.subtract(splits[0], mean)
-
-    # minus one because this is the sample covariance
-    cov_normalization = n_same - 1.0
 
     # shape (n_output/n_params, n_output, n_output)
     cov = tf.divide(tf.einsum("hjk,hjl->hkl", outmm, outmm), cov_normalization, name="COV")
@@ -171,6 +183,8 @@ def delta_loss(
     training=True,
     summary_writer=None,
     img_summary=False,
+    # distribution
+    strategy=None,
 ):
     """This function calculates the delta loss which tries to maximize the information of the summary statistics. Note
     it needs the predictions to be ordered in a specific way:
@@ -226,6 +240,7 @@ def delta_loss(
         summary_writer (tf.summary.SummaryWriter, optional): The writer used to write tensorboard summaries. Defaults
             to None.
         img_summary (bool, optional): Save image summaries of the Jacobian and the covariance. Defaults to False.
+        strategy (tf.distribute.Strategy): The distribution strategy the model was created within
 
     Raises:
         ValueError: When there are specifications that conflict with the no_correlations boolean.
@@ -250,6 +265,8 @@ def delta_loss(
         n_output=n_output,
         summary_writer=summary_writer,
         training=training,
+        # distribution
+        strategy=strategy,
     )
 
     # nice output
