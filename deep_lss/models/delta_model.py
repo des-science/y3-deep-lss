@@ -248,7 +248,7 @@ class DeltaLossModel(BaseModel):
                     l2_norm_weight=l2_norm_weight,
                 )
 
-        # distributed
+        # NOTE distributed
         elif isinstance(strategy, tf.distribute.Strategy):
             # NOTE passing an input_signature like above for a distributed dset leads the following error:
             # AttributeError: 'PerReplica' object has no attribute 'dtype'

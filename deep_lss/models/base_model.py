@@ -220,6 +220,7 @@ class BaseModel(object):
 
         with tf.GradientTape() as tape:
             predictions = self.network(input_tensor, training=True)
+            
             # compute the loss
             if input_labels is None:
                 loss = loss_function(predictions)
@@ -237,8 +238,11 @@ class BaseModel(object):
                         tf.summary.scalar("l2_loss", l2_loss)
                 loss = loss + l2_norm_weight * l2_loss
 
-        # get the gradients
+        # get the local gradients
         gradients = tape.gradient(loss, trainable_variables)
+
+        # NOTE get the global gradients
+        gradients = tf.distribute.get_replica_context().all_reduce("MEAN", gradients)
 
         # clip the gradients
         if clip_by_value is not None:
@@ -321,6 +325,10 @@ class BaseModel(object):
             f"The distributed_train_step makes the assumption that the global batch size is divisible by the number"
             f" of replicas, ensure that this is the case"
         )
+
+        if self.summary_writer is not None:
+            with self.summary_writer.as_default():
+                tf.summary.scalar("global_loss", global_loss)
 
         return global_loss
 

@@ -95,7 +95,7 @@ def get_jac_and_cov_matrix(
         # minus one because this is the sample covariance
         cov_normalization = n_same - 1.0
 
-    # distributed
+    # NOTE distributed
     elif isinstance(strategy, tf.distribute.Strategy):
         # gather from the replicas to get a more stable estimate of the covariance and jacobian
         splits = [tf.distribute.get_replica_context().all_gather(split, axis=1) for split in splits]
@@ -268,6 +268,18 @@ def delta_loss(
         # distribution
         strategy=strategy,
     )
+
+    # if strategy is not None:
+    #     if tf.distribute.get_replica_context().replica_id_in_sync_group == 0:
+    #         tf.print("cov replica\n", tf.distribute.get_replica_context().replica_id_in_sync_group, cov)
+    # else:
+    #     tf.print("cov local\n", cov)
+
+    # if strategy is not None:
+    #     if tf.distribute.get_replica_context().replica_id_in_sync_group == 0:
+    #         tf.print("jac replica\n", tf.distribute.get_replica_context().replica_id_in_sync_group, jacobian)
+    # else:
+    #     tf.print("jac local\n", jacobian)
 
     # nice output
     if training and summary_writer is not None:
@@ -476,10 +488,6 @@ def delta_loss(
 
         # summary
         if training and summary_writer is not None:
-            # we need to mean this between worker if necessary
-            # if num_workers is not None:
-            #     diff_loss_sum = hvd.allreduce(diff_loss)
-            # else:
             diff_loss_sum = diff_loss
             with summary_writer.as_default():
                 tf.summary.scalar("Diff_loss", diff_loss_sum)

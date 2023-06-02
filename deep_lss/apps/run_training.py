@@ -125,7 +125,7 @@ def setup():
     # set up directories
     file_dir = os.path.dirname(__file__)
     args.repo_dir = os.path.abspath(os.path.join(file_dir, "../.."))
-    
+
     if args.dir_base is None:
         args.dir_base = os.path.join(args.repo_dir, "run_files")
         os.makedirs(args.dir_base, exist_ok=True)
@@ -223,6 +223,9 @@ def training():
 
     # strategy = distribute.get_strategy(not args.local, cross_device_ops=tf.distribute.HierarchicalCopyAllReduce(num_packs=1))
     strategy = distribute.get_strategy(not args.local)
+    LOGGER.info(
+        f"Using global batch size {distribute.get_global_batch_size(strategy, net_conf['dset']['training']['local_batch_size'])}"
+    )
 
     # TODO implement some noise schedule?
     # https://cosmo-gitlab.phys.ethz.ch/jafluri/arne_handover/-/blob/main/networks/train_net.py#L184
@@ -279,8 +282,6 @@ def training():
     LOGGER.info(f"Starting training")
     LOGGER.timer.start("training")
     t_prev = time()
-
-    # dv_batch, _ = next(dist_iter)
 
     for step in LOGGER.progressbar(range(1, n_steps + 1), at_level="info", total=n_steps, desc="training at fiducial"):
         # context for profiling like https://www.tensorflow.org/guide/profiler#profiling_custom_training_loops
