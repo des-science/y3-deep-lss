@@ -1,4 +1,8 @@
 `/pscratch/sd/a/athomsen/run_files/v3/`
+- Global evaluation of the covariance and Jacobian matrices
+  - clustering only (Om, s8, bg, n_bg)
+    - local: 2023-06-07_01-45-13_resnet_vanilla
+    - distributed: 2023-06-06_06-22-31_resnet_vanilla
 - addition of a fiducial validation set
   - clustering only (Om, s8, bg, n_bg)
     - `2023-05-30_01-48-23_resnet_vanilla`
