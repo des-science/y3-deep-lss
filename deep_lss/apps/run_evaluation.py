@@ -10,7 +10,7 @@ Meant for the GPU nodes of the Perlmutter cluster at NERSC.
 """
 
 import tensorflow as tf
-import os, argparse, warnings
+import os, argparse, warnings, yaml
 
 from msfm.utils import logger, input_output, files
 
@@ -37,59 +37,38 @@ def setup():
         help="logging level",
     )
     parser.add_argument(
-        "--fid_tfr_pattern",
+        "--fidu_train_tfr_pattern",
         type=str,
         default=None,
-        help="pattern of the fiducial .tfrecord files, not evaluated if None",
+        help="input root dir of the fiducial data vectors (training)",
     )
     parser.add_argument(
-        "--grid_tfr_pattern",
+        "--fidu_vali_tfr_pattern",
         type=str,
         default=None,
-        help="pattern of the grid .tfrecord files, not evaluated if None",
+        help="input root dir of the fiducial data vectors (validation)",
     )
-    # TODO
-    # parser.add_argument("--with_bary", action="store_true", help="include baryons")
+    parser.add_argument(
+        "--grid_vali_tfr_pattern",
+        type=str,
+        default=None,
+        help="input root dir of the grid data vectors (validation)",
+    )
     parser.add_argument(
         "--dir_model", type=str, required=True, help="dir where the model checkpoints to be loaded are saved."
     )
-    parser.add_argument(
-        "--net_config",
-        type=str,
-        required=True,
-        help="configuration .yaml file of the model to be trained",
-    )
-    parser.add_argument(
-        "--dlss_config",
-        type=str,
-        default=None,
-        help="configuration .yaml file of this repo",
-    )
-    parser.add_argument(
-        "--msfm_config",
-        type=str,
-        default=None,
-        help=(
-            "configuration .yaml file of the multiprobe-simulation-forward-model pipeline. None means that the"
-            " standard configuration file in configs/config.yaml relative to the msfm repo is loaded."
-        ),
-    )
     parser.add_argument("--local", action="store_true", help="distribute the training")
     parser.add_argument("--debug", action="store_true", help="activate debug mode")
+    parser.add_argument("--file_label", type=str, default=None, help="A suffix that is appended to the files")
 
     args, _ = parser.parse_known_args()
 
     logger.set_all_loggers_level(args.verbosity)
 
-    LOGGER.debug(f"--verbosity = {args.verbosity}")
-    LOGGER.debug(f"--fid_tfr_pattern = {args.fid_tfr_pattern}")
-    LOGGER.debug(f"--grid_tfr_pattern = {args.grid_tfr_pattern}")
-    LOGGER.debug(f"--dir_model = {args.dir_model}")
-    LOGGER.debug(f"--net_config = {args.net_config}")
-    LOGGER.debug(f"--dlss_config = {args.dlss_config}")
-    LOGGER.debug(f"--msfm_config = {args.msfm_config}")
-    LOGGER.debug(f"--local = {args.local}")
-    LOGGER.debug(f"--debug = {args.debug}")
+    # print arguments
+    logger.set_all_loggers_level(args.verbosity)
+    for key, value in vars(args).items():
+        LOGGER.info(f"{key} = {value}")
 
     if args.debug:
         # tf.config.run_functions_eagerly(True)
@@ -107,10 +86,11 @@ if __name__ == "__main__":
 
     _, _ = distribute.check_devices()
 
-    # read the different configs
-    dlss_conf = utils.load_deep_lss_config(args.dlss_config)
-    msfm_conf = files.load_config(args.msfm_config)
-    net_conf = input_output.read_yaml(args.net_config)
+    # load the configs
+    with open(os.path.join(args.dir_model, "configs.yaml"), "r") as f:
+        net_conf, dlss_conf, msfm_conf = list(yaml.load_all(f, Loader=yaml.FullLoader))
+
+    LOGGER.info(f"Loaded configs from the model directory")
 
     # general constants
     all_params = msfm_conf["analysis"]["params"]
@@ -153,24 +133,51 @@ if __name__ == "__main__":
             restore_checkpoint=True,
         )
 
-    if args.grid_tfr_pattern is not None:
-        eval.evaluate_grid(
-            model=model,
-            strategy=strategy,
-            tfr_pattern=args.grid_tfr_pattern,
-            msfm_conf=msfm_conf,
-            dlss_conf=dlss_conf,
-            net_conf=net_conf,
-            dir_out=args.dir_model,
-        )
+    train_step = strategy.gather(model.train_step, axis=0)[0].numpy()
 
-    if args.fid_tfr_pattern is not None:
+    # fiducial training
+    if args.fidu_train_tfr_pattern is not None:
         eval.evaluate_fiducial(
             model=model,
             strategy=strategy,
-            tfr_pattern=args.fid_tfr_pattern,
+            tfr_pattern=args.fidu_tfr_pattern,
             msfm_conf=msfm_conf,
             dlss_conf=dlss_conf,
             net_conf=net_conf,
             dir_out=args.dir_model,
+            file_label=f"{train_step}_{args.file_label}",
+            training_set=True,
         )
+    else:
+        LOGGER.warning(f"Skipping evaluation of the fiducial training set")
+
+    # fiducial validation
+    if args.fidu_vali_tfr_pattern is not None:
+        eval.evaluate_fiducial(
+            model=model,
+            strategy=strategy,
+            tfr_pattern=args.fidu_vali_tfr_pattern,
+            msfm_conf=msfm_conf,
+            dlss_conf=dlss_conf,
+            net_conf=net_conf,
+            dir_out=args.dir_model,
+            file_label=f"{train_step}_{args.file_label}",
+            training_set=False,
+        )
+    else:
+        LOGGER.warning(f"Skipping evaluation of the fiducial validation set")
+
+    # grid validation
+    if args.grid_vali_tfr_pattern is not None:
+        eval.evaluate_grid(
+            model=model,
+            strategy=strategy,
+            tfr_pattern=args.grid_vali_tfr_pattern,
+            msfm_conf=msfm_conf,
+            dlss_conf=dlss_conf,
+            net_conf=net_conf,
+            dir_out=args.dir_model,
+            file_label=f"{train_step}_{args.file_label}",
+        )
+    else:
+        LOGGER.warning(f"Skipping evaluation of the fiducial validation set")

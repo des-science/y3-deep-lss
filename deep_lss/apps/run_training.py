@@ -84,7 +84,7 @@ def setup():
     parser.add_argument(
         "--net_config",
         type=str,
-        default=None,
+        default="config/rsnet_vanilla.yaml",
         help=(
             "configuration .yaml file of the model to be trained. None can only be provided if there's a config in"
             " the dir_model and restore_checkpoint is true."
@@ -93,7 +93,7 @@ def setup():
     parser.add_argument(
         "--dlss_config",
         type=str,
-        default=None,
+        default="config/dlss_config.yaml",
         help=(
             "configuration .yaml file of this repo. None means that the standard configuration file in"
             " configs/dlss_config.yaml relative to this repo is loaded."
@@ -118,6 +118,7 @@ def setup():
     )
     parser.add_argument("--local", action="store_true", help="don't distribute the training")
     parser.add_argument("--debug", action="store_true", help="activate debug mode")
+    parser.add_argument("--force_eval", action="store_true", help="force evaluation of the network (and don't train)")
     parser.add_argument("--profile", action="store_true", help="run the profiler")
 
     args, _ = parser.parse_known_args()
@@ -157,7 +158,8 @@ def training():
     if not args.restore_checkpoint:
         # load the configs
         net_conf = input_output.read_yaml(os.path.join(args.repo_dir, args.net_config))
-        dlss_conf = utils.load_deep_lss_config(args.dlss_config)
+        # dlss_conf = utils.load_deep_lss_config(args.dlss_config)
+        dlss_conf = input_output.read_yaml(os.path.join(args.repo_dir, args.dlss_config))
         msfm_conf = files.load_config(args.msfm_config)
         LOGGER.info(f"Loaded configs from the provided paths")
 
@@ -301,7 +303,7 @@ def training():
                 model.save_model()
 
             # evaluate
-            if (eval_every is not None) and (step % eval_every == 0):
+            if ((eval_every is not None) and (step % eval_every == 0)) or args.force_eval:
                 train_step = strategy.gather(model.train_step, axis=0)[0].numpy()
                 LOGGER.info(f"Evaluating the model after a total of {train_step} training steps")
 
@@ -349,6 +351,10 @@ def training():
                 else:
                     LOGGER.warning(f"Skipping evaluation of the fiducial validation set")
 
+                if args.force_eval:
+                    LOGGER.warning(f"Breaking the training loop")
+                    break
+
             # profile
             if args.profile and step == 200:
                 print("\n")
@@ -368,7 +374,7 @@ def training():
     LOGGER.info(f"Finished training after {n_steps} steps and {LOGGER.timer.elapsed('training')}")
 
     # save everything at the end if necessary
-    if (checkpoint_every is not None) and (step % checkpoint_every != 0):
+    if (checkpoint_every is not None) and (step % checkpoint_every != 0) and (not args.force_eval):
         LOGGER.info(f"Creating a final checkpoint")
         model.save_model()
     elif checkpoint_every is not None:

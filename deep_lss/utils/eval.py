@@ -186,7 +186,7 @@ def evaluate_grid(model, strategy, tfr_pattern, msfm_conf, dlss_conf, net_conf, 
 
 
 def evaluate_fiducial(
-    model, strategy, tfr_pattern, msfm_conf, dlss_conf, net_conf, dir_out, file_label=None, training=True
+    model, strategy, tfr_pattern, msfm_conf, dlss_conf, net_conf, dir_out, file_label=None, training_set=True
 ):
     """Evaluate the model on the fiducial part of the CosmoGrid.
 
@@ -199,8 +199,8 @@ def evaluate_fiducial(
         net_conf (dict): Configuration file of the specific model.
         dir_out (str): Output directory, this is where the evaluations will be saved.
         file_label (str, optional): Optional suffix to append to the output file names. Defaults to None.
-        training (bool, optional): Whether it's a training or validation set. This changes how the result is stored.
-    """
+        training_set (bool, optional): Whether it's a training or validation set. This changes how the result is stored.
+I    """
     print("\n")
     LOGGER.info(f"Starting evaluation of the fiducial")
 
@@ -254,9 +254,15 @@ def evaluate_fiducial(
     i_examples = tf.concat(i_examples, axis=0)
     LOGGER.info(f"Reshaped the results")
 
+    # sort according to the example index
+    sorted_indices = tf.argsort(i_examples)
+    preds = tf.gather(preds, sorted_indices)
+    i_examples = tf.gather(preds, sorted_indices)
+    LOGGER.info(f"Sorted the results")
+
     out_file = _get_out_file(dir_out, file_label)
     with h5py.File(out_file, "a") as f:
-        if training:
+        if training_set:
             f.create_dataset(name="fiducial/train/pred", data=preds)
             f.create_dataset(name="fiducial/train/i_example", data=i_examples)
         else:
