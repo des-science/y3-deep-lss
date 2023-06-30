@@ -241,7 +241,7 @@ class BaseModel(object):
         # get the local gradients
         gradients = tape.gradient(loss, trainable_variables)
 
-        # NOTE get the global gradients
+        # NOTE distributed, get the global gradients
         gradients = tf.distribute.get_replica_context().all_reduce("MEAN", gradients)
 
         # clip the gradients
