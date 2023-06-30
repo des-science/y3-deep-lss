@@ -4,11 +4,11 @@
 #SBATCH --qos=regular
 #SBATCH --nodes=1
 #SBATCH --gpus-per-node=4
-#SBATCH --time=08:00:00
+#SBATCH --time=12:00:00
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=128
-#SBATCH --job-name=training
-#SBATCH --output=./logs/training.%j.log
+#SBATCH --job-name=multi_training
+#SBATCH --output=./logs/multi_training.%j.log
 
 #OpenMP settings:
 # export OMP_NUM_THREADS=128
@@ -16,22 +16,24 @@
 # export OMP_PROC_BIND=close
 
 #run the application:
+# srun python ../../deep_lss/apps/run_training.py \
+#     --fidu_tfr_pattern="/pscratch/sd/a/athomsen/DESY3/v3/fiducial/DESy3_fiducial_???.tfrecord" \
+#     --fidu_vali_tfr_pattern="/pscratch/sd/a/athomsen/DESY3/v3/fiducial/validation/DESy3_fiducial_???.tfrecord" \
+#     --grid_vali_tfr_pattern="/pscratch/sd/a/athomsen/DESY3/v3/grid/DESy3_grid_???.tfrecord" \
+#     --dir_base="/pscratch/sd/a/athomsen/run_files/v3" \
+#     --net_config="/global/homes/a/athomsen/y3-deep-lss/configs/probe_combination/resnet_vanilla.yaml" \
+#     --dlss_config="/global/homes/a/athomsen/y3-deep-lss/configs/probe_combination/dlss_config.yaml"
 
 srun python ../../deep_lss/apps/run_training.py \
     --fidu_tfr_pattern="/pscratch/sd/a/athomsen/DESY3/v3/fiducial/DESy3_fiducial_???.tfrecord" \
     --fidu_vali_tfr_pattern="/pscratch/sd/a/athomsen/DESY3/v3/fiducial/validation/DESy3_fiducial_???.tfrecord" \
     --grid_vali_tfr_pattern="/pscratch/sd/a/athomsen/DESY3/v3/grid/DESy3_grid_???.tfrecord" \
     --dir_base="/pscratch/sd/a/athomsen/run_files/v3" \
-    --dlss_config="configs/clustering_only/dlss_config.yaml" \
-    --net_config="configs/delta_loss_debug/resnet_debug_local.yaml" \
-    --local
-# --restore_checkpoint \
-# --dir_model="2023-05-24_05-18-42_resnet_vanilla"
+    --dir_model="2023-05-30_10-56-53_resnet_vanilla" \
+    --restore_checkpoint
 
-# srun python ../../deep_lss/apps/run_training.py \
-#     --fidu_tfr_pattern="/pscratch/sd/a/athomsen/DESY3/v3/fiducial/DESy3_fiducial_000.tfrecord" \
-#     --dir_base="/pscratch/sd/a/athomsen/run_files/v3/debug" \
-#     --net_config="configs/resnet_debug.yaml"
+    # --restore_checkpoint \
+# --dir_model="2023-05-24_05-18-42_resnet_vanilla"
 
 # srun python ../../deep_lss/apps/run_training.py --fid_tfr_pattern="/pscratch/sd/a/athomsen/DESY3/v3/fiducial/DESy3_fiducial_???.tfrecord" --grid_tfr_pattern="/pscratch/sd/a/athomsen/DESY3/v3/grid/DESy3_grid_???.tfrecord" --net_config="/global/u2/a/athomsen/y3-deep-lss/configs/resnet_vanilla.yaml" --dir_base="/pscratch/sd/a/athomsen/run_files/v3/"
 # srun python ../../deep_lss/apps/run_training.py --fid_tfr_pattern="/pscratch/sd/a/athomsen/DESY3/v3/fiducial/DESy3_fiducial_???.tfrecord" --grid_tfr_pattern="/pscratch/sd/a/athomsen/DESY3/v3/grid/DESy3_grid_???.tfrecord" --net_config="/global/u2/a/athomsen/y3-deep-lss/configs/resnet_vanilla.yaml" --dir_model="/pscratch/sd/a/athomsen/run_files/v3/2023-05-24_05-26-55_resnet_vanilla" --restore_checkpoint

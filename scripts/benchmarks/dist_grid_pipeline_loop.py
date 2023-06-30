@@ -4,24 +4,21 @@ import tensorflow as tf
 from contextlib import nullcontext
 
 from deep_lss.utils import distribute
-from msfm.fiducial_pipeline import FiducialPipeline
+from msfm.grid_pipeline import GridPipeline
 from msfm.utils import logger
 
 LOGGER = logger.get_logger(__file__)
 
-tfr_pattern = "/pscratch/sd/a/athomsen/DESY3/v3/fiducial/DESy3_fiducial_???.tfrecord"
-global_batch_size = 32
+tfr_pattern = "/pscratch/sd/a/athomsen/DESY3/v3/grid/DESy3_grid_???.tfrecord"
+# n_steps = 200
+global_batch_size = 100
 profile = False
 
 _, _ = distribute.check_devices()
 strategy = distribute.get_strategy(True)
 local_batch_size = distribute.get_local_batch_size(strategy, global_batch_size)
 
-fiducial_pipeline = FiducialPipeline(
-    # params=["Om", "s8"],
-    # params=["Om", "s8", "bg", "n_bg"],
-    # params=["Om", "s8", "Aia", "n_Aia"],
-    params=["Om", "s8", "Aia", "n_Aia", "bg", "n_bg"],
+grid_pipeline = GridPipeline(
     with_lensing=True,
     with_clustering=True,
     apply_norm=True,
@@ -30,17 +27,11 @@ fiducial_pipeline = FiducialPipeline(
 
 # like https://www.tensorflow.org/tutorials/distribute/input#tfdistributestrategydistribute_datasets_from_function
 def dataset_fn(input_context):
-    dset = fiducial_pipeline.get_dset(
-        # dset = fiducial_pipeline.get_multi_noise_dset(
-        # n_noise=3,
+    dset = grid_pipeline.get_dset(
         tfr_pattern=tfr_pattern,
         local_batch_size=local_batch_size,
-        is_cached=False,
-        is_eval=True,
         n_readers=4,
         n_prefetch=None,
-        file_name_shuffle_buffer=16,
-        examples_shuffle_buffer=None,
         # distribution
         input_context=input_context,
     )
@@ -48,16 +39,14 @@ def dataset_fn(input_context):
 
 
 dist_dset = strategy.distribute_datasets_from_function(dataset_fn)
+dist_iter = iter(dist_dset)
 
-for dv_batch, index_batch in LOGGER.progressbar(dist_dset, at_level="info"):
+for dv_batch, cosmo_batch, index_batch in LOGGER.progressbar(dist_dset, at_level="info"):
     pass
-
-# n_steps = 200
-# dist_iter = iter(dist_dset)
 
 # for step in LOGGER.progressbar(range(1, n_steps + 1), at_level="info", total=n_steps):
 #     with tf.profiler.experimental.Trace("step", step_num=step, _r=1) if profile else nullcontext():
-#         dv_batch, index_batch = next(dist_iter)
+#         dv_batch, cosmo_batch, index_batch = next(dist_iter)
 
 #         # profile
 #         if profile and step == 190:
