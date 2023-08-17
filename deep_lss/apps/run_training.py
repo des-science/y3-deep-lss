@@ -317,7 +317,7 @@ def training():
                     net_conf=net_conf,
                     dir_out=dir_out,
                     file_label=train_step,
-                    training=True,
+                    training_set=True,
                 )
 
                 # fiducial validation
@@ -331,7 +331,7 @@ def training():
                         net_conf=net_conf,
                         dir_out=dir_out,
                         file_label=train_step,
-                        training=False,
+                        training_set=False,
                     )
                 else:
                     LOGGER.warning(f"Skipping evaluation of the fiducial validation set")

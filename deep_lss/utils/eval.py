@@ -257,7 +257,7 @@ I    """
     # sort according to the example index
     sorted_indices = tf.argsort(i_examples)
     preds = tf.gather(preds, sorted_indices)
-    i_examples = tf.gather(preds, sorted_indices)
+    i_examples = tf.gather(i_examples, sorted_indices)
     LOGGER.info(f"Sorted the results")
 
     out_file = _get_out_file(dir_out, file_label)

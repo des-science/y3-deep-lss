@@ -134,13 +134,14 @@ if __name__ == "__main__":
         )
 
     train_step = strategy.gather(model.train_step, axis=0)[0].numpy()
+    # train_step = 50000
 
     # fiducial training
     if args.fidu_train_tfr_pattern is not None:
         eval.evaluate_fiducial(
             model=model,
             strategy=strategy,
-            tfr_pattern=args.fidu_tfr_pattern,
+            tfr_pattern=args.fidu_train_tfr_pattern,
             msfm_conf=msfm_conf,
             dlss_conf=dlss_conf,
             net_conf=net_conf,
