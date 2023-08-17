@@ -1,4 +1,8 @@
 `/pscratch/sd/a/athomsen/run_files/v3/`
+- Inclusion/removal of the (per element) first and second moment
+  - v3/2023-08-17_08-19-09_resnet_vanilla	  (remove both mean and divide by standard deviation)
+  - v3/2023-08-17_08-23-47_resnet_vanilla 	(regular setup)
+  - v3/2023-08-17_08-38-03_resnet_vanilla	  (remove the mean only)
 - Global evaluation of the covariance and Jacobian matrices
   - clustering only (Om, s8, bg, n_bg)
     - local: 2023-06-07_01-45-13_resnet_vanilla
