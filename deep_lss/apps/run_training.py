@@ -13,7 +13,7 @@ TODO make esub compatible? The index could correspond to a neural net architectu
 """
 
 import tensorflow as tf
-import os, argparse, warnings, yaml
+import os, argparse, warnings, yaml, json
 
 from datetime import datetime
 from time import time
@@ -223,14 +223,13 @@ def training():
     if dlss_conf["dset"]["general"]["with_clustering"]:
         n_z_bins += len(msfm_conf["survey"]["maglim"]["z_bins"])
 
-    # strategy = distribute.get_strategy(not args.local, cross_device_ops=tf.distribute.HierarchicalCopyAllReduce(num_packs=1))
-    strategy = distribute.get_strategy(not args.local)
+    if int(os.environ["SLURM_NTASKS_PER_NODE"]) == 4 and int(os.environ["SLURM_GPUS_PER_TASK"]) == 1:
+        strategy = distribute.get_strategy(not args.local, strategy_type="multi_mirrored")
+    else:
+        strategy = distribute.get_strategy(not args.local, strategy_type="mirrored")
     LOGGER.info(
         f"Using global batch size {distribute.get_global_batch_size(strategy, net_conf['dset']['training']['local_batch_size'])}"
     )
-
-    # TODO implement some noise schedule?
-    # https://cosmo-gitlab.phys.ethz.ch/jafluri/arne_handover/-/blob/main/networks/train_net.py#L184
 
     fiducial_pipeline = FiducialPipeline(
         conf=msfm_conf, **{**dlss_conf["dset"]["general"], **dlss_conf["dset"]["training"]}
@@ -285,12 +284,24 @@ def training():
     LOGGER.timer.start("training")
     t_prev = time()
 
+    # @tf.function()
+    # def standardize(tensor):
+    #     # return (tensor - tf.reduce_mean(tensor, axis=1, keepdims=True)) / tf.math.reduce_std(tensor, axis=1, keepdims=True)
+    #     return tensor - tf.reduce_mean(tensor, axis=1, keepdims=True)
+
     for step in LOGGER.progressbar(range(1, n_steps + 1), at_level="info", total=n_steps, desc="training at fiducial"):
         # context for profiling like https://www.tensorflow.org/guide/profiler#profiling_custom_training_loops
         # optional context like https://stackoverflow.com/a/34798330
         with tf.profiler.experimental.Trace("step", step_num=step, _r=1) if args.profile else nullcontext():
             # train step
             dv_batch, _ = next(dist_iter)
+
+            # TODO normalization
+            # dv_batch = (dv_batch - tf.reduce_mean(dv_batch, axis=1, keepdims=True)) / tf.math.reduce_std(
+            #     dv_batch, axis=1, keepdims=True
+            # )
+            # dv_batch = strategy.run(standardize, args=(dv_batch,))
+
             model.delta_train_step(dv_batch)
 
             # output

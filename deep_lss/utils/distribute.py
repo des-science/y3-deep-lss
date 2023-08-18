@@ -6,7 +6,7 @@ Author: Arne Thomsen, Janis Fluri
 """
 
 import tensorflow as tf
-import os, atexit
+import os, atexit, json
 
 from msfm.utils import logger
 
@@ -21,11 +21,11 @@ def check_devices():
     """
     try:
         n_cpus = len(os.sched_getaffinity(0))
-        if n_cpus != os.cpu_count():
-            LOGGER.warning(
-                f"len(os.sched_getaffinity(0)) = {len(os.sched_getaffinity(0))} and",
-                f" os.cpu_count() = {os.cpu_count()} disagree",
-            )
+        # if n_cpus != os.cpu_count():
+        #     LOGGER.warning(
+        #         f"len(os.sched_getaffinity(0)) = {len(os.sched_getaffinity(0))} and",
+        #         f" os.cpu_count() = {os.cpu_count()} disagree",
+        #     )
     except AttributeError:
         n_cpus = os.cpu_count()
     LOGGER.info(f"Running on {n_cpus} CPU cores")
@@ -61,7 +61,7 @@ def get_strategy(distributed, strategy_type="mirrored", cross_device_ops=tf.dist
     """
     n_gpus = len(tf.config.list_physical_devices("GPU"))
 
-    if n_gpus > 1 and distributed:
+    if n_gpus >= 1 and distributed:
         if strategy_type == "mirrored":
             strategy = tf.distribute.MirroredStrategy(cross_device_ops=cross_device_ops)
             LOGGER.info(f"Training is distributed, using MirroredStrategy")
@@ -73,8 +73,27 @@ def get_strategy(distributed, strategy_type="mirrored", cross_device_ops=tf.dist
             assert n_replicas == n_gpus
 
         elif strategy_type == "multi_mirrored":
-            strategy = tf.distribute.MultiWorkerMirroredStrategy(cross_device_ops=cross_device_ops)
-            LOGGER.info(f"Training is distributed, using MutliWorkerMirroredStrategy")
+            # NOTE this only works for the setup where a node has four GPUs and the MultiWorkerStrategy is run on that
+            # single node, where each GPU is a worker. For this, the .sh slurm submission script must include
+            # --nodes=1 --gpus-per-node=4 --ntasks-per-node=4 --gpus-per-task=1 --cpus-per-task=32
+
+            os.environ["TF_CONFIG"] = json.dumps(
+                {
+                    "cluster": {
+                        "worker": ["localhost:12345", "localhost:12346", "localhost:12347", "localhost:12348"]
+                    },
+                    "task": {"type": "worker", "index": int(os.environ["SLURM_LOCALID"])},
+                }
+            )
+
+            LOGGER.debug(os.environ["TF_CONFIG"])
+
+            communication_options = tf.distribute.experimental.CommunicationOptions(
+                implementation=tf.distribute.experimental.CommunicationImplementation.NCCL
+            )
+
+            strategy = tf.distribute.MultiWorkerMirroredStrategy(communication_options=communication_options)
+            LOGGER.info(f"Training is distributed, using MultiWorkerMirroredStrategy")
 
         else:
             raise NotImplementedError
