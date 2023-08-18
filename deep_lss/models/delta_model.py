@@ -235,7 +235,7 @@ class DeltaLossModel(BaseModel):
 
         # non distributed
         if strategy is None:
-            @tf.function(input_signature=[tf.TensorSpec(shape=in_shape, dtype=current_float)])
+            @tf.function(input_signature=[tf.TensorSpec(shape=in_shape, dtype=current_float)], jit_compile=False)
             def delta_train_step(input_batch):
                 LOGGER.warning(f"Tracing delta_train_step")
                 self.base_train_step(
@@ -253,7 +253,7 @@ class DeltaLossModel(BaseModel):
             # NOTE passing an input_signature like above for a distributed dset leads the following error:
             # AttributeError: 'PerReplica' object has no attribute 'dtype'
             # Instead do like  https://www.tensorflow.org/tutorials/distribute/input#using_the_element_spec_property
-            @tf.function
+            @tf.function(jit_compile=False)
             def delta_train_step(input_batch):
                 LOGGER.warning(f"Tracing distributed delta_train_step")
                 self.distributed_train_step(

@@ -13,7 +13,7 @@ TODO make esub compatible? The index could correspond to a neural net architectu
 """
 
 import tensorflow as tf
-import os, argparse, warnings, yaml, json
+import os, argparse, warnings, yamls
 
 from datetime import datetime
 from time import time

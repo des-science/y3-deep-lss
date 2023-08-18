@@ -134,7 +134,6 @@ if __name__ == "__main__":
         )
 
     train_step = strategy.gather(model.train_step, axis=0)[0].numpy()
-    # train_step = 50000
 
     # fiducial training
     if args.fidu_train_tfr_pattern is not None:
