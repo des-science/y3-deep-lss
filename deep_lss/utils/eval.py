@@ -190,17 +190,17 @@ def evaluate_fiducial(
 ):
     """Evaluate the model on the fiducial part of the CosmoGrid.
 
-    Args:
-        model (DeltaLossModel): Model to be evaluated.
-        strategy (tf.distribute.Strategy): Distribution strategy instance within which the model has been created. This
-            is used to distribute the dataset.
-        tfr_pattern (str): Glob pattern of the .tfrecord files containing the data.
-        msfm_conf (dict): Configuration file of the msfm pipeline.
-        net_conf (dict): Configuration file of the specific model.
-        dir_out (str): Output directory, this is where the evaluations will be saved.
-        file_label (str, optional): Optional suffix to append to the output file names. Defaults to None.
-        training_set (bool, optional): Whether it's a training or validation set. This changes how the result is stored.
-I    """
+        Args:
+            model (DeltaLossModel): Model to be evaluated.
+            strategy (tf.distribute.Strategy): Distribution strategy instance within which the model has been created. This
+                is used to distribute the dataset.
+            tfr_pattern (str): Glob pattern of the .tfrecord files containing the data.
+            msfm_conf (dict): Configuration file of the msfm pipeline.
+            net_conf (dict): Configuration file of the specific model.
+            dir_out (str): Output directory, this is where the evaluations will be saved.
+            file_label (str, optional): Optional suffix to append to the output file names. Defaults to None.
+            training_set (bool, optional): Whether it's a training or validation set. This changes how the result is stored.
+    I"""
     print("\n")
     LOGGER.info(f"Starting evaluation of the fiducial")
 

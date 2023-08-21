@@ -111,7 +111,7 @@ if __name__ == "__main__":
     # set up directories
     checkpoint_dir = os.path.abspath(os.path.join(args.dir_model, "checkpoint"))
 
-    strategy = distribute.get_strategy(not args.local, cross_device_ops=tf.distribute.ReductionToOneDevice())
+    strategy = distribute.get_strategy(not args.local)
 
     # create all of the variables within the strategy's scope, such that they are mirrored
     with strategy.scope():

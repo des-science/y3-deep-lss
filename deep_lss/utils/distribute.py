@@ -47,7 +47,7 @@ def check_devices():
     return n_cpus, n_gpus
 
 
-def get_strategy(distributed, strategy_type="mirrored", cross_device_ops=tf.distribute.NcclAllReduce(num_packs=1)):
+def get_strategy(distributed):
     """Sets up the tf.distribute.Strategy
 
     Args:
@@ -59,20 +59,17 @@ def get_strategy(distributed, strategy_type="mirrored", cross_device_ops=tf.dist
     Returns:
         tf.distribute.Strategy: The distribution strategy
     """
-    n_gpus = len(tf.config.list_physical_devices("GPU"))
 
-    if n_gpus >= 1 and distributed:
-        if strategy_type == "mirrored":
-            strategy = tf.distribute.MirroredStrategy(cross_device_ops=cross_device_ops)
-            LOGGER.info(f"Training is distributed, using MirroredStrategy")
+    if distributed:
+        try:
+            n_tasks_per_node = int(os.environ["SLURM_NTASKS_PER_NODE"])
+            gpus_per_task = int(os.environ["SLURM_GPUS_PER_TASK"])
+        except KeyError:
+            n_tasks_per_node = None
+            gpus_per_task = None
 
-            # correct exit behavior as in https://github.com/tensorflow/tensorflow/issues/50487#issuecomment-997304668
-            atexit.register(strategy._extended._collective_ops._pool.close)
-
-            n_replicas = strategy.num_replicas_in_sync
-            assert n_replicas == n_gpus
-
-        elif strategy_type == "multi_mirrored":
+        # MultiWorkerMirroredStrategy
+        if n_tasks_per_node == 4 and gpus_per_task == 1:
             # NOTE this only works for the setup where a node has four GPUs and the MultiWorkerStrategy is run on that
             # single node, where each GPU is a worker. For this, the .sh slurm submission script must include
             # --nodes=1 --gpus-per-node=4 --ntasks-per-node=4 --gpus-per-task=1 --cpus-per-task=32
@@ -85,18 +82,31 @@ def get_strategy(distributed, strategy_type="mirrored", cross_device_ops=tf.dist
                     "task": {"type": "worker", "index": int(os.environ["SLURM_LOCALID"])},
                 }
             )
-
             LOGGER.debug(os.environ["TF_CONFIG"])
 
             communication_options = tf.distribute.experimental.CommunicationOptions(
                 implementation=tf.distribute.experimental.CommunicationImplementation.NCCL
+                # implementation=tf.distribute.experimental.CommunicationImplementation.RING
             )
 
             strategy = tf.distribute.MultiWorkerMirroredStrategy(communication_options=communication_options)
             LOGGER.info(f"Training is distributed, using MultiWorkerMirroredStrategy")
 
+        # MirroredStrategy
         else:
-            raise NotImplementedError
+            cross_device_ops = tf.distribute.NcclAllReduce(num_packs=1)
+            # cross_device_ops = tf.distribute.HierarchicalCopyAllReduce(num_packs=1)
+            # cross_device_ops = tf.distribute.ReductionToOneDevice(num_packs=1)
+
+            strategy = tf.distribute.MirroredStrategy(cross_device_ops=cross_device_ops)
+            LOGGER.info(f"Training is distributed, using MirroredStrategy")
+
+            # correct exit behavior as in https://github.com/tensorflow/tensorflow/issues/50487#issuecomment-997304668
+            atexit.register(strategy._extended._collective_ops._pool.close)
+
+            n_replicas = strategy.num_replicas_in_sync
+            n_gpus = len(tf.config.list_physical_devices("GPU"))
+            assert n_replicas == n_gpus
 
     else:
         strategy = tf.distribute.get_strategy()
