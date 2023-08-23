@@ -223,9 +223,20 @@ def training():
     if dlss_conf["dset"]["general"]["with_clustering"]:
         n_z_bins += len(msfm_conf["survey"]["maglim"]["z_bins"])
 
+    dset_kwargs = net_conf["dset"]["training"]
+
+    if "i_noise" in dset_kwargs.keys():
+        is_single_noise = True
+    elif "n_noise" in dset_kwargs.keys():
+        is_single_noise = False
+    else:
+        raise NotImplementedError(
+            f"The network config needs to contain either i_noise or n_noise in dset/eval/fiducial"
+        )
+
     strategy = distribute.get_strategy(not args.local)
     LOGGER.info(
-        f"Using global batch size {distribute.get_global_batch_size(strategy, net_conf['dset']['training']['local_batch_size'])}"
+        f"Using global batch size {distribute.get_global_batch_size(strategy, dset_kwargs['local_batch_size'])}"
     )
 
     fiducial_pipeline = FiducialPipeline(
@@ -234,13 +245,22 @@ def training():
 
     # like https://www.tensorflow.org/tutorials/distribute/input#tfdistributestrategydistribute_datasets_from_function
     def dataset_fn(input_context):
-        # dset = fiducial_pipeline.get_multi_noise_dset(
-        dset = fiducial_pipeline.get_dset(
-            tfr_pattern=args.fidu_tfr_pattern,
-            **net_conf["dset"]["training"],
-            # distribution
-            input_context=input_context,
-        )
+        if is_single_noise:
+            dset = fiducial_pipeline.get_dset(
+                tfr_pattern=args.fidu_tfr_pattern,
+                **dset_kwargs,
+                # distribution
+                input_context=input_context,
+            )
+
+        else:
+            dset = fiducial_pipeline.get_multi_noise_dset(
+                tfr_pattern=args.fidu_tfr_pattern,
+                **dset_kwargs,
+                # distribution
+                input_context=input_context,
+            )
+
         return dset
 
     dist_dset = strategy.distribute_datasets_from_function(dataset_fn)
@@ -303,18 +323,18 @@ def training():
                 train_step = strategy.gather(model.train_step, axis=0)[0].numpy()
                 LOGGER.info(f"Evaluating the model after a total of {train_step} training steps")
 
-                # fiducial training
-                eval.evaluate_fiducial(
-                    model=model,
-                    strategy=strategy,
-                    tfr_pattern=args.fidu_tfr_pattern,
-                    msfm_conf=msfm_conf,
-                    dlss_conf=dlss_conf,
-                    net_conf=net_conf,
-                    dir_out=dir_out,
-                    file_label=train_step,
-                    training_set=True,
-                )
+                # # fiducial training
+                # eval.evaluate_fiducial(
+                #     model=model,
+                #     strategy=strategy,
+                #     tfr_pattern=args.fidu_tfr_pattern,
+                #     msfm_conf=msfm_conf,
+                #     dlss_conf=dlss_conf,
+                #     net_conf=net_conf,
+                #     dir_out=dir_out,
+                #     file_label=train_step,
+                #     training_set=True,
+                # )
 
                 # fiducial validation
                 if args.fidu_vali_tfr_pattern is not None:
