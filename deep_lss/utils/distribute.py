@@ -21,11 +21,11 @@ def check_devices():
     """
     try:
         n_cpus = len(os.sched_getaffinity(0))
-        # if n_cpus != os.cpu_count():
-        #     LOGGER.warning(
-        #         f"len(os.sched_getaffinity(0)) = {len(os.sched_getaffinity(0))} and",
-        #         f" os.cpu_count() = {os.cpu_count()} disagree",
-        #     )
+        if n_cpus != os.cpu_count():
+            LOGGER.debug(
+                f"len(os.sched_getaffinity(0)) = {len(os.sched_getaffinity(0))} and",
+                f" os.cpu_count() = {os.cpu_count()} disagree",
+            )
     except AttributeError:
         n_cpus = os.cpu_count()
     LOGGER.info(f"Running on {n_cpus} CPU cores")

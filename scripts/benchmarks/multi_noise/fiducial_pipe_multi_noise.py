@@ -1,7 +1,7 @@
 # this exists for benchmark purposes
 
 import tensorflow as tf
-import psutil, os
+import psutil, GPUtil, os
 
 from contextlib import nullcontext
 from datetime import datetime
@@ -14,15 +14,19 @@ from msfm.utils import logger
 LOGGER = logger.get_logger(__file__)
 
 tfr_pattern = "/pscratch/sd/a/athomsen/DESY3/v3/fiducial/DESy3_fiducial_???.tfrecord"
-log_file = f"/pscratch/sd/a/athomsen/run_files/benchmarks/multi_noise/new/{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
+log_file = (
+    f"/pscratch/sd/a/athomsen/run_files/benchmarks/multi_noise/new/{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
+)
 global_batch_size = 16
-n_steps = 300
+n_steps = 50
 n_gpus = len(tf.config.list_physical_devices("GPU"))
-profile = True
-multi_noise = False
+total_gpu_mem = GPUtil.getGPUs()[0].memoryTotal * 1000
+profile = False
+multi_noise = True
+distributed = True
 
 _, _ = distribute.check_devices()
-strategy = distribute.get_strategy(True)
+strategy = distribute.get_strategy(distributed)
 local_batch_size = distribute.get_local_batch_size(strategy, global_batch_size)
 
 fiducial_pipeline = FiducialPipeline(
@@ -39,11 +43,15 @@ dset_kwargs = {
     "tfr_pattern": tfr_pattern,
     "local_batch_size": local_batch_size,
     "is_cached": False,
-    "n_readers": 16,
-    # "n_prefetch": 0,
-    "n_prefetch": 5,
+    # "n_readers": 16,
+    # "n_readers": 4,
+    "n_readers": 1,
+    # "n_prefetch": 3,
+    "n_prefetch": 0,
+    # "n_prefetch": 10,
     # "is_eval": False,
     "file_name_shuffle_buffer": 16,
+    # "examples_shuffle_buffer": 64,
     "examples_shuffle_buffer": None,
 }
 
@@ -97,7 +105,7 @@ for step in LOGGER.progressbar(range(n_steps), at_level="info", total=n_steps):
                 for i in range(n_gpus):
                     # GPU, in per cent
                     mem_info = tf.config.experimental.get_memory_info(f"/GPU:{i}")
-                    tf.summary.scalar(f"GPU_{i}_mem", mem_info["current"] / (4 * 10**8), step=step)
+                    tf.summary.scalar(f"GPU_{i}_mem", mem_info["current"] / total_gpu_mem, step=step)
                     # tf.summary.scalar(f"GPU_{i}_mem_peak", mem_info["peak"]/(4*10**8), step=step)
 
                     # CPU, in per cent

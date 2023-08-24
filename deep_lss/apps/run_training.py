@@ -13,7 +13,7 @@ TODO make esub compatible? The index could correspond to a neural net architectu
 """
 
 import tensorflow as tf
-import os, argparse, warnings, yamls
+import os, argparse, warnings, yaml, psutil, GPUtil
 
 from datetime import datetime
 from time import time
@@ -22,7 +22,7 @@ from contextlib import nullcontext
 from msfm.fiducial_pipeline import FiducialPipeline
 from msfm.utils import logger, input_output, files, parameters
 
-from deep_lss.utils import utils, distribute, eval
+from deep_lss.utils import distribute, eval
 from deep_lss.models.delta_model import DeltaLossModel
 from deep_lss.nets import NETWORKS
 
@@ -30,9 +30,6 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 warnings.filterwarnings("once", category=UserWarning)
 LOGGER = logger.get_logger(__file__)
-
-# os.environ["TF_GPU_THREAD_MODE"] = "gpu_private"
-# os.environ["TF_GPU_THREAD_COUNT"] = "16"
 
 
 def setup():
@@ -65,8 +62,6 @@ def setup():
         default=None,
         help="input root dir of the grid data vectors (validation)",
     )
-    # TODO
-    # parser.add_argument("--with_bary", action="store_true", help="include baryons")
     parser.add_argument(
         "--dir_base",
         type=str,
@@ -118,7 +113,6 @@ def setup():
     )
     parser.add_argument("--local", action="store_true", help="don't distribute the training")
     parser.add_argument("--debug", action="store_true", help="activate debug mode")
-    parser.add_argument("--force_eval", action="store_true", help="force evaluation of the network (and don't train)")
     parser.add_argument("--profile", action="store_true", help="run the profiler")
 
     args, _ = parser.parse_known_args()
@@ -152,13 +146,14 @@ def training():
 
     args = setup()
 
-    _, _ = distribute.check_devices()
+    # hardware
+    _, n_gpus = distribute.check_devices()
+    total_gpu_mem = GPUtil.getGPUs()[0].memoryTotal * 1000
 
     # initialize a fresh model
     if not args.restore_checkpoint:
         # load the configs
         net_conf = input_output.read_yaml(os.path.join(args.repo_dir, args.net_config))
-        # dlss_conf = utils.load_deep_lss_config(args.dlss_config)
         dlss_conf = input_output.read_yaml(os.path.join(args.repo_dir, args.dlss_config))
         msfm_conf = files.load_config(args.msfm_config)
         LOGGER.info(f"Loaded configs from the provided paths")
@@ -225,15 +220,6 @@ def training():
 
     dset_kwargs = net_conf["dset"]["training"]
 
-    if "i_noise" in dset_kwargs.keys():
-        is_single_noise = True
-    elif "n_noise" in dset_kwargs.keys():
-        is_single_noise = False
-    else:
-        raise NotImplementedError(
-            f"The network config needs to contain either i_noise or n_noise in dset/eval/fiducial"
-        )
-
     strategy = distribute.get_strategy(not args.local)
     LOGGER.info(
         f"Using global batch size {distribute.get_global_batch_size(strategy, dset_kwargs['local_batch_size'])}"
@@ -245,7 +231,7 @@ def training():
 
     # like https://www.tensorflow.org/tutorials/distribute/input#tfdistributestrategydistribute_datasets_from_function
     def dataset_fn(input_context):
-        if is_single_noise:
+        if "i_noise" in dset_kwargs.keys():
             dset = fiducial_pipeline.get_dset(
                 tfr_pattern=args.fidu_tfr_pattern,
                 **dset_kwargs,
@@ -253,12 +239,16 @@ def training():
                 input_context=input_context,
             )
 
-        else:
+        elif "n_noise" in dset_kwargs.keys():
             dset = fiducial_pipeline.get_multi_noise_dset(
                 tfr_pattern=args.fidu_tfr_pattern,
                 **dset_kwargs,
                 # distribution
                 input_context=input_context,
+            )
+        else:
+            raise NotImplementedError(
+                f"The network config needs to contain either i_noise or n_noise in dset/eval/fiducial"
             )
 
         return dset
@@ -319,7 +309,7 @@ def training():
                 model.save_model()
 
             # evaluate
-            if ((eval_every is not None) and (step % eval_every == 0)) or args.force_eval:
+            if (eval_every is not None) and (step % eval_every == 0):
                 train_step = strategy.gather(model.train_step, axis=0)[0].numpy()
                 LOGGER.info(f"Evaluating the model after a total of {train_step} training steps")
 
@@ -367,10 +357,6 @@ def training():
                 else:
                     LOGGER.warning(f"Skipping evaluation of the fiducial validation set")
 
-                if args.force_eval:
-                    LOGGER.warning(f"Breaking the training loop")
-                    break
-
             # profile
             if args.profile and step == 200:
                 print("\n")
@@ -381,16 +367,27 @@ def training():
                 LOGGER.info(f"Stopping to profile")
                 tf.profiler.experimental.stop()
 
-            # log time per step
+            # additional logs
             with model.summary_writer.as_default():
+                # time per step
                 t_now = time()
                 tf.summary.scalar("step_time", t_now - t_prev)
                 t_prev = t_now
 
+                # memory usage
+                if step % 100 == 0:
+                    for i in range(n_gpus):
+                        # GPU, in percent
+                        mem_info = tf.config.experimental.get_memory_info(f"/GPU:{i}")
+                        tf.summary.scalar(f"GPU_{i}_mem", mem_info["current"] / total_gpu_mem, step=step)
+
+                        # CPU, in percent
+                        tf.summary.scalar(f"CPU_mem", psutil.virtual_memory().percent, step=step)
+
     LOGGER.info(f"Finished training after {n_steps} steps and {LOGGER.timer.elapsed('training')}")
 
     # save everything at the end if necessary
-    if (checkpoint_every is not None) and (step % checkpoint_every != 0) and (not args.force_eval):
+    if (checkpoint_every is not None) and (step % checkpoint_every != 0):
         LOGGER.info(f"Creating a final checkpoint")
         model.save_model()
     elif checkpoint_every is not None:
