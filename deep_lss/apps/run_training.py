@@ -111,6 +111,7 @@ def setup():
             " Additionally, the configs are loaded from the path in this case"
         ),
     )
+    parser.add_argument("--evaluate_training_set", action="store_true", help="evaluate the training set")
     parser.add_argument("--local", action="store_true", help="don't distribute the training")
     parser.add_argument("--debug", action="store_true", help="activate debug mode")
     parser.add_argument("--profile", action="store_true", help="run the profiler")
@@ -313,18 +314,19 @@ def training():
                 train_step = strategy.gather(model.train_step, axis=0)[0].numpy()
                 LOGGER.info(f"Evaluating the model after a total of {train_step} training steps")
 
-                # # fiducial training
-                # eval.evaluate_fiducial(
-                #     model=model,
-                #     strategy=strategy,
-                #     tfr_pattern=args.fidu_tfr_pattern,
-                #     msfm_conf=msfm_conf,
-                #     dlss_conf=dlss_conf,
-                #     net_conf=net_conf,
-                #     dir_out=dir_out,
-                #     file_label=train_step,
-                #     training_set=True,
-                # )
+                # fiducial training
+                if args.evaluate_training_set:
+                    eval.evaluate_fiducial(
+                        model=model,
+                        strategy=strategy,
+                        tfr_pattern=args.fidu_tfr_pattern,
+                        msfm_conf=msfm_conf,
+                        dlss_conf=dlss_conf,
+                        net_conf=net_conf,
+                        dir_out=dir_out,
+                        file_label=train_step,
+                        training_set=True,
+                    )
 
                 # fiducial validation
                 if args.fidu_vali_tfr_pattern is not None:
@@ -376,13 +378,14 @@ def training():
 
                 # memory usage
                 if step % 100 == 0:
+                    # CPU, in percent
+                    tf.summary.scalar(f"CPU_mem", psutil.virtual_memory().percent, step=step)
+                    
                     for i in range(n_gpus):
                         # GPU, in percent
                         mem_info = tf.config.experimental.get_memory_info(f"/GPU:{i}")
                         tf.summary.scalar(f"GPU_{i}_mem", mem_info["current"] / total_gpu_mem, step=step)
 
-                        # CPU, in percent
-                        tf.summary.scalar(f"CPU_mem", psutil.virtual_memory().percent, step=step)
 
     LOGGER.info(f"Finished training after {n_steps} steps and {LOGGER.timer.elapsed('training')}")
 

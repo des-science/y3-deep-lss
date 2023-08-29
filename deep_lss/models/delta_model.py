@@ -37,6 +37,7 @@ class DeltaLossModel(BaseModel):
         indices,
         n_neighbors=20,
         input_shape=None,
+        max_batch_size=None,
         optimizer=None,
         summary_dir=None,
         checkpoint_dir=None,
@@ -69,7 +70,9 @@ class DeltaLossModel(BaseModel):
             network = tf.keras.Sequential(layers=network)
         else:
             LOGGER.info("Initializing DeltaLossModel with a HealpyGCNN model")
-            network = HealpyGCNN(nside=n_side, indices=indices, layers=network, n_neighbors=n_neighbors)
+            network = HealpyGCNN(
+                nside=n_side, indices=indices, layers=network, n_neighbors=n_neighbors, max_batch_size=max_batch_size
+            )
 
         # init the base model
         super(DeltaLossModel, self).__init__(

@@ -126,10 +126,10 @@ def evaluate_grid(
 
     # multiple shape and poisson noise realizations
     if not is_single_noise:
-        n_examples_per_cosmo *= msfm_conf["analysis"]["grid"]["n_noise_per_example"]
+        n_examples_per_cosmo *= dset_kwargs["n_noise"]
 
     n_examples = n_cosmos * n_examples_per_cosmo
-    LOGGER.info(f"There's a total of {n_examples} data vectors to be evaluated")
+    LOGGER.info(f"There's a total of {n_examples} data vectors to be evaluated ({n_examples_per_cosmo} per cosmology)")
 
     # network constants
     global_batch_size = distribute.get_global_batch_size(
@@ -183,7 +183,7 @@ def evaluate_grid(
         # shape (global_batch_size,) NOTE it's important that gather takes place on the tensor (not tuple) level
         i_sobol_batch = strategy.gather(index_batch[0], axis=0)
         i_noise_batch = strategy.gather(index_batch[1], axis=0)
-        i_example_batch = strategy.gather(index_batch[1], axis=0)
+        i_example_batch = strategy.gather(index_batch[2], axis=0)
 
         preds.append(pred_batch)
         cosmos.append(cosmo_batch)
@@ -205,8 +205,6 @@ def evaluate_grid(
     # double check that the cosmologies are sorted correctly and remove the redundant axis
     cosmos = _remove_example_axis(cosmos)
     i_sobols = _remove_example_axis(i_sobols)
-    i_noises = _remove_example_axis(i_noises)
-    i_examples = _remove_example_axis(i_examples)
 
     out_file = _get_out_file(dir_out, file_label)
     with h5py.File(out_file, "a") as f:

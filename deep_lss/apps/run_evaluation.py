@@ -133,7 +133,10 @@ if __name__ == "__main__":
             restore_checkpoint=True,
         )
 
-    train_step = strategy.gather(model.train_step, axis=0)[0].numpy()
+    if args.local:
+        train_step = model.train_step.numpy()
+    else:
+        train_step = strategy.gather(model.train_step, axis=0)[0].numpy()
 
     # fiducial training
     if args.fidu_train_tfr_pattern is not None:
@@ -180,4 +183,4 @@ if __name__ == "__main__":
             file_label=f"{train_step}_{args.file_label}",
         )
     else:
-        LOGGER.warning(f"Skipping evaluation of the fiducial validation set")
+        LOGGER.warning(f"Skipping evaluation of the grid set")
