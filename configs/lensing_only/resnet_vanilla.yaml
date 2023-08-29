@@ -1,34 +1,36 @@
 # contains the model specific configuration parameters for training
-name: "resnet_small"
+name: "resnet_vanilla"
 
 training:
   n_steps: 50000
   output_every: null
   checkpoint_every: 10000
-  eval_every: 10000
+  eval_every: 50000
   learning_rate: 0.001
   clip_by_value: null
   clip_by_norm: null
-  clip_by_global_norm: 5.0
+  clip_by_global_norm: 10.0
 
 dset:
   training:
+    i_noise: 0
     # for the delta loss, this is multiplied by 1 + 2 * n_params
-    local_batch_size: 8
+    local_batch_size: 4
     is_cached: True
-    n_readers: 16
+    n_readers: 4
     n_prefetch: null
-    file_name_shuffle_buffer: 128
+    file_name_shuffle_buffer: 16
     examples_shuffle_buffer: 64
   eval:
     fiducial:
-      local_batch_size: 100
-      i_noise: 2
+      i_noise: 0
+      local_batch_size: 50
       is_cached: False
       n_readers: 16
       n_prefetch: null
       is_eval: True
     grid:
+      n_noise: 3
       local_batch_size: 100
       n_readers: 16
       n_prefetch: null

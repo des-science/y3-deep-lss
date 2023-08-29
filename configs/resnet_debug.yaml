@@ -1,11 +1,11 @@
 # contains the model specific configuration parameters for training
-name: "resnet_vanilla"
+name: "resnet_debug"
 
 training:
-  n_steps: 10000
+  n_steps: 50000
   output_every: null
-  checkpoint_every: 10000
-  eval_every: 10000
+  checkpoint_every: 2000
+  eval_every: 1000
   learning_rate: 0.001
   clip_by_value: null
   clip_by_norm: null
@@ -14,7 +14,7 @@ training:
 dset:
   training:
     # for the delta loss, this is multiplied by 1 + 2 * n_params
-    local_batch_size: 4
+    local_batch_size: 8
     is_cached: True
     n_readers: 8
     n_prefetch: null
