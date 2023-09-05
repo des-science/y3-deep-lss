@@ -202,6 +202,16 @@ def training():
     output_every = net_conf["training"]["output_every"]
     checkpoint_every = net_conf["training"]["checkpoint_every"]
     eval_every = net_conf["training"]["eval_every"]
+    dset_kwargs = net_conf["dset"]["training"]
+
+    try:
+        n_z_bins = len(dset_kwargs["z_bin_inds"])
+    except (KeyError, TypeError):
+        n_z_bins = 0
+            if dlss_conf["dset"]["general"]["with_lensing"]:
+                n_z_bins += len(msfm_conf["survey"]["metacal"]["z_bins"])
+            if dlss_conf["dset"]["general"]["with_clustering"]:
+                n_z_bins += len(msfm_conf["survey"]["maglim"]["z_bins"])
 
     # constants: deep_lss
     params = dlss_conf["dset"]["training"]["params"]
@@ -212,14 +222,6 @@ def training():
     # constants: msfm
     data_vec_pix, _, _, _ = files.load_pixel_file(msfm_conf)
     n_side = msfm_conf["analysis"]["n_side"]
-
-    n_z_bins = 0
-    if dlss_conf["dset"]["general"]["with_lensing"]:
-        n_z_bins += len(msfm_conf["survey"]["metacal"]["z_bins"])
-    if dlss_conf["dset"]["general"]["with_clustering"]:
-        n_z_bins += len(msfm_conf["survey"]["maglim"]["z_bins"])
-
-    dset_kwargs = net_conf["dset"]["training"]
 
     strategy = distribute.get_strategy(not args.local)
     LOGGER.info(
@@ -273,6 +275,7 @@ def training():
             n_neighbors=net_conf["model"]["n_neighbors"],
             max_checkpoints=net_conf["model"]["max_checkpoints"],
             input_shape=(None, len(data_vec_pix), n_z_bins),
+            max_batch_size=dset_kwargs["local_batch_size"] * (2 * n_params + 1),
             checkpoint_dir=checkpoint_dir,
             summary_dir=summary_dir,
             restore_checkpoint=args.restore_checkpoint,
@@ -380,12 +383,11 @@ def training():
                 if step % 100 == 0:
                     # CPU, in percent
                     tf.summary.scalar(f"CPU_mem", psutil.virtual_memory().percent, step=step)
-                    
+
                     for i in range(n_gpus):
                         # GPU, in percent
                         mem_info = tf.config.experimental.get_memory_info(f"/GPU:{i}")
                         tf.summary.scalar(f"GPU_{i}_mem", mem_info["current"] / total_gpu_mem, step=step)
-
 
     LOGGER.info(f"Finished training after {n_steps} steps and {LOGGER.timer.elapsed('training')}")
 

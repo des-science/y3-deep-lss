@@ -138,6 +138,11 @@ if __name__ == "__main__":
     else:
         train_step = strategy.gather(model.train_step, axis=0)[0].numpy()
 
+    if args.file_label is None:
+        file_label = train_step
+    else:
+        file_label = f"{train_step}_{args.file_label}"
+
     # fiducial training
     if args.fidu_train_tfr_pattern is not None:
         eval.evaluate_fiducial(
@@ -148,7 +153,7 @@ if __name__ == "__main__":
             dlss_conf=dlss_conf,
             net_conf=net_conf,
             dir_out=args.dir_model,
-            file_label=f"{train_step}_{args.file_label}",
+            file_label=file_label,
             training_set=True,
         )
     else:
@@ -164,7 +169,7 @@ if __name__ == "__main__":
             dlss_conf=dlss_conf,
             net_conf=net_conf,
             dir_out=args.dir_model,
-            file_label=f"{train_step}_{args.file_label}",
+            file_label=file_label,
             training_set=False,
         )
     else:
@@ -180,7 +185,7 @@ if __name__ == "__main__":
             dlss_conf=dlss_conf,
             net_conf=net_conf,
             dir_out=args.dir_model,
-            file_label=f"{train_step}_{args.file_label}",
+            file_label=file_label,
         )
     else:
         LOGGER.warning(f"Skipping evaluation of the grid set")
