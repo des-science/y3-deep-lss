@@ -42,7 +42,7 @@ class HealpySmoothingLayer(tf.keras.layers.Layer):
         per_channel_repetitions: Optional[Union[list, np.ndarray]] = None,
         # computational
         data_path: Optional[str] = None,
-    ):
+    ) -> None:
         """Create the sparse kernel tensor with which the maps are smoothed.
 
         Note that the smoothing is always done with a single base sigma. When different smoothing scales are specified
