@@ -12,6 +12,7 @@ import healpy as hp
 import tensorflow as tf
 
 from sklearn.neighbors import BallTree
+from typing import Union, Optional
 
 from msfm.utils import logger, scales
 
@@ -22,17 +23,17 @@ class HealpixSmoothingLayer(tf.keras.layers.Layer):
     def __init__(
         self,
         # pixels
-        n_side,
-        indices,
-        nest=True,
+        n_side: int,
+        indices: np.ndarray,
+        nest: bool = True,
         # smoothing
-        fwhm=None,
-        sigma=None,
-        n_sigma_support=3,
-        arcmin=True,
-        per_channel_repetitions=None,
+        fwhm: Optional[Union[int, float]] = None,
+        sigma: Optional[Union[int, float]] = None,
+        n_sigma_support: Union[int, float] = 3,
+        arcmin: bool = True,
+        per_channel_repetitions: Optional[Union[list, np.ndarray]] = None,
         # computational
-        data_path=None,
+        data_path: Optional[str] = None,
     ):
         super(HealpixSmoothingLayer, self).__init__()
 
@@ -77,12 +78,16 @@ class HealpixSmoothingLayer(tf.keras.layers.Layer):
 
             self.file_label = f"-n_side{self.n_side}-sigma{self.sigma_arcmin}-n_sigma{n_sigma_support}"
 
-            try:
-                self.ind_coo = np.load(os.path.join(self.data_path, f"ind_coo{self.file_label}.npy"))
-                self.val_coo = np.load(os.path.join(self.data_path, f"val_coo{self.file_label}.npy"))
-                LOGGER.info(f"Successfully loaded sparse kernel indices and values from {self.data_path}")
+            if self.data_path is not None:
+                try:
+                    self.ind_coo = np.load(os.path.join(self.data_path, f"ind_coo{self.file_label}.npy"))
+                    self.val_coo = np.load(os.path.join(self.data_path, f"val_coo{self.file_label}.npy"))
+                    LOGGER.info(f"Successfully loaded sparse kernel indices and values from {self.data_path}")
 
-            except FileNotFoundError:
+                except FileNotFoundError:
+                    self._build_tree()
+                    self._build_kernel()
+            else:
                 self._build_tree()
                 self._build_kernel()
 
@@ -97,8 +102,13 @@ class HealpixSmoothingLayer(tf.keras.layers.Layer):
             self.n_channels = input_shape[2]
 
             if self.per_channel_repetitions is not None:
-                assert len(self.per_channel_repetitions) == self.n_channels
-                
+                assert (
+                    len(self.per_channel_repetitions) == self.n_channels
+                ), f"The list per_channel_repetitions has to have length {self.n_channels}"
+                assert all(
+                    [isinstance(item, int) for item in self.per_channel_repetitions]
+                ), f"The list per_channel_repetitions has to contain integers only"
+
             # check if we need to split the matmul
             self.n_matmul_splits = 1
             while not (
@@ -117,9 +127,9 @@ class HealpixSmoothingLayer(tf.keras.layers.Layer):
             channels_first = tf.transpose(inputs, (2, 1, 0))
 
             channels_smoothed = []
-            for single_channel in channels_first:
+            for i, single_channel in enumerate(channels_first):
                 if self.per_channel_repetitions is not None:
-                    for _ in range(100):
+                    for _ in range(self.per_channel_repetitions[i]):
                         single_channel = self._split_sparse_dense_matmul(self.sparse_kernel, single_channel)
 
                 else:
