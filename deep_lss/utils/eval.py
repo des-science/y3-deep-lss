@@ -111,13 +111,6 @@ def evaluate_grid(
 
     dset_kwargs = net_conf["dset"]["eval"]["grid"]
 
-    if "i_noise" in dset_kwargs.keys():
-        is_single_noise = True
-    elif "n_noise" in dset_kwargs.keys():
-        is_single_noise = False
-    else:
-        raise NotImplementedError(f"The network config needs to contain either i_noise or n_noise in dset/eval/grid")
-
     # pipeline constants
     n_cosmos = msfm_conf["analysis"]["grid"]["n_cosmos"]
     n_patches = msfm_conf["analysis"]["n_patches"]
@@ -125,8 +118,7 @@ def evaluate_grid(
     n_examples_per_cosmo = n_patches * n_perms_per_cosmo
 
     # multiple shape and poisson noise realizations
-    if not is_single_noise:
-        n_examples_per_cosmo *= dset_kwargs["n_noise"]
+    n_examples_per_cosmo *= dset_kwargs["n_noise"]
 
     n_examples = n_cosmos * n_examples_per_cosmo
     LOGGER.info(f"There's a total of {n_examples} data vectors to be evaluated ({n_examples_per_cosmo} per cosmology)")
@@ -143,21 +135,12 @@ def evaluate_grid(
 
     # like https://www.tensorflow.org/tutorials/distribute/input#tfdistributestrategydistribute_datasets_from_function
     def dataset_fn(input_context):
-        if is_single_noise:
-            dset = grid_pipeline.get_dset(
-                tfr_pattern=tfr_pattern,
-                **dset_kwargs,
-                # distribution
-                input_context=input_context,
-            )
-
-        else:
-            dset = grid_pipeline.get_multi_noise_dset(
-                tfr_pattern=tfr_pattern,
-                **dset_kwargs,
-                # distribution
-                input_context=input_context,
-            )
+        dset = grid_pipeline.get_dset(
+            tfr_pattern=tfr_pattern,
+            **dset_kwargs,
+            # distribution
+            input_context=input_context,
+        )
 
         return dset
 
@@ -248,15 +231,6 @@ def evaluate_fiducial(
 
     dset_kwargs = net_conf["dset"]["eval"]["fiducial"]
 
-    if "i_noise" in dset_kwargs.keys():
-        is_single_noise = True
-    elif "n_noise" in dset_kwargs.keys():
-        is_single_noise = False
-    else:
-        raise NotImplementedError(
-            f"The network config needs to contain either i_noise or n_noise in dset/eval/fiducial"
-        )
-
     # pipeline constants
     n_cosmos = 1  # only the true fiducial
     n_patches = msfm_conf["analysis"]["n_patches"]
@@ -264,8 +238,7 @@ def evaluate_fiducial(
     n_examples_per_cosmo = n_patches * n_perms_per_cosmo
 
     # multiple shape and poisson noise realizations
-    if not is_single_noise:
-        n_examples_per_cosmo *= msfm_conf["analysis"]["grid"]["n_noise_per_example"]
+    n_examples_per_cosmo *= dset_kwargs["n_noise"]
 
     n_examples = n_cosmos * n_examples_per_cosmo
     LOGGER.info(f"There's a total of {n_examples} data vectors to be evaluated")
@@ -282,21 +255,12 @@ def evaluate_fiducial(
 
     # like https://www.tensorflow.org/tutorials/distribute/input#tfdistributestrategydistribute_datasets_from_function
     def dataset_fn(input_context):
-        if is_single_noise:
-            dset = fiducial_pipeline.get_dset(
-                tfr_pattern=tfr_pattern,
-                **dset_kwargs,
-                # distribution
-                input_context=input_context,
-            )
-
-        else:
-            dset = fiducial_pipeline.get_multi_noise_dset(
-                tfr_pattern=tfr_pattern,
-                **dset_kwargs,
-                # distribution
-                input_context=input_context,
-            )
+        dset = fiducial_pipeline.get_dset(
+            tfr_pattern=tfr_pattern,
+            **dset_kwargs,
+            # distribution
+            input_context=input_context,
+        )
 
         return dset
 

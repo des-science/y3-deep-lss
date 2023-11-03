@@ -22,7 +22,7 @@ from contextlib import nullcontext
 from msfm.fiducial_pipeline import FiducialPipeline
 from msfm.utils import logger, input_output, files, parameters
 
-from deep_lss.utils import distribute, eval
+from deep_lss.utils import distribute, eval, layers
 from deep_lss.models.delta_model import DeltaLossModel
 from deep_lss.nets import NETWORKS
 
@@ -196,6 +196,27 @@ def training():
     summary_dir = os.path.abspath(os.path.join(dir_out, "summary"))
     os.makedirs(summary_dir, exist_ok=True)
 
+    # constants: msfm
+    n_side = msfm_conf["analysis"]["n_side"]
+    data_vec_pix, _, _, _ = files.load_pixel_file(msfm_conf)
+    mask_dict = files.get_tomo_dv_masks(msfm_conf)
+    mask = tf.concat([mask_dict["metacal"], tf.tile(mask_dict["maglim"], (1, 4))], axis=1)
+
+    # constants: deep_lss
+    params = dlss_conf["dset"]["training"]["params"]
+    n_params = len(params)
+    perts = parameters.get_fiducial_perturbations(params)
+    LOGGER.info(f"Training with respect to the {n_params} parameters {params} with off sets {perts}")
+
+    with_lensing = dlss_conf["dset"]["general"]["with_lensing"]
+    with_clustering = dlss_conf["dset"]["general"]["with_clustering"]
+
+    fwhm = []
+    if with_lensing:
+        fwhm += dlss_conf["scale_cuts"]["lensing"]["theta_fwhm"]
+    if with_clustering:
+        fwhm += dlss_conf["scale_cuts"]["clustering"]["theta_fwhm"]
+
     # constants: network
     net_name = net_conf["name"]
     n_steps = net_conf["training"]["n_steps"]
@@ -208,20 +229,10 @@ def training():
         n_z_bins = len(dset_kwargs["z_bin_inds"])
     except (KeyError, TypeError):
         n_z_bins = 0
-            if dlss_conf["dset"]["general"]["with_lensing"]:
-                n_z_bins += len(msfm_conf["survey"]["metacal"]["z_bins"])
-            if dlss_conf["dset"]["general"]["with_clustering"]:
-                n_z_bins += len(msfm_conf["survey"]["maglim"]["z_bins"])
-
-    # constants: deep_lss
-    params = dlss_conf["dset"]["training"]["params"]
-    n_params = len(params)
-    perts = parameters.get_fiducial_perturbations(params)
-    LOGGER.info(f"Training with respect to the {n_params} parameters {params} with off sets {perts}")
-
-    # constants: msfm
-    data_vec_pix, _, _, _ = files.load_pixel_file(msfm_conf)
-    n_side = msfm_conf["analysis"]["n_side"]
+        if with_lensing:
+            n_z_bins += len(msfm_conf["survey"]["metacal"]["z_bins"])
+        if with_clustering:
+            n_z_bins += len(msfm_conf["survey"]["maglim"]["z_bins"])
 
     strategy = distribute.get_strategy(not args.local)
     LOGGER.info(
@@ -234,25 +245,12 @@ def training():
 
     # like https://www.tensorflow.org/tutorials/distribute/input#tfdistributestrategydistribute_datasets_from_function
     def dataset_fn(input_context):
-        if "i_noise" in dset_kwargs.keys():
-            dset = fiducial_pipeline.get_dset(
-                tfr_pattern=args.fidu_tfr_pattern,
-                **dset_kwargs,
-                # distribution
-                input_context=input_context,
-            )
-
-        elif "n_noise" in dset_kwargs.keys():
-            dset = fiducial_pipeline.get_multi_noise_dset(
-                tfr_pattern=args.fidu_tfr_pattern,
-                **dset_kwargs,
-                # distribution
-                input_context=input_context,
-            )
-        else:
-            raise NotImplementedError(
-                f"The network config needs to contain either i_noise or n_noise in dset/eval/fiducial"
-            )
+        dset = fiducial_pipeline.get_dset(
+            tfr_pattern=args.fidu_tfr_pattern,
+            **dset_kwargs,
+            # distribution
+            input_context=input_context,
+        )
 
         return dset
 
@@ -291,6 +289,17 @@ def training():
         **dlss_conf["delta_loss"],
     )
 
+    # set up smoothing
+    smoothing_layer = layers.HealpySmoothingLayer(
+        n_side=n_side,
+        indices=data_vec_pix,
+        nest=True,
+        mask=mask,
+        fwhm=fwhm,
+        arcmin=True,
+        data_path=os.path.join(args.repo_dir, "smoothing"),
+    )
+
     LOGGER.info(f"Starting training")
     LOGGER.timer.start("training")
     t_prev = time()
@@ -301,6 +310,9 @@ def training():
         with tf.profiler.experimental.Trace("step", step_num=step, _r=1) if args.profile else nullcontext():
             # train step
             dv_batch, _ = next(dist_iter)
+
+            dv_batch = smoothing_layer(dv_batch)
+
             model.delta_train_step(dv_batch)
 
             # output
@@ -382,12 +394,12 @@ def training():
                 # memory usage
                 if step % 100 == 0:
                     # CPU, in percent
-                    tf.summary.scalar(f"CPU_mem", psutil.virtual_memory().percent, step=step)
+                    tf.summary.scalar(f"CPU_mem", psutil.virtual_memory().percent)
 
                     for i in range(n_gpus):
                         # GPU, in percent
                         mem_info = tf.config.experimental.get_memory_info(f"/GPU:{i}")
-                        tf.summary.scalar(f"GPU_{i}_mem", mem_info["current"] / total_gpu_mem, step=step)
+                        tf.summary.scalar(f"GPU_{i}_mem", mem_info["current"] / total_gpu_mem)
 
     LOGGER.info(f"Finished training after {n_steps} steps and {LOGGER.timer.elapsed('training')}")
 

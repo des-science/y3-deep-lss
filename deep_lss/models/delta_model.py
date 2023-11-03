@@ -38,6 +38,7 @@ class DeltaLossModel(BaseModel):
         n_neighbors=20,
         input_shape=None,
         max_batch_size=None,
+        initial_Fin=None,
         optimizer=None,
         summary_dir=None,
         checkpoint_dir=None,
@@ -50,11 +51,17 @@ class DeltaLossModel(BaseModel):
         Args:
             network (list): A list of layers that make up the neural network.
             n_side (int): The healpy n_side of the input.
-            indices (np.ndarray): 1d array of inidices, corresponding to the pixel ids of the input of the NN.
+            indices (np.ndarray): 1d array of indices, corresponding to the pixel ids of the input map footprint.
             n_neighbors (int, optional): Number of neighbors considered when building the graph, currently supported
                 values are: 8, 20, 40 and 60. Defaults to 20.
             input_shape (tf.tensor, optional): Input shape of the network, necessary if one wants to restore the model.
                 Defaults to None.
+            max_batch_size (int, optional): Maximal batch size this network is supposed to handle. This determines the
+                number of splits in the tf.sparse.sparse_dense_matmul operation, which are subsequently applied
+                independent of the actual batch size. Defaults to None, then no such precautions are taken, which may
+                cause an error.
+            initial_Fin (int, optional) Initial number of input features. Defaults to None, then like for
+                max_batch_size, there are no precautions taken.
             optimizer (tf.keras.optimizers.Optimizer, optional): Optimizer of the model. Defaults to None, which loads
                 Adam.
             summary_dir (str, optional): Directory to save the summaries. Defaults to None.
@@ -71,7 +78,12 @@ class DeltaLossModel(BaseModel):
         else:
             LOGGER.info("Initializing DeltaLossModel with a HealpyGCNN model")
             network = HealpyGCNN(
-                nside=n_side, indices=indices, layers=network, n_neighbors=n_neighbors, max_batch_size=max_batch_size
+                nside=n_side,
+                indices=indices,
+                layers=network,
+                n_neighbors=n_neighbors,
+                max_batch_size=max_batch_size,
+                initial_Fin=initial_Fin,
             )
 
         # init the base model
