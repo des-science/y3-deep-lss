@@ -102,7 +102,7 @@ print(f"single map tensor {npix * max_neighbours * 4/1e9:4.2f} GB")
 
 
 n_channels = 8
-batch_size = 2
+batch_size = 26
 
 
 print("===========================> loop sparse-dense convolution")
@@ -121,6 +121,7 @@ with tf.device("cpu"):
         inds_c = tf.constant(inds_k, dtype=tf.int64)
         ind_coo = tf.concat([tf.reshape(inds_r, [-1, 1]), tf.reshape(inds_c, [-1, 1])], axis=-1)
         val_kernel = tf.reshape(kernel, [-1])
+
         m_batch = tf.concat([tf.expand_dims(m, axis=-1)] * batch_size, axis=-1)
         map_channels_batch.append(m_batch)
 
@@ -142,6 +143,7 @@ print(
 # maximum size allowed by tf.sparse.sparse_dense_matmul
 op_size = len(kernel_channels[0].indices) * map_channels_batch[0].shape[1]
 print(op_size < 2**31, op_size)
+print(f"kernel_channel.shape = {kernel_channels[0].shape}, map_channels_batch.shape = {map_channels_batch[0].shape}")
 
 time_start = time.time()
 with tf.device("gpu"):
@@ -152,78 +154,89 @@ with tf.device("gpu"):
             map_batch_conv.append(m_conv)
         map_batch_conv = tf.stack(map_batch_conv)
 time_elapsed = (time.time() - time_start) / n_trials
-print(f"n_trials={n_trials} time per trial: {time_elapsed:2.6f} s")
-
-m_smooth_conv = map_batch_conv[0]
-print(f"smoothed map sparse-dense sum={np.sum(m_smooth_conv)} mean={np.mean(m_smooth_conv)}")
-
-print("===========================> block matrix sparse-dense convolution")
-
-ind_batch = []
-val_batch = []
-map_batch = []
-
-with tf.device("cpu"):
-    for i in trange(n_channels, desc="creating sparse kernels"):
-        inds_r = tf.constant(np.arange(npix), dtype=tf.int64)
-        inds_r = tf.expand_dims(inds_r, axis=-1)
-        inds_r = tf.tile(inds_r, [1, max_neighbours])
-        inds_c = tf.constant(inds_k, dtype=tf.int64)
-        ind_coo = tf.concat([tf.reshape(inds_r, [-1, 1]), tf.reshape(inds_c, [-1, 1])], axis=-1)
-        ind_coo = ind_coo + i * npix  # block-diag
-        ind_batch.append(ind_coo)
-        val_batch.append(tf.reshape(kernel, [-1]))
-
-        m_batch = tf.concat([tf.expand_dims(m, axis=-1)] * batch_size, axis=-1)
-        map_batch.append(m_batch)
-
-    ind_batch = tf.concat(ind_batch, axis=0)
-    val_batch = tf.concat(val_batch, axis=0)
-    map_batch = tf.concat(map_batch, axis=0)
-
-    sparse_kernel = tf.sparse.SparseTensor(
-        indices=ind_batch, values=val_batch, dense_shape=[npix * n_channels, npix * n_channels]
-    )
-    sparse_kernel = tf.sparse.reorder(sparse_kernel)
-
-    print(
-        f"created block-sparse index shape={ind_batch.shape} max_val={np.max(ind_batch)} size={np.array(ind_batch).nbytes/1e9:2.4f} GB"
-    )
-    print("memory used {:2.4f} GB".format(process.memory_info().rss / 1e9))  # in bytes
-
+print(f"n_trials={n_trials} time per trial: {time_elapsed:2.6f} s (batch size {batch_size})")
 
 time_start = time.time()
 with tf.device("gpu"):
     for j in range(n_trials):
-        m_batch_conv = tf.sparse.sparse_dense_matmul(sparse_kernel, map_batch)
-        m_batch_conv = tf.reshape(m_batch_conv, [n_channels, -1, batch_size])
-
+        map_batch_conv = []
+        for i in range(n_channels):
+            m_conv = tf.sparse.sparse_dense_matmul(kernel_channels[i], map_channels_batch[i])
+            map_batch_conv.append(m_conv)
+        map_batch_conv = tf.stack(map_batch_conv)
 time_elapsed = (time.time() - time_start) / n_trials
-print(f"n_trials={n_trials} time per trial: {time_elapsed:2.6f} s")
+print(f"n_trials={n_trials} time per trial: {time_elapsed:2.6f} s (batch size 2)")
 
-m_smooth_conv = m_batch_conv[0, :, 0]
-print(f"smoothed map block sparse-dense sum={np.sum(m_smooth_conv)} mean={np.mean(m_smooth_conv)}")
+# m_smooth_conv = map_batch_conv[0]
+# print(f"smoothed map sparse-dense sum={np.sum(m_smooth_conv)} mean={np.mean(m_smooth_conv)}")
+
+# print("===========================> block matrix sparse-dense convolution")
+
+# ind_batch = []
+# val_batch = []
+# map_batch = []
+
+# with tf.device("cpu"):
+#     for i in trange(n_channels, desc="creating sparse kernels"):
+#         inds_r = tf.constant(np.arange(npix), dtype=tf.int64)
+#         inds_r = tf.expand_dims(inds_r, axis=-1)
+#         inds_r = tf.tile(inds_r, [1, max_neighbours])
+#         inds_c = tf.constant(inds_k, dtype=tf.int64)
+#         ind_coo = tf.concat([tf.reshape(inds_r, [-1, 1]), tf.reshape(inds_c, [-1, 1])], axis=-1)
+#         ind_coo = ind_coo + i * npix  # block-diag
+#         ind_batch.append(ind_coo)
+#         val_batch.append(tf.reshape(kernel, [-1]))
+
+#         m_batch = tf.concat([tf.expand_dims(m, axis=-1)] * batch_size, axis=-1)
+#         map_batch.append(m_batch)
+
+#     ind_batch = tf.concat(ind_batch, axis=0)
+#     val_batch = tf.concat(val_batch, axis=0)
+#     map_batch = tf.concat(map_batch, axis=0)
+
+#     sparse_kernel = tf.sparse.SparseTensor(
+#         indices=ind_batch, values=val_batch, dense_shape=[npix * n_channels, npix * n_channels]
+#     )
+#     sparse_kernel = tf.sparse.reorder(sparse_kernel)
+
+#     print(
+#         f"created block-sparse index shape={ind_batch.shape} max_val={np.max(ind_batch)} size={np.array(ind_batch).nbytes/1e9:2.4f} GB"
+#     )
+#     print("memory used {:2.4f} GB".format(process.memory_info().rss / 1e9))  # in bytes
 
 
-def part_to_full(m_part):
-    m_ = m_full * 0
-    m_[select] = m_part
-    return m_
+# time_start = time.time()
+# with tf.device("gpu"):
+#     for j in range(n_trials):
+#         m_batch_conv = tf.sparse.sparse_dense_matmul(sparse_kernel, map_batch)
+#         m_batch_conv = tf.reshape(m_batch_conv, [n_channels, -1, batch_size])
+
+# time_elapsed = (time.time() - time_start) / n_trials
+# print(f"n_trials={n_trials} time per trial: {time_elapsed:2.6f} s")
+
+# m_smooth_conv = m_batch_conv[0, :, 0]
+# print(f"smoothed map block sparse-dense sum={np.sum(m_smooth_conv)} mean={np.mean(m_smooth_conv)}")
 
 
-np.save("m.npy", part_to_full(m))
-np.save("m_smooth_conv.npy", part_to_full(m_smooth_conv))
-np.save("m_smooth_healpy.npy", part_to_full(m_smooth_healpy))
+# def part_to_full(m_part):
+#     m_ = m_full * 0
+#     m_[select] = m_part
+#     return m_
 
-print("===========================> healpy convolution CPU")
 
-n_trials = 1
+# np.save("m.npy", part_to_full(m))
+# np.save("m_smooth_conv.npy", part_to_full(m_smooth_conv))
+# np.save("m_smooth_healpy.npy", part_to_full(m_smooth_healpy))
 
-time_start = time.time()
+# print("===========================> healpy convolution CPU")
 
-for i in trange(n_channels, desc="smoothing channels"):
-    for j in range(batch_size):
-        m_smooth_healpy = hp.sphtfunc.smoothing(m_full, sigma=sigma_rad)
+# n_trials = 1
 
-time_elapsed = (time.time() - time_start) / n_trials
-print(f"n_trials={n_trials} time per trial: {time_elapsed:2.6f} s")
+# time_start = time.time()
+
+# for i in trange(n_channels, desc="smoothing channels"):
+#     for j in range(batch_size):
+#         m_smooth_healpy = hp.sphtfunc.smoothing(m_full, sigma=sigma_rad)
+
+# time_elapsed = (time.time() - time_start) / n_trials
+# print(f"n_trials={n_trials} time per trial: {time_elapsed:2.6f} s")
