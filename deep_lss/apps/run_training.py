@@ -217,6 +217,9 @@ def training():
     if with_clustering:
         fwhm += dlss_conf["scale_cuts"]["clustering"]["theta_fwhm"]
 
+    arcmin = dlss_conf["scale_cuts"]["arcmin"]
+    n_sigma_support = dlss_conf["scale_cuts"]["n_sigma_support"]
+
     # constants: network
     net_name = net_conf["name"]
     n_steps = net_conf["training"]["n_steps"]
@@ -224,6 +227,8 @@ def training():
     checkpoint_every = net_conf["training"]["checkpoint_every"]
     eval_every = net_conf["training"]["eval_every"]
     dset_kwargs = net_conf["dset"]["training"]
+    local_batch_size = dset_kwargs["local_batch_size"]
+    local_delta_loss_batch_size = local_batch_size * (2 * n_params + 1)
 
     try:
         n_z_bins = len(dset_kwargs["z_bin_inds"])
@@ -235,9 +240,7 @@ def training():
             n_z_bins += len(msfm_conf["survey"]["maglim"]["z_bins"])
 
     strategy = distribute.get_strategy(not args.local)
-    LOGGER.info(
-        f"Using global batch size {distribute.get_global_batch_size(strategy, dset_kwargs['local_batch_size'])}"
-    )
+    LOGGER.info(f"Using global batch size {distribute.get_global_batch_size(strategy, local_batch_size)}")
 
     fiducial_pipeline = FiducialPipeline(
         conf=msfm_conf, **{**dlss_conf["dset"]["general"], **dlss_conf["dset"]["training"]}
@@ -259,8 +262,20 @@ def training():
 
     # create all of the variables within the strategy's scope, such that they are mirrored
     with strategy.scope():
-        # load the layers
-        network = NETWORKS[net_conf["model"]["name"]](
+        smoothing_layer = layers.HealpySmoothingLayer(
+            n_side=n_side,
+            indices=data_vec_pix,
+            nest=True,
+            mask=mask,
+            fwhm=fwhm,
+            arcmin=arcmin,
+            n_sigma_support=n_sigma_support,
+            data_path=os.path.join(args.dir_base, "smoothing"),
+            max_batch_size=local_delta_loss_batch_size,
+        )
+        network = [smoothing_layer]
+
+        network += NETWORKS[net_conf["model"]["name"]](
             output_shape=n_params, **net_conf["model"]["kwargs"]
         ).get_layers()
         LOGGER.info(f"Loaded a network specification of type {NETWORKS[net_conf['model']['name']]}")
@@ -273,7 +288,7 @@ def training():
             n_neighbors=net_conf["model"]["n_neighbors"],
             max_checkpoints=net_conf["model"]["max_checkpoints"],
             input_shape=(None, len(data_vec_pix), n_z_bins),
-            max_batch_size=dset_kwargs["local_batch_size"] * (2 * n_params + 1),
+            max_batch_size=local_delta_loss_batch_size,
             checkpoint_dir=checkpoint_dir,
             summary_dir=summary_dir,
             restore_checkpoint=args.restore_checkpoint,
@@ -282,22 +297,11 @@ def training():
     # set up the training loss
     model.setup_delta_loss_step(
         n_params,
-        net_conf["dset"]["training"]["local_batch_size"],
+        local_batch_size,
         perts,
         n_channels=n_z_bins,
         strategy=strategy,
         **dlss_conf["delta_loss"],
-    )
-
-    # set up smoothing
-    smoothing_layer = layers.HealpySmoothingLayer(
-        n_side=n_side,
-        indices=data_vec_pix,
-        nest=True,
-        mask=mask,
-        fwhm=fwhm,
-        arcmin=True,
-        data_path=os.path.join(args.repo_dir, "smoothing"),
     )
 
     LOGGER.info(f"Starting training")
@@ -310,9 +314,6 @@ def training():
         with tf.profiler.experimental.Trace("step", step_num=step, _r=1) if args.profile else nullcontext():
             # train step
             dv_batch, _ = next(dist_iter)
-
-            dv_batch = smoothing_layer(dv_batch)
-
             model.delta_train_step(dv_batch)
 
             # output

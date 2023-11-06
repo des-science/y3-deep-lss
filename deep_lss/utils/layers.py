@@ -42,6 +42,7 @@ class HealpySmoothingLayer(tf.keras.layers.Layer):
         per_channel_repetitions: Optional[Union[list, np.ndarray]] = None,
         # computational
         data_path: Optional[str] = None,
+        max_batch_size: Optional[int] = None,
     ) -> None:
         """Create the sparse kernel tensor with which the maps are smoothed.
 
@@ -75,6 +76,10 @@ class HealpySmoothingLayer(tf.keras.layers.Layer):
                 applied. Defaults to None.
             data_path (Optional[str], optional): Path where the sparse kernel tensor is stored to, and if available,
                 loaded from. Defaults to None, then the sparse kernel tensor is neither saved nor loaded.
+            max_batch_size (int, optional): Maximal batch size this network is supposed to handle. This determines the
+                number of splits in the tf.sparse.sparse_dense_matmul operation, which are subsequently applied
+                independent of the actual batch size. Defaults to None, then an attempt is made to infer this from the
+                input, which may cause an error.
         """
         super(HealpySmoothingLayer, self).__init__()
 
@@ -94,6 +99,7 @@ class HealpySmoothingLayer(tf.keras.layers.Layer):
         self.arcmin = arcmin
         self.per_channel_repetitions = per_channel_repetitions
         self.data_path = data_path
+        self.max_batch_size = max_batch_size
 
         if self.fwhm == 0.0 or self.sigma == 0.0:
             self.do_smoothing = False
@@ -146,7 +152,7 @@ class HealpySmoothingLayer(tf.keras.layers.Layer):
 
             if self.per_channel_repetitions is not None:
                 per_channel_factor = np.sqrt(self.per_channel_repetitions)
-                LOGGER.info(f"Using the per channel repetitions {self.per_channel_repetitions}")
+                LOGGER.info(f"Using the per channel smoothing repetitions {self.per_channel_repetitions}")
                 LOGGER.info(
                     f"Using the per channel smoothing scales "
                     f"sigma = {per_channel_factor * self.sigma_arcmin} arcmin, "
@@ -154,7 +160,7 @@ class HealpySmoothingLayer(tf.keras.layers.Layer):
                 )
             else:
                 LOGGER.info(
-                    f"Using the per channel smoothing scales sigma = {self.sigma_arcmin:4.2f} arcmin, "
+                    f"Using the per channel smoothing scale sigma = {self.sigma_arcmin:4.2f} arcmin, "
                     f" fwhm = {self.fwhm_arcmin:4.2f} arcmin"
                 )
 
@@ -173,7 +179,7 @@ class HealpySmoothingLayer(tf.keras.layers.Layer):
             self._build_sparse_tensor()
             LOGGER.info(f"Successfully created the sparse kernel tensor")
 
-    def build(self, input_shape: tuple):
+    def build(self, input_shape: tuple) -> None:
         """Checks whether the input shape is compatible with the initialized layer. Note that the sparse-dense matrix
         multiplication might be split into multiple operations, depending on the nonzero entries in the sparse kernel
         matrix and batch dimension.
@@ -182,8 +188,19 @@ class HealpySmoothingLayer(tf.keras.layers.Layer):
             input_shape (tuple): Shape of the input, which is expected to be (n_batch, n_indices, n_channels).
         """
         if self.do_smoothing:
-            # check shapes
-            self.n_batch = input_shape[0]
+            # batch dimension
+            if self.max_batch_size is not None:
+                self.n_batch = self.max_batch_size
+            elif input_shape[0] is not None:
+                self.n_batch = input_shape[0]
+            else:
+                self.n_batch = None
+                LOGGER.warning(
+                    f"Since the batch size cannot be inferred from the input shape and max_batch_size is not "
+                    f"available, no sparse-dense matmul splits are performed, which may cause an error."
+                )
+
+            # map dimensions
             assert self.n_indices == input_shape[1]
             self.n_channels = input_shape[2]
 
@@ -208,20 +225,21 @@ class HealpySmoothingLayer(tf.keras.layers.Layer):
                     self.mask.shape[1] == self.n_indices
                 ), f"The mask has to have shape (1, n_indices, 1) or (1, n_indices, n_channels)"
 
-            # check if we need to split the matmul
             self.n_matmul_splits = 1
-            while not (
-                # tf.split only does even splits for integer arguments
-                (self.n_batch % self.n_matmul_splits == 0)
-                and
-                # due to the int32 limitation of tf.sparse.sparse_dense_matmul
-                (self.n_matmul_splits >= self.n_batch * len(self.sparse_kernel.indices) / 2**31)
-            ):
-                self.n_matmul_splits += 1
+            # check if we need to split the matmul
+            if self.n_batch is not None:
+                while not (
+                    # tf.split only does even splits for integer arguments
+                    (self.n_batch % self.n_matmul_splits == 0)
+                    and
+                    # due to the int32 limitation of tf.sparse.sparse_dense_matmul
+                    (self.n_matmul_splits >= self.n_batch * len(self.sparse_kernel.indices) / 2**31)
+                ):
+                    self.n_matmul_splits += 1
 
-            LOGGER.info(f"Successfully built the layer")
+            LOGGER.info(f"Successfully built the smoothing layer")
 
-    def call(self, inputs: tf.Tensor):
+    def call(self, inputs: tf.Tensor) -> tf.Tensor:
         """Calls the layer on the input tensor.
 
         Args:
@@ -231,21 +249,27 @@ class HealpySmoothingLayer(tf.keras.layers.Layer):
             tf.Tensor: Smoothed output tensor of identical shape.
         """
         if self.do_smoothing:
-            # (n_channels, n_indices, n_batch), for efficient sparse-dense matmul
-            channels_first = tf.transpose(inputs, (2, 1, 0))
+            # (n_indices, n_batch, n_channels)
+            indices_first = tf.transpose(inputs, (1, 0, 2))
 
-            channels_first_smoothed = []
-            for i, single_channel in enumerate(channels_first):
+            # list of (n_indices, n_batch)
+            separate_channels = tf.unstack(indices_first, axis=2)
+
+            stack = []
+            for i, single_channel in enumerate(separate_channels):
                 if self.per_channel_repetitions is not None:
                     for _ in range(self.per_channel_repetitions[i]):
                         single_channel = self._split_sparse_dense_matmul(self.sparse_kernel, single_channel)
                 else:
                     single_channel = self._split_sparse_dense_matmul(self.sparse_kernel, single_channel)
 
-                channels_first_smoothed.append(single_channel)
+                stack.append(single_channel)
 
-            channels_first_smoothed = tf.stack(channels_first_smoothed, axis=0)
-            channels_last = tf.transpose(channels_first_smoothed, (2, 1, 0))
+            # (n_indices, n_batch, n_channels)
+            channels_last = tf.stack(stack, axis=2)
+
+            # (n_batch, n_indices, n_channels)
+            channels_last = tf.transpose(channels_last, (1, 0, 2))
 
             if self.mask is not None:
                 channels_last *= self.mask
@@ -255,7 +279,7 @@ class HealpySmoothingLayer(tf.keras.layers.Layer):
         else:
             return inputs
 
-    def _build_tree(self):
+    def _build_tree(self) -> None:
         """Builds a BallTree to find the nearest neighbors of each pixel. The number of neighbors is determined by the
         radius n_sigma_support * sigma. The maximum number of neighbors is determined by the pixel with the most
         neighbors within that radius. The Gaussian smoothing kernel is evaluated at the distances to the neighbors.
@@ -277,10 +301,10 @@ class HealpySmoothingLayer(tf.keras.layers.Layer):
         LOGGER.info(f"The maximal number of neighbors within that radius is {self.max_neighbors}")
 
         # find the per pixel k nearest neighbors
-        n_theta_steps = 100
-        theta_split = np.array_split(theta, n_theta_steps)
+        n_theta_splits = 100
+        theta_split = np.array_split(theta, n_theta_splits)
         list_dist_k, list_inds_k = [], []
-        for theta_ in LOGGER.progressbar(theta_split, at_level="info", total=n_theta_steps, desc="querying the tree"):
+        for theta_ in LOGGER.progressbar(theta_split, at_level="info", total=n_theta_splits, desc="querying the tree"):
             dist_k, inds_k = tree.query(theta_, k=self.max_neighbors, return_distance=True, sort_results=True)
             list_dist_k.append(dist_k)
             list_inds_k.append(inds_k)
@@ -289,7 +313,7 @@ class HealpySmoothingLayer(tf.keras.layers.Layer):
         self.inds_k = np.concatenate(list_inds_k, axis=0, dtype=np.int64)
         self.kernel_k = self.kernel_func(dist_k).astype(np.float32)
 
-    def _build_kernel(self):
+    def _build_kernel(self) -> None:
         """Builds the indices and values of the coo sparse kernel matrix as dense tensors, which may be stored to disk."""
         # row, all of the pixels in the patch
         inds_r = tf.constant(np.arange(self.n_indices), dtype=tf.int64)
@@ -312,10 +336,12 @@ class HealpySmoothingLayer(tf.keras.layers.Layer):
                 f"Storing sparse kernel indices ({np_ind_coo.nbytes/1e9:4.2f} GB, dtype {np_ind_coo.dtype}) and "
                 f"values ({np_val_coo.nbytes/1e9:4.2f} GB, dtype {np_val_coo.dtype})"
             )
+
+            os.makedirs(self.data_path, exist_ok=True)
             np.save(os.path.join(self.data_path, f"ind_coo{self.file_label}.npy"), np_ind_coo)
             np.save(os.path.join(self.data_path, f"val_coo{self.file_label}.npy"), np_val_coo)
 
-    def _build_sparse_tensor(self):
+    def _build_sparse_tensor(self) -> None:
         """Builds the tf.sparse.SparseTensor from the dense indices and values."""
         self.sparse_kernel = tf.sparse.SparseTensor(
             indices=self.ind_coo,
@@ -331,6 +357,7 @@ class HealpySmoothingLayer(tf.keras.layers.Layer):
         del self.ind_coo
         del self.val_coo
 
+    @tf.function
     def _split_sparse_dense_matmul(self, sparse_tensor, dense_tensor):
         """Splits axis 1 of the dense_tensor such that TensorFlow can handle the size of the computation.
 
