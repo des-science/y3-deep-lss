@@ -59,7 +59,7 @@ def _stack_grid_cosmos(tensors, sorted_indices, n_examples_per_cosmo):
     # stack the cosmologies into the 0th axis, shape (n_cosmos, n_examples_per_cosmo, None)
     tensors = tf.stack(tensors, axis=0)
 
-    return tensors
+    return tensors.numpy()
 
 
 def _remove_example_axis(array):
@@ -93,6 +93,7 @@ def evaluate_grid(
     net_conf,
     dir_out,
     file_label=None,
+    save_second_to_last_layer=False,
 ):
     """Evaluate the model on the grid part of the CosmoGrid.
 
@@ -105,6 +106,8 @@ def evaluate_grid(
         net_conf (dict): Configuration file of the specific model.
         dir_out (str): Output directory, this is where the evaluations will be saved.
         file_label (str, optional): Optional suffix to append to the output file names. Defaults to None.
+        save_second_to_last_layer (bool, optional): Whether to save the activations of the second to last layer of the 
+            network. Defaults to False.
     """
     print("\n")
     LOGGER.info(f"Starting evaluation of the grid")
@@ -146,9 +149,16 @@ def evaluate_grid(
 
     dist_dset = strategy.distribute_datasets_from_function(dataset_fn)
 
-    LOGGER.timer.start("eval")
+    # set up a network that outputs the second to last layer too
+    if save_second_to_last_layer:
+        last_layer = model.network.layers[-1]
+        second_to_last_layer = model.network.layers[-2]
+        two_output_model = tf.keras.Model(
+            inputs=model.network.input, outputs=[last_layer.output, second_to_last_layer.output]
+        )
 
     preds = []
+    second_to_last_layer = []
     cosmos = []
     i_sobols = []
     i_noises = []
@@ -157,7 +167,11 @@ def evaluate_grid(
         dist_dset, at_level="info", total=n_steps, desc="evaluating the grid"
     ):
         # DistributedValues of shape (local_batch_size, n_output)
-        pred_batch = strategy.run(model.tf_call, args=(dv_batch,))
+        if save_second_to_last_layer:
+            pred_batch, second_to_last_layer_batch = strategy.run(two_output_model, args=(dv_batch,))
+            second_to_last_layer_batch = strategy.gather(second_to_last_layer_batch, axis=0)
+        else:
+            pred_batch = strategy.run(model.tf_call, args=(dv_batch,))
 
         # shape (global_batch_size, n_output)
         pred_batch = strategy.gather(pred_batch, axis=0)
@@ -173,16 +187,20 @@ def evaluate_grid(
         i_sobols.append(i_sobol_batch)
         i_noises.append(i_noise_batch)
         i_examples.append(i_example_batch)
+        if save_second_to_last_layer:
+            second_to_last_layer.append(second_to_last_layer_batch)
 
     # sort according to the sobol index
     sorted_indices = tf.argsort(tf.concat(i_sobols, axis=0), axis=0)
 
     # shape (n_cosmos, n_examples_per_cosmo, None)
-    preds = _stack_grid_cosmos(preds, sorted_indices, n_examples_per_cosmo).numpy()
-    cosmos = _stack_grid_cosmos(cosmos, sorted_indices, n_examples_per_cosmo).numpy()
-    i_sobols = _stack_grid_cosmos(i_sobols, sorted_indices, n_examples_per_cosmo).numpy()
-    i_noises = _stack_grid_cosmos(i_noises, sorted_indices, n_examples_per_cosmo).numpy()
-    i_examples = _stack_grid_cosmos(i_examples, sorted_indices, n_examples_per_cosmo).numpy()
+    preds = _stack_grid_cosmos(preds, sorted_indices, n_examples_per_cosmo)
+    cosmos = _stack_grid_cosmos(cosmos, sorted_indices, n_examples_per_cosmo)
+    i_sobols = _stack_grid_cosmos(i_sobols, sorted_indices, n_examples_per_cosmo)
+    i_noises = _stack_grid_cosmos(i_noises, sorted_indices, n_examples_per_cosmo)
+    i_examples = _stack_grid_cosmos(i_examples, sorted_indices, n_examples_per_cosmo)
+    if save_second_to_last_layer:
+        second_to_last_layer = _stack_grid_cosmos(second_to_last_layer_batch, sorted_indices, n_examples_per_cosmo)
     LOGGER.info(f"Reshaped the results")
 
     # double check that the cosmologies are sorted correctly and remove the redundant axis
@@ -196,6 +214,8 @@ def evaluate_grid(
         f.create_dataset(name="grid/i_sobol", data=i_sobols)
         f.create_dataset(name="grid/i_noise", data=i_noises)
         f.create_dataset(name="grid/i_example", data=i_examples)
+        if save_second_to_last_layer:
+            f.create_dataset(name="grid/second_to_last_layer", data=second_to_last_layer)
 
     LOGGER.info(f"Evaluation of the grid has finished, saved the predictions in {out_file}")
 
@@ -210,6 +230,7 @@ def evaluate_fiducial(
     dir_out,
     file_label=None,
     training_set=True,
+    save_second_to_last_layer=False,
 ):
     """Evaluate the model on the fiducial part of the CosmoGrid.
 
@@ -225,6 +246,8 @@ def evaluate_fiducial(
         file_label (str, optional): Optional suffix to append to the output file names. Defaults to None.
         training_set (bool, optional): Whether it's a training or validation set. This changes how the result is
             stored.
+        save_second_to_last_layer (bool, optional): Whether to save the activations of the second to last layer of the 
+            network. Defaults to False.
     """
     print("\n")
     LOGGER.info(f"Starting evaluation of the fiducial")
@@ -266,14 +289,27 @@ def evaluate_fiducial(
 
     dist_dset = strategy.distribute_datasets_from_function(dataset_fn)
 
+    # set up a network that outputs the second to last layer too
+    if save_second_to_last_layer:
+        last_layer = model.network.layers[-1]
+        second_to_last_layer = model.network.layers[-2]
+        two_output_model = tf.keras.Model(
+            inputs=model.network.input, outputs=[last_layer.output, second_to_last_layer.output]
+        )
+
     preds = []
+    second_to_last_layer = []
     i_examples = []
     i_noises = []
     for dv_batch, index_batch in LOGGER.progressbar(
         dist_dset, at_level="info", total=n_steps, desc="evaluating at the fiducial"
     ):
         # DistributedValues of shape (local_batch_size, n_output)
-        pred_batch = strategy.run(model.tf_call, args=(dv_batch,))
+        if save_second_to_last_layer:
+            pred_batch, second_to_last_layer_batch = strategy.run(two_output_model, args=(dv_batch,))
+            second_to_last_layer_batch = strategy.gather(second_to_last_layer_batch, axis=0)
+        else:
+            pred_batch = strategy.run(model.tf_call, args=(dv_batch,))
 
         # shape (global_batch_size, n_output)
         pred_batch = strategy.gather(pred_batch, axis=0)
@@ -284,10 +320,14 @@ def evaluate_fiducial(
         preds.append(pred_batch)
         i_examples.append(i_example_batch)
         i_noises.append(i_noise_batch)
+        if save_second_to_last_layer:
+            second_to_last_layer.append(second_to_last_layer_batch)
 
     preds = tf.concat(preds, axis=0)
     i_examples = tf.concat(i_examples, axis=0)
     i_noises = tf.concat(i_noises, axis=0)
+    if save_second_to_last_layer:
+        second_to_last_layer = tf.concat(second_to_last_layer_batch, axis=0)
     LOGGER.info(f"Reshaped the results")
 
     # sort according to the example index
@@ -295,6 +335,8 @@ def evaluate_fiducial(
     preds = tf.gather(preds, sorted_indices)
     i_examples = tf.gather(i_examples, sorted_indices)
     i_noises = tf.gather(i_noises, sorted_indices)
+    if save_second_to_last_layer:
+        second_to_last_layer = tf.gather(second_to_last_layer, sorted_indices)
     LOGGER.info(f"Sorted the results")
 
     out_file = _get_out_file(dir_out, file_label)
@@ -303,9 +345,13 @@ def evaluate_fiducial(
             f.create_dataset(name="fiducial/train/pred", data=preds)
             f.create_dataset(name="fiducial/train/i_example", data=i_examples)
             f.create_dataset(name="fiducial/train/i_noise", data=i_noises)
+            if save_second_to_last_layer:
+                f.create_dataset(name="fiducial/train/second_to_last_layer", data=second_to_last_layer)
         else:
             f.create_dataset(name="fiducial/vali/pred", data=preds)
             f.create_dataset(name="fiducial/vali/i_example", data=i_examples)
             f.create_dataset(name="fiducial/vali/i_noise", data=i_noises)
+            if save_second_to_last_layer:
+                f.create_dataset(name="fiducial/vali/second_to_last_layer", data=second_to_last_layer)
 
     LOGGER.info(f"Evaluation of the fiducial has finished, saved the predictions in {out_file}")
