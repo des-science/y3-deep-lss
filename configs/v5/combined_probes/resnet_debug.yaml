@@ -1,0 +1,49 @@
+# contains the model specific configuration parameters for training
+name: "resnet_vanilla"
+
+training:
+  n_steps: 1000
+  output_every: null
+  checkpoint_every: 500
+  eval_every: null
+  learning_rate: 0.001
+  clip_by_value: null
+  clip_by_norm: null
+  clip_by_global_norm: 10.0
+
+dset:
+  training:
+    n_noise: 3
+    # for the delta loss, this is multiplied by 1 + 2 * n_params
+    local_batch_size: 4
+    is_cached: False
+    n_readers: 4
+    n_prefetch: null
+    file_name_shuffle_buffer: 64
+    examples_shuffle_buffer: 16
+  eval:
+    fiducial:
+      n_noise: 1
+      local_batch_size: 36
+      is_cached: False
+      n_readers: 16
+      n_prefetch: null
+      is_eval: True
+    grid:
+      n_noise: 3
+      local_batch_size: 36
+      n_readers: 16
+      n_prefetch: null
+
+model:
+  name: resnet
+  n_neighbors: 20
+  max_checkpoints: 10
+  kwargs:
+    n_base_channels: 32
+    # depth
+    n_downsampling: 3
+    n_cheby: 2
+    n_residuals: 5
+    # misc
+    poly_degree: 5

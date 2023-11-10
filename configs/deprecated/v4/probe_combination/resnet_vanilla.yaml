@@ -2,10 +2,10 @@
 name: "resnet_vanilla"
 
 training:
-  n_steps: 50000
+  n_steps: 10000
   output_every: null
-  checkpoint_every: 10000
-  eval_every: 50000
+  checkpoint_every: 1000
+  eval_every: 5000
   learning_rate: 0.001
   clip_by_value: null
   clip_by_norm: null
@@ -13,26 +13,27 @@ training:
 
 dset:
   training:
+    # n_noise: 2
     i_noise: 0
     # for the delta loss, this is multiplied by 1 + 2 * n_params
     local_batch_size: 4
-    is_cached: True
+    is_cached: False
     n_readers: 4
-    n_prefetch: null
+    n_prefetch: 2
     file_name_shuffle_buffer: 16
     examples_shuffle_buffer: 64
   eval:
     fiducial:
       i_noise: 0
-      local_batch_size: 36
+      local_batch_size: 84
       is_cached: False
-      n_readers: 16
+      n_readers: 8
       n_prefetch: null
       is_eval: True
     grid:
       n_noise: 3
-      local_batch_size: 100
-      n_readers: 16
+      local_batch_size: 84
+      n_readers: 8
       n_prefetch: null
 
 model:

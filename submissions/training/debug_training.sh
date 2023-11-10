@@ -16,6 +16,12 @@
 # export OMP_PROC_BIND=close
 
 #run the application:
-srun python ../../deep_lss/apps/run_training.py --fid_tfr_pattern="/pscratch/sd/a/athomsen/DESY3/v3/DESy3_fiducial_???.tfrecord" --net_config="/global/u2/a/athomsen/y3-deep-lss/configs/resnet_debug.yaml" --dir_base="/pscratch/sd/a/athomsen/run_files/v3/debug"
-# srun python ../../deep_lss/apps/run_training.py --fid_tfr_pattern=${1} --net_config=${2} --dir_base=${3}
-
+srun --cpus-per-task=128 --cpu_bind=threads --gpu-bind=none \
+    python ../../deep_lss/apps/run_training.py \
+    --fidu_tfr_pattern="/pscratch/sd/a/athomsen/DESY3/v5/quadratic_bias_v2/tfrecords/fiducial/DESy3_fiducial_???.tfrecord" \
+    --fidu_vali_tfr_pattern="/pscratch/sd/a/athomsen/DESY3/v5/quadratic_bias_v2/tfrecords/fiducial/validation/DESy3_fiducial_???.tfrecord" \
+    --grid_vali_tfr_pattern="/pscratch/sd/a/athomsen/DESY3/v5/quadratic_bias_v2/tfrecords/grid/DESy3_grid_???.tfrecord" \
+    --dir_base="/pscratch/sd/a/athomsen/run_files/v5/debug" \
+    --net_config="configs/v5/clustering_only/resnet_vanilla.yaml" \
+    --dlss_config="configs/v5/clustering_only/quadratic_bias/dlss_config.yaml" \
+    --msfm_config="/global/homes/a/athomsen/multiprobe-simulation-forward-model/configs/v5/quadratic_bias.yaml"
