@@ -22,7 +22,7 @@ from contextlib import nullcontext
 from msfm.fiducial_pipeline import FiducialPipeline
 from msfm.utils import logger, input_output, files, parameters
 
-from deep_lss.utils import distribute, eval, layers
+from deep_lss.utils import distribute, eval, configuration
 from deep_lss.models.delta_model import DeltaLossModel
 from deep_lss.nets import NETWORKS
 
@@ -45,7 +45,7 @@ def setup():
         help="logging level",
     )
     parser.add_argument(
-        "--fidu_tfr_pattern",
+        "--fidu_train_tfr_pattern",
         type=str,
         required=True,
         help="input root dir of the fiducial data vectors (training)",
@@ -199,8 +199,6 @@ def training():
     # constants: msfm
     n_side = msfm_conf["analysis"]["n_side"]
     data_vec_pix, _, _, _ = files.load_pixel_file(msfm_conf)
-    mask_dict = files.get_tomo_dv_masks(msfm_conf)
-    mask = tf.concat([mask_dict["metacal"], tf.tile(mask_dict["maglim"], (1, 4))], axis=1)
 
     # constants: deep_lss
     params = dlss_conf["dset"]["training"]["params"]
@@ -211,15 +209,6 @@ def training():
     with_lensing = dlss_conf["dset"]["general"]["with_lensing"]
     with_clustering = dlss_conf["dset"]["general"]["with_clustering"]
 
-    fwhm = []
-    if with_lensing:
-        fwhm += dlss_conf["scale_cuts"]["lensing"]["theta_fwhm"]
-    if with_clustering:
-        fwhm += dlss_conf["scale_cuts"]["clustering"]["theta_fwhm"]
-
-    arcmin = dlss_conf["scale_cuts"]["arcmin"]
-    n_sigma_support = dlss_conf["scale_cuts"]["n_sigma_support"]
-
     # constants: network
     net_name = net_conf["name"]
     n_steps = net_conf["training"]["n_steps"]
@@ -228,7 +217,6 @@ def training():
     eval_every = net_conf["training"]["eval_every"]
     dset_kwargs = net_conf["dset"]["training"]
     local_batch_size = dset_kwargs["local_batch_size"]
-    local_delta_loss_batch_size = local_batch_size * (2 * n_params + 1)
 
     try:
         n_z_bins = len(dset_kwargs["z_bin_inds"])
@@ -238,6 +226,8 @@ def training():
             n_z_bins += len(msfm_conf["survey"]["metacal"]["z_bins"])
         if with_clustering:
             n_z_bins += len(msfm_conf["survey"]["maglim"]["z_bins"])
+
+    smoothing_kwargs = configuration.get_smoothing_kwargs(msfm_conf, dlss_conf, net_conf, dir_base=args.dir_base)
 
     strategy = distribute.get_strategy(not args.local)
     LOGGER.info(f"Using global batch size {distribute.get_global_batch_size(strategy, local_batch_size)}")
@@ -249,7 +239,7 @@ def training():
     # like https://www.tensorflow.org/tutorials/distribute/input#tfdistributestrategydistribute_datasets_from_function
     def dataset_fn(input_context):
         dset = fiducial_pipeline.get_dset(
-            tfr_pattern=args.fidu_tfr_pattern,
+            tfr_pattern=args.fidu_train_tfr_pattern,
             **dset_kwargs,
             # distribution
             input_context=input_context,
@@ -262,21 +252,8 @@ def training():
 
     # create all of the variables within the strategy's scope, such that they are mirrored
     with strategy.scope():
-        smoothing_layer = layers.HealpySmoothingLayer(
-            n_side=n_side,
-            indices=data_vec_pix,
-            nest=True,
-            mask=mask,
-            fwhm=fwhm,
-            arcmin=arcmin,
-            n_sigma_support=n_sigma_support,
-            data_path=os.path.join(args.dir_base, "smoothing"),
-            max_batch_size=local_delta_loss_batch_size,
-        )
-        network = [smoothing_layer]
-
-        network += NETWORKS[net_conf["model"]["name"]](
-            output_shape=n_params, **net_conf["model"]["kwargs"]
+        network = NETWORKS[net_conf["model"]["name"]](
+            output_shape=n_params, smoothing_kwargs=smoothing_kwargs, **net_conf["model"]["kwargs"]
         ).get_layers()
         LOGGER.info(f"Loaded a network specification of type {NETWORKS[net_conf['model']['name']]}")
 
@@ -288,7 +265,7 @@ def training():
             n_neighbors=net_conf["model"]["n_neighbors"],
             max_checkpoints=net_conf["model"]["max_checkpoints"],
             input_shape=(None, len(data_vec_pix), n_z_bins),
-            max_batch_size=local_delta_loss_batch_size,
+            max_batch_size=local_batch_size * (2 * n_params + 1),
             checkpoint_dir=checkpoint_dir,
             summary_dir=summary_dir,
             restore_checkpoint=args.restore_checkpoint,
@@ -335,13 +312,14 @@ def training():
                     eval.evaluate_fiducial(
                         model=model,
                         strategy=strategy,
-                        tfr_pattern=args.fidu_tfr_pattern,
+                        tfr_pattern=args.fidu_train_tfr_pattern,
                         msfm_conf=msfm_conf,
                         dlss_conf=dlss_conf,
                         net_conf=net_conf,
                         dir_out=dir_out,
                         file_label=train_step,
                         training_set=True,
+                        save_second_to_last_layer=True,
                     )
 
                 # fiducial validation
@@ -356,6 +334,7 @@ def training():
                         dir_out=dir_out,
                         file_label=train_step,
                         training_set=False,
+                        save_second_to_last_layer=True,
                     )
                 else:
                     LOGGER.warning(f"Skipping evaluation of the fiducial validation set")
@@ -371,6 +350,7 @@ def training():
                         net_conf=net_conf,
                         dir_out=dir_out,
                         file_label=train_step,
+                        save_second_to_last_layer=True,
                     )
                 else:
                     LOGGER.warning(f"Skipping evaluation of the fiducial validation set")
