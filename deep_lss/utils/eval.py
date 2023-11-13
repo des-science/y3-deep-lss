@@ -84,30 +84,16 @@ def _remove_example_axis(array):
     return array
 
 
-def evaluate_grid(
-    model,
-    strategy,
-    tfr_pattern,
-    msfm_conf,
-    dlss_conf,
-    net_conf,
-    dir_out,
-    file_label=None,
-    save_second_to_last_layer=False,
-):
+def evaluate_grid(model, tfr_pattern, msfm_conf, dlss_conf, net_conf, dir_out, file_label=None):
     """Evaluate the model on the grid part of the CosmoGrid.
 
     Args:
         model (DeltaLossModel): Model to be evaluated.
-        strategy (tf.distribute.Strategy): Distribution strategy instance within which the model has been created. This
-            is used to distribute the dataset.
         tfr_pattern (str): Glob pattern of the .tfrecord files containing the data.
         msfm_conf (dict): Configuration file of the msfm pipeline.
         net_conf (dict): Configuration file of the specific model.
         dir_out (str): Output directory, this is where the evaluations will be saved.
         file_label (str, optional): Optional suffix to append to the output file names. Defaults to None.
-        save_second_to_last_layer (bool, optional): Whether to save the activations of the second to last layer of the 
-            network. Defaults to False.
     """
     print("\n")
     LOGGER.info(f"Starting evaluation of the grid")
@@ -127,10 +113,10 @@ def evaluate_grid(
     LOGGER.info(f"There's a total of {n_examples} data vectors to be evaluated ({n_examples_per_cosmo} per cosmology)")
 
     # network constants
-    global_batch_size = distribute.get_global_batch_size(
-        strategy, net_conf["dset"]["eval"]["grid"]["local_batch_size"]
-    )
+    strategy = model.strategy
+    global_batch_size = distribute.get_global_batch_size(strategy, dset_kwargs["local_batch_size"])
     n_steps = math.ceil(n_examples / global_batch_size)
+    save_second_to_last_layer = net_conf["model"]["save_second_to_last_layer"]
 
     grid_pipeline = GridPipeline(
         conf=msfm_conf, **{**dlss_conf["dset"]["general"], **dlss_conf["dset"]["eval"]["grid"]}
@@ -207,36 +193,32 @@ def evaluate_grid(
     cosmos = _remove_example_axis(cosmos)
     i_sobols = _remove_example_axis(i_sobols)
 
-    out_file = _get_out_file(dir_out, file_label)
-    with h5py.File(out_file, "a") as f:
-        f.create_dataset(name="grid/pred", data=preds)
-        f.create_dataset(name="grid/cosmo", data=cosmos)
-        f.create_dataset(name="grid/i_sobol", data=i_sobols)
-        f.create_dataset(name="grid/i_noise", data=i_noises)
-        f.create_dataset(name="grid/i_example", data=i_examples)
-        if save_second_to_last_layer:
-            f.create_dataset(name="grid/second_to_last_layer", data=second_to_last_layer)
+    def write_out_file():
+        out_file = _get_out_file(dir_out, file_label)
+        with h5py.File(out_file, "a") as f:
+            f.create_dataset(name="grid/pred", data=preds)
+            f.create_dataset(name="grid/cosmo", data=cosmos)
+            f.create_dataset(name="grid/i_sobol", data=i_sobols)
+            f.create_dataset(name="grid/i_noise", data=i_noises)
+            f.create_dataset(name="grid/i_example", data=i_examples)
+            if save_second_to_last_layer:
+                f.create_dataset(name="grid/second_to_last_layer", data=second_to_last_layer)
 
-    LOGGER.info(f"Evaluation of the grid has finished, saved the predictions in {out_file}")
+        LOGGER.info(f"Evaluation of the grid has finished, saved the predictions in {out_file}")
+
+    if isinstance(model.strategy, tf.distribute.MultiWorkerMirroredStrategy):
+        if model.is_chief():
+            LOGGER.info(f"Chief here")
+            write_out_file()
+    else:
+        write_out_file()
 
 
-def evaluate_fiducial(
-    model,
-    strategy,
-    tfr_pattern,
-    msfm_conf,
-    dlss_conf,
-    net_conf,
-    dir_out,
-    file_label=None,
-    training_set=True,
-    save_second_to_last_layer=False,
-):
+def evaluate_fiducial(model, tfr_pattern, msfm_conf, dlss_conf, net_conf, dir_out, file_label=None, training_set=True):
     """Evaluate the model on the fiducial part of the CosmoGrid.
 
     Args:
         model (DeltaLossModel): Model to be evaluated.
-        strategy (tf.distribute.Strategy): Distribution strategy instance within which the model has been created.
         This is used to distribute the dataset.
         tfr_pattern (str): Glob pattern of the .tfrecord files containing the data.
         msfm_conf (dict): Configuration file of the msfm pipeline.
@@ -246,8 +228,6 @@ def evaluate_fiducial(
         file_label (str, optional): Optional suffix to append to the output file names. Defaults to None.
         training_set (bool, optional): Whether it's a training or validation set. This changes how the result is
             stored.
-        save_second_to_last_layer (bool, optional): Whether to save the activations of the second to last layer of the 
-            network. Defaults to False.
     """
     print("\n")
     LOGGER.info(f"Starting evaluation of the fiducial")
@@ -267,10 +247,10 @@ def evaluate_fiducial(
     LOGGER.info(f"There's a total of {n_examples} data vectors to be evaluated")
 
     # network constants
-    global_batch_size = distribute.get_global_batch_size(
-        strategy, net_conf["dset"]["eval"]["fiducial"]["local_batch_size"]
-    )
+    strategy = model.strategy
+    global_batch_size = distribute.get_global_batch_size(strategy, dset_kwargs["local_batch_size"])
     n_steps = math.ceil(n_examples / global_batch_size)
+    save_second_to_last_layer = net_conf["model"]["save_second_to_last_layer"]
 
     fiducial_pipeline = FiducialPipeline(
         conf=msfm_conf, **{**dlss_conf["dset"]["general"], **dlss_conf["dset"]["eval"]["fiducial"]}
@@ -339,19 +319,27 @@ def evaluate_fiducial(
         second_to_last_layer = tf.gather(second_to_last_layer, sorted_indices)
     LOGGER.info(f"Sorted the results")
 
-    out_file = _get_out_file(dir_out, file_label)
-    with h5py.File(out_file, "a") as f:
-        if training_set:
-            f.create_dataset(name="fiducial/train/pred", data=preds)
-            f.create_dataset(name="fiducial/train/i_example", data=i_examples)
-            f.create_dataset(name="fiducial/train/i_noise", data=i_noises)
-            if save_second_to_last_layer:
-                f.create_dataset(name="fiducial/train/second_to_last_layer", data=second_to_last_layer)
-        else:
-            f.create_dataset(name="fiducial/vali/pred", data=preds)
-            f.create_dataset(name="fiducial/vali/i_example", data=i_examples)
-            f.create_dataset(name="fiducial/vali/i_noise", data=i_noises)
-            if save_second_to_last_layer:
-                f.create_dataset(name="fiducial/vali/second_to_last_layer", data=second_to_last_layer)
+    def write_out_file():
+        out_file = _get_out_file(dir_out, file_label)
+        with h5py.File(out_file, "a") as f:
+            if training_set:
+                f.create_dataset(name="fiducial/train/pred", data=preds)
+                f.create_dataset(name="fiducial/train/i_example", data=i_examples)
+                f.create_dataset(name="fiducial/train/i_noise", data=i_noises)
+                if save_second_to_last_layer:
+                    f.create_dataset(name="fiducial/train/second_to_last_layer", data=second_to_last_layer)
+            else:
+                f.create_dataset(name="fiducial/vali/pred", data=preds)
+                f.create_dataset(name="fiducial/vali/i_example", data=i_examples)
+                f.create_dataset(name="fiducial/vali/i_noise", data=i_noises)
+                if save_second_to_last_layer:
+                    f.create_dataset(name="fiducial/vali/second_to_last_layer", data=second_to_last_layer)
 
-    LOGGER.info(f"Evaluation of the fiducial has finished, saved the predictions in {out_file}")
+        LOGGER.info(f"Evaluation of the fiducial has finished, saved the predictions in {out_file}")
+
+    if isinstance(model.strategy, tf.distribute.MultiWorkerMirroredStrategy):
+        if model.is_chief():
+            LOGGER.info(f"Chief here")
+            write_out_file()
+    else:
+        write_out_file()

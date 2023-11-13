@@ -45,6 +45,7 @@ class DeltaLossModel(BaseModel):
         restore_checkpoint=False,
         max_checkpoints=3,
         init_step=0,
+        strategy=None,
     ):
         """Initializes a graph convolutional neural network using the healpy pixelization scheme.
 
@@ -69,6 +70,7 @@ class DeltaLossModel(BaseModel):
             restore_checkpoint (bool, optional): Whether to restore the network from a checkpoint, or initialize it.
                 Defaults to False.
             init_step (int, optional): Initial step. Defaults to 0.
+            strategy (tf.distribute.Strategy): The distribution strategy the model was created within
         """
 
         # get the network
@@ -96,6 +98,7 @@ class DeltaLossModel(BaseModel):
             restore_from_checkpoint=restore_checkpoint,
             max_checkpoints=max_checkpoints,
             init_step=init_step,
+            strategy=strategy,
         )
         LOGGER.info(f"Initialized the DeltaLossModel")
 
@@ -130,8 +133,6 @@ class DeltaLossModel(BaseModel):
         eps=1e-32,
         # tf.summary
         img_summary=False,
-        # distribution
-        strategy=None,
     ):
         """This sets up a function that performs one training step with the delta loss, which tries to maximize the
         information of the summary statistics. Note  it needs the maps need to be ordered in a specific way:
@@ -200,7 +201,6 @@ class DeltaLossModel(BaseModel):
             eps (float, optional): A small positive value used for regularization of things like logs etc. This should
                 only be increased if tikhonov_regu is used and a error is raised. Defaults to 1e-32.
             img_summary (bool, optional): Save image summaries of the Jacobian and the covariance. Defaults to False.
-            strategy (tf.distribute.Strategy): The distribution strategy the model was created within
 
         Returns:
             callable: A callable function that performs one gradient descent step with respect to the delta loss.
@@ -233,7 +233,7 @@ class DeltaLossModel(BaseModel):
                 summary_writer=self.summary_writer,
                 img_summary=img_summary,
                 # distribution
-                strategy=strategy,
+                strategy=self.strategy,
             )
 
         # get the backend float and input shape
@@ -249,7 +249,8 @@ class DeltaLossModel(BaseModel):
                 in_shape = (n_batch, n_input, n_channels)
 
         # non distributed
-        if strategy is None:
+        if self.strategy is None:
+
             @tf.function(input_signature=[tf.TensorSpec(shape=in_shape, dtype=current_float)], jit_compile=False)
             def delta_train_step(input_batch):
                 LOGGER.warning(f"Tracing delta_train_step")
@@ -263,16 +264,15 @@ class DeltaLossModel(BaseModel):
                     l2_norm_weight=l2_norm_weight,
                 )
 
-        # NOTE distributed
-        elif isinstance(strategy, tf.distribute.Strategy):
-            # NOTE passing an input_signature like above for a distributed dset leads the following error:
+        # distributed
+        elif isinstance(self.strategy, tf.distribute.Strategy):
+            # passing an input_signature like above for a distributed dset leads the following error:
             # AttributeError: 'PerReplica' object has no attribute 'dtype'
             # Instead do like  https://www.tensorflow.org/tutorials/distribute/input#using_the_element_spec_property
             @tf.function(jit_compile=False)
             def delta_train_step(input_batch):
                 LOGGER.warning(f"Tracing distributed delta_train_step")
                 self.distributed_train_step(
-                    strategy=strategy,
                     input_tensor=input_batch,
                     loss_function=loss_func,
                     input_labels=None,
@@ -283,7 +283,7 @@ class DeltaLossModel(BaseModel):
                 )
 
         else:
-            raise ValueError(f"Invalid strategy {strategy} was passed")
+            raise ValueError(f"Invalid strategy {self.strategy} was passed")
 
         LOGGER.info("Set up the traing step of the delta loss")
         self.delta_train_step = delta_train_step

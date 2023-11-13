@@ -12,6 +12,16 @@ dset:
     grid:
       params: ["Om", "s8", "bg", "n_bg"]
 
+scale_cuts:
+  n_sigma_support: 3
+  arcmin: True
+  lensing:
+    # 6 Mpc/h transverse comoving scale
+    theta_fwhm: [22.1, 15.1, 11.2, 9.4]
+  clustering:
+    # 16 Mpc/h transverse comoving scale
+    theta_fwhm: [65.1, 44.5, 34.1, 28.5]
+
 delta_loss:
   # regularization
   force_params_value: 0.0

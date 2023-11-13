@@ -12,9 +12,9 @@ Meant for the GPU nodes of the Perlmutter cluster at NERSC.
 import tensorflow as tf
 import os, argparse, warnings, yaml
 
-from msfm.utils import logger, input_output, files
+from msfm.utils import logger, files
 
-from deep_lss.utils import utils, distribute, eval
+from deep_lss.utils import configuration, distribute, eval
 from deep_lss.models.delta_model import DeltaLossModel
 from deep_lss.nets import NETWORKS
 
@@ -85,6 +85,7 @@ if __name__ == "__main__":
     LOGGER.timer.start("main")
 
     _, _ = distribute.check_devices()
+    strategy = distribute.get_strategy(not args.local)
 
     # load the configs
     with open(os.path.join(args.dir_model, "configs.yaml"), "r") as f:
@@ -108,16 +109,17 @@ if __name__ == "__main__":
     if dlss_conf["dset"]["general"]["with_clustering"]:
         n_z_bins += len(msfm_conf["survey"]["maglim"]["z_bins"])
 
+    smoothing_kwargs = configuration.get_smoothing_kwargs(msfm_conf, dlss_conf, net_conf, dir_base=args.dir_model)
+
     # set up directories
     checkpoint_dir = os.path.abspath(os.path.join(args.dir_model, "checkpoint"))
 
-    strategy = distribute.get_strategy(not args.local)
 
     # create all of the variables within the strategy's scope, such that they are mirrored
     with strategy.scope():
         # load the layers
         network = NETWORKS[net_conf["model"]["name"]](
-            output_shape=n_output, **net_conf["model"]["kwargs"]
+            output_shape=n_output, smoothing_kwargs=smoothing_kwargs, **net_conf["model"]["kwargs"]
         ).get_layers()
         LOGGER.info(f"Loaded a network specification of type {NETWORKS[net_conf['model']['name']]}")
 
@@ -131,12 +133,10 @@ if __name__ == "__main__":
             checkpoint_dir=checkpoint_dir,
             # always load from a checkpoint
             restore_checkpoint=True,
+            strategy=strategy,
         )
 
-    if args.local:
-        train_step = model.train_step.numpy()
-    else:
-        train_step = strategy.gather(model.train_step, axis=0)[0].numpy()
+    train_step = model.get_step()
 
     if args.file_label is None:
         file_label = train_step
@@ -147,7 +147,6 @@ if __name__ == "__main__":
     if args.fidu_train_tfr_pattern is not None:
         eval.evaluate_fiducial(
             model=model,
-            strategy=strategy,
             tfr_pattern=args.fidu_train_tfr_pattern,
             msfm_conf=msfm_conf,
             dlss_conf=dlss_conf,
@@ -163,7 +162,6 @@ if __name__ == "__main__":
     if args.fidu_vali_tfr_pattern is not None:
         eval.evaluate_fiducial(
             model=model,
-            strategy=strategy,
             tfr_pattern=args.fidu_vali_tfr_pattern,
             msfm_conf=msfm_conf,
             dlss_conf=dlss_conf,
@@ -179,7 +177,6 @@ if __name__ == "__main__":
     if args.grid_vali_tfr_pattern is not None:
         eval.evaluate_grid(
             model=model,
-            strategy=strategy,
             tfr_pattern=args.grid_vali_tfr_pattern,
             msfm_conf=msfm_conf,
             dlss_conf=dlss_conf,

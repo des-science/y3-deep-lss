@@ -39,6 +39,7 @@ class BaseModel(object):
         restore_from_checkpoint=False,
         max_checkpoints=3,
         init_step=0,
+        strategy=None,
     ):
         """Initializes a base model
 
@@ -54,6 +55,7 @@ class BaseModel(object):
             max_checkpoints (int, optional): The maximum number of checkpoints to keep. Older ones are automatically
                 deleted by the CheckpointManager.
             init_step (int, optional): Initial step. Defaults to 0.
+            strategy (tf.distribute.Strategy): The tensorflow distribution strategy the model was created within.
         """
 
         # get the network
@@ -61,16 +63,17 @@ class BaseModel(object):
 
         # save additional variables
         self.input_shape = input_shape
+        self.optimizer = optimizer
         self.summary_dir = summary_dir
         self.checkpoint_dir = checkpoint_dir
         self.restore_from_checkpoint = restore_from_checkpoint
+        self.max_checkpoints = max_checkpoints
         self.init_step = init_step
+        self.strategy = strategy
 
         # set up the optimizer
-        if optimizer is None:
+        if self.optimizer is None:
             self.optimizer = tf.keras.optimizers.Adam(learning_rate=1e-4)
-        else:
-            self.optimizer = optimizer
 
         # build the network
         if self.input_shape is not None:
@@ -83,14 +86,38 @@ class BaseModel(object):
 
         # set up the checkpointing
         if self.checkpoint_dir is not None:
-            os.makedirs(self.checkpoint_dir, exist_ok=True)
+            if isinstance(self.strategy, tf.distribute.MultiWorkerMirroredStrategy):
+                if not self.is_chief():
+                    # set up temporary directories for the non-chief workers
+                    self.checkpoint_dir = tf.io.gfile.join(
+                        self.checkpoint_dir, "temp_worker_" + str(self.strategy.cluster_resolver.task_id)
+                    )
+                    tf.io.gfile.makedirs(self.checkpoint_dir)
+
+                    # copy over the checkpoints from the chief to the temporary directories of the non-chief workers
+                    chief_dir = tf.io.gfile.join(self.checkpoint_dir, "..")
+
+                    chief_files = tf.io.gfile.listdir(chief_dir)
+                    for chief_file in chief_files:
+                        full_chief_file = tf.io.gfile.join(chief_dir, chief_file)
+
+                        if os.path.isfile(full_chief_file):
+                            full_temp_file = tf.io.gfile.join(self.checkpoint_dir, chief_file)
+                            tf.io.gfile.copy(full_chief_file, full_temp_file, overwrite=True)
+
+                    LOGGER.info(
+                        f"Copied over the chief's checkpoints to the temporary directory {self.checkpoint_dir}"
+                    )
+
+            tf.io.gfile.makedirs(self.checkpoint_dir)
+
             self.checkpoint = tf.train.Checkpoint(
                 network=self.network, optimizer=self.optimizer, train_step=self.train_step
             )
             self.checkpoint_manager = tf.train.CheckpointManager(
                 self.checkpoint,
                 self.checkpoint_dir,
-                max_to_keep=max_checkpoints,
+                max_to_keep=self.max_checkpoints,
                 checkpoint_name="ckpt",
                 step_counter=self.train_step,
             )
@@ -100,6 +127,7 @@ class BaseModel(object):
             self.checkpoint_manager = None
             self.n_init_checkpoints = None
 
+        # restore model
         if self.restore_from_checkpoint:
             self.restore_model()
         elif (self.checkpoint_manager is not None) and (self.n_init_checkpoints != 0):
@@ -111,13 +139,10 @@ class BaseModel(object):
 
         # set up summary writer
         if self.summary_dir is not None:
-            os.makedirs(self.summary_dir, exist_ok=True)
+            tf.io.gfile.makedirs(self.summary_dir)
             self.summary_writer = tf.summary.create_file_writer(summary_dir)
         else:
             self.summary_writer = None
-
-        # estimator TODO
-        # self.estimator = None
 
     def update_step(self):
         """
@@ -133,6 +158,21 @@ class BaseModel(object):
         """
         self.train_step.assign(step)
 
+    def get_step(self):
+        """Returns the current training step
+
+        Returns:
+            int: A regular integer.
+        """
+        if isinstance(self.strategy, tf.distribute.MirroredStrategy):
+            step = self.strategy.gather(self.train_step, axis=0)[0].numpy()
+        elif isinstance(self.strategy, tf.distribute.MultiWorkerMirroredStrategy):
+            step = self.train_step.numpy()
+        else:
+            step = self.train_step.numpy()
+
+        return step
+
     def save_model(self):
         """Saves the model with the CheckpointManager
 
@@ -140,18 +180,26 @@ class BaseModel(object):
             ValueError: If there's no checkpoint directory.
             Exception: When the model is initialized from scratch, but the given checkpoint directory is non-empty.
         """
+
         if self.checkpoint_dir is None:
             raise ValueError("No checkpoint directory was declared during the init of the model, it can not be saved.")
 
-        else:
-            if not self.restore_from_checkpoint and self.n_init_checkpoints != 0:
-                raise Exception(
-                    f"The specified checkpoint directory {self.checkpoint_dir} was not empty at initialization, can not"
-                    f" save a model initialized from scratch there."
-                )
-            else:
-                self.checkpoint_manager.save()
-                LOGGER.info(f"Successfully saved the model to {self.checkpoint_manager.directory}")
+        if not self.restore_from_checkpoint and self.n_init_checkpoints != 0:
+            raise Exception(
+                f"The specified checkpoint directory {self.checkpoint_dir} was not empty at initialization, can not"
+                f" save a model initialized from scratch there."
+            )
+
+        # save the model
+        self.checkpoint_manager.save()
+        LOGGER.info(f"Successfully saved the model in {self.checkpoint_manager.directory}")
+
+        # clean up the temoporary checkpoints of the non-chief workers
+        if isinstance(self.strategy, tf.distribute.MultiWorkerMirroredStrategy):
+            if not self.is_chief():
+                tf.io.gfile.rmtree(self.checkpoint_dir)
+
+            LOGGER.info(f"Deleted the temporary checkpoint directory {self.checkpoint_dir}")
 
     def restore_model(self):
         """Restores the model from a checkpoint using the CheckpointManager that picks the most recent checkpoint.
@@ -159,15 +207,15 @@ class BaseModel(object):
         Raises:
             ValueError: If there's no checkpoint directory or it's empty.
         """
-        if self.checkpoint_dir is not None:
-            if len(self.checkpoint_manager.checkpoints) > 0:
-                dir_restore = self.checkpoint_manager.restore_or_initialize()
-                LOGGER.info(f"Network successfully restored from checkpoint {dir_restore}.")
-            else:
-                raise ValueError(f"A non empty checkpoint_dir {self.checkpoint_dir} has to be passed")
 
-        else:
+        if self.checkpoint_dir is None:
             raise ValueError(f"No checkpoint directory was given, the network can not be restored.")
+
+        if len(self.checkpoint_manager.checkpoints) == 0:
+            raise ValueError(f"A non empty checkpoint_dir {self.checkpoint_dir} has to be passed")
+
+        restore_dir = self.checkpoint_manager.restore_or_initialize()
+        LOGGER.info(f"Network successfully restored from checkpoint {restore_dir}.")
 
     def build_network(self, input_shape):
         """Builds the internal HealpyGCNN with a given input shape
@@ -184,6 +232,71 @@ class BaseModel(object):
             kwargs: passed to HealpyGCNN.summary
         """
         self.network.summary(**kwargs)
+
+    def is_chief(self):
+        """Within the tf.distribute.MultiWorkerStrategy, whether the worker is the chief or not. Adapted from
+        https://www.tensorflow.org/tutorials/distribute/multi_worker_with_ctl#checkpoint_saving_and_restoring
+
+        Raises:
+            AttributeError: If called for a model that is not distributed with tf.distribute.MultiWorkerStrategy
+
+        Returns:
+            bool: Whether the worker is the chief or not.
+        """
+
+        if isinstance(self.strategy, tf.distribute.MultiWorkerMirroredStrategy):
+            task_type = self.strategy.cluster_resolver.task_type
+            task_id = self.strategy.cluster_resolver.task_id
+            cluster_spec = self.strategy.cluster_resolver.cluster_spec()
+
+            return (
+                task_type is None
+                or task_type == "chief"
+                or (task_type == "worker" and task_id == 0 and "chief" not in cluster_spec.as_dict())
+            )
+
+        else:
+            raise AttributeError(
+                f"The concept of chief only makes sense for tf.distribute.MultiWorkerMirroredStrategy, but this model "
+                f"is set up with {self.strategy}"
+            )
+
+    def train_step(
+        self,
+        input_tensor,
+        loss_function,
+        input_labels=None,
+        clip_by_value=None,
+        clip_by_norm=None,
+        clip_by_global_norm=None,
+        l2_norm_weight=None,
+    ):
+        # non distributed
+        if self.strategy is None:
+            return self.base_train_step(
+                input_tensor=input_tensor,
+                loss_function=loss_function,
+                input_labels=input_labels,
+                clip_by_value=clip_by_value,
+                clip_by_norm=clip_by_norm,
+                clip_by_global_norm=clip_by_global_norm,
+                l2_norm_weight=l2_norm_weight,
+            )
+
+        # distributed
+        elif isinstance(self.strategy, tf.distribute.Strategy):
+            return self.distributed_train_step(
+                input_tensor=input_tensor,
+                loss_function=loss_function,
+                input_labels=input_labels,
+                clip_by_value=clip_by_value,
+                clip_by_norm=clip_by_norm,
+                clip_by_global_norm=clip_by_global_norm,
+                l2_norm_weight=l2_norm_weight,
+            )
+
+        else:
+            raise ValueError(f"Invalid strategy {self.strategy} was passed")
 
     def base_train_step(
         self,
@@ -220,7 +333,7 @@ class BaseModel(object):
 
         with tf.GradientTape() as tape:
             predictions = self.network(input_tensor, training=True)
-            
+
             # compute the loss
             if input_labels is None:
                 loss = loss_function(predictions)
@@ -242,7 +355,8 @@ class BaseModel(object):
         gradients = tape.gradient(loss, trainable_variables)
 
         # NOTE distributed, get the global gradients
-        gradients = tf.distribute.get_replica_context().all_reduce("MEAN", gradients)
+        if self.strategy is not None:
+            gradients = tf.distribute.get_replica_context().all_reduce("MEAN", gradients)
 
         # clip the gradients
         if clip_by_value is not None:
@@ -268,7 +382,6 @@ class BaseModel(object):
 
     def distributed_train_step(
         self,
-        strategy,
         input_tensor,
         loss_function,
         input_labels=None,
@@ -291,7 +404,6 @@ class BaseModel(object):
         Note that there's no additional check for this.
 
         Args:
-            strategy (tf.distribute.Strategy): The distribution strategy the model was created within
             input_tensor (tf.tensor): The input to the network
             loss_function (callable): The loss function, a callable that takes predictions of the network (and if
                 provided, the input_labels) as input and returns a loss
@@ -305,7 +417,7 @@ class BaseModel(object):
                 (no regularization).
         """
         # the means here are taken over the local batches
-        local_losses = strategy.run(
+        local_losses = self.strategy.run(
             self.base_train_step,
             args=(
                 input_tensor,
@@ -320,7 +432,7 @@ class BaseModel(object):
 
         # the mean of means is equal to the overall mean if the subgroups all have the same number of samples
         # https://en.wikipedia.org/wiki/Grand_mean
-        global_loss = strategy.reduce(tf.distribute.ReduceOp.MEAN, local_losses, axis=None)
+        global_loss = self.strategy.reduce(tf.distribute.ReduceOp.MEAN, local_losses, axis=None)
         LOGGER.warning(
             f"The distributed_train_step makes the assumption that the global batch size is divisible by the number"
             f" of replicas, ensure that this is the case"
@@ -331,75 +443,6 @@ class BaseModel(object):
                 tf.summary.scalar("global_loss", global_loss)
 
         return global_loss
-
-    # # TODO: set up logic to save and restore estimators
-    # def setup_1st_order_estimator(
-    #     self,
-    #     dset,
-    #     fidu_param,
-    #     off_sets,
-    #     print_params=True,
-    #     tf_dtype=tf.float32,
-    #     tikohnov=0.0,
-    #     layer=None,
-    #     dset_is_sims=False,
-    # ):
-    #     """
-    #     Sets up a first order estimator from a given dataset that will be evaluated
-    #     :param dset: The dataset that will be evaluated
-    #     :param fidu_param: the fiducial parameter of the estimator
-    #     :param off_sets: the offsets used for the perturbations
-    #     :param print_params: print the calculated params
-    #     :param tf_dtype: the tensorflow datatype to use
-    #     :param tikohnov: Add tikohnov regularization before inverting the jacobian
-    #     :param layer: integer, propagate only up to this layer, can be -1
-    #     :param dset_is_sims: If Ture, dset will be treated as evaluations
-    #     """
-    #     # set the layer
-    #     self.estimator_layer = layer
-
-    #     # dimension check
-    #     fidu_param = np.atleast_2d(fidu_param)
-    #     n_param = fidu_param.shape[-1]
-    #     n_splits = 2 * n_param + 1
-
-    #     if dset_is_sims:
-    #         predictions = dset
-    #     else:
-    #         # get the predictions
-    #         predictions = []
-    #         for batch in dset:
-    #             predictions.append(
-    #                 np.split(
-    #                     self.__call__(batch, training=False, layer=self.estimator_layer).numpy(),
-    #                     indices_or_sections=n_splits,
-    #                     axis=0,
-    #                 )
-    #             )
-    #         # concat
-    #         predictions = np.concatenate(predictions, axis=1)
-
-    #     self.estimator = estimator_1st_order(
-    #         sims=predictions,
-    #         fiducial_point=fidu_param,
-    #         offsets=off_sets,
-    #         print_params=print_params,
-    #         tf_dtype=tf_dtype,
-    #         tikohnov=tikohnov,
-    #     )
-
-    # def estimate(self, input_tensor):
-    #     """
-    #     Calculates the first order estimates of the underlying model parameter given a network input
-    #     :param input_tensor: The input to feed in the network
-    #     :return: The parameter estimates
-    #     """
-
-    #     if self.estimator is None:
-    #         raise ValueError("First order estimator not set! Call <setup_1st_order_estimator> first!")
-
-    #     preds = self.__call__(input_tensor, training=False, layer=self.estimator_layer)
-    #     return self.estimator(preds)
 
     def __call__(self, input_tensor, training=False, numpy=False, layer=None, *args, **kwargs):
         """Calls the network underlying the model

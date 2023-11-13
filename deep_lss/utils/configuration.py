@@ -59,13 +59,24 @@ def get_smoothing_kwargs(msfm_conf, dlss_conf, net_conf, dir_base=None):
     n_side = msfm_conf["analysis"]["n_side"]
     data_vec_pix, _, _, _ = files.load_pixel_file(msfm_conf)
     mask_dict = files.get_tomo_dv_masks(msfm_conf)
-    mask = tf.concat([mask_dict["metacal"], tf.tile(mask_dict["maglim"], (1, 4))], axis=1)
 
     # dlss
+    with_lensing = dlss_conf["dset"]["general"]["with_lensing"]
+    with_clustering = dlss_conf["dset"]["general"]["with_clustering"]
+
+    if with_lensing and with_clustering:
+        mask = tf.concat([mask_dict["metacal"], mask_dict["maglim"]], axis=1)
+    elif with_lensing and not with_clustering:
+        mask = mask_dict["metacal"]
+    elif not with_lensing and with_clustering:
+        mask = mask_dict["maglim"]
+    else:
+        raise ValueError("At least one of with_lensing and with_clustering must be True")
+
     fwhm = []
-    if dlss_conf["dset"]["general"]["with_lensing"]:
+    if with_lensing:
         fwhm += dlss_conf["scale_cuts"]["lensing"]["theta_fwhm"]
-    if dlss_conf["dset"]["general"]["with_clustering"]:
+    if with_clustering:
         fwhm += dlss_conf["scale_cuts"]["clustering"]["theta_fwhm"]
 
     arcmin = dlss_conf["scale_cuts"]["arcmin"]

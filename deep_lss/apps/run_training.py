@@ -79,7 +79,7 @@ def setup():
     parser.add_argument(
         "--net_config",
         type=str,
-        default="config/rsnet_vanilla.yaml",
+        default="config/resnet_vanilla.yaml",
         help=(
             "configuration .yaml file of the model to be trained. None can only be provided if there's a config in"
             " the dir_model and restore_checkpoint is true."
@@ -147,9 +147,10 @@ def training():
 
     args = setup()
 
-    # hardware
+    # hardware and distribution
     _, n_gpus = distribute.check_devices()
     total_gpu_mem = GPUtil.getGPUs()[0].memoryTotal * 1000
+    strategy = distribute.get_strategy(not args.local)
 
     # initialize a fresh model
     if not args.restore_checkpoint:
@@ -229,7 +230,6 @@ def training():
 
     smoothing_kwargs = configuration.get_smoothing_kwargs(msfm_conf, dlss_conf, net_conf, dir_base=args.dir_base)
 
-    strategy = distribute.get_strategy(not args.local)
     LOGGER.info(f"Using global batch size {distribute.get_global_batch_size(strategy, local_batch_size)}")
 
     fiducial_pipeline = FiducialPipeline(
@@ -269,6 +269,7 @@ def training():
             checkpoint_dir=checkpoint_dir,
             summary_dir=summary_dir,
             restore_checkpoint=args.restore_checkpoint,
+            strategy=strategy,
         )
 
     # set up the training loss
@@ -277,7 +278,6 @@ def training():
         local_batch_size,
         perts,
         n_channels=n_z_bins,
-        strategy=strategy,
         **dlss_conf["delta_loss"],
     )
 
@@ -304,14 +304,13 @@ def training():
 
             # evaluate
             if (eval_every is not None) and (step % eval_every == 0):
-                train_step = strategy.gather(model.train_step, axis=0)[0].numpy()
+                train_step = model.get_step()
                 LOGGER.info(f"Evaluating the model after a total of {train_step} training steps")
 
                 # fiducial training
                 if args.evaluate_training_set:
                     eval.evaluate_fiducial(
                         model=model,
-                        strategy=strategy,
                         tfr_pattern=args.fidu_train_tfr_pattern,
                         msfm_conf=msfm_conf,
                         dlss_conf=dlss_conf,
@@ -319,14 +318,14 @@ def training():
                         dir_out=dir_out,
                         file_label=train_step,
                         training_set=True,
-                        save_second_to_last_layer=True,
                     )
+                else:
+                    LOGGER.warning(f"Skipping evaluation of the fiducial training set")
 
                 # fiducial validation
                 if args.fidu_vali_tfr_pattern is not None:
                     eval.evaluate_fiducial(
                         model=model,
-                        strategy=strategy,
                         tfr_pattern=args.fidu_vali_tfr_pattern,
                         msfm_conf=msfm_conf,
                         dlss_conf=dlss_conf,
@@ -334,7 +333,6 @@ def training():
                         dir_out=dir_out,
                         file_label=train_step,
                         training_set=False,
-                        save_second_to_last_layer=True,
                     )
                 else:
                     LOGGER.warning(f"Skipping evaluation of the fiducial validation set")
@@ -343,17 +341,15 @@ def training():
                 if args.grid_vali_tfr_pattern is not None:
                     eval.evaluate_grid(
                         model=model,
-                        strategy=strategy,
                         tfr_pattern=args.grid_vali_tfr_pattern,
                         msfm_conf=msfm_conf,
                         dlss_conf=dlss_conf,
                         net_conf=net_conf,
                         dir_out=dir_out,
                         file_label=train_step,
-                        save_second_to_last_layer=True,
                     )
                 else:
-                    LOGGER.warning(f"Skipping evaluation of the fiducial validation set")
+                    LOGGER.warning(f"Skipping evaluation of the grid validation set")
 
             # profile
             if args.profile and step == 200:
@@ -392,6 +388,8 @@ def training():
         LOGGER.info(f"A final checkpoint already exists")
     else:
         LOGGER.info(f"No checkpoint has been saved")
+
+    LOGGER.info(f"Script completed successfully")
 
 
 if __name__ == "__main__":

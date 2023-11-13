@@ -1,8 +1,8 @@
 #!/bin/bash
 #SBATCH --account=des_g
 #SBATCH --constraint=gpu
-#SBATCH --qos=regular
-#SBATCH --time=01:00:00
+#SBATCH --qos=debug
+#SBATCH --time=00:15:00
 #SBATCH --nodes=1
 #SBATCH --gpus-per-node=4
 #SBATCH --ntasks-per-node=4
@@ -19,9 +19,12 @@
 export SLURM_CPU_BIND="cores"
 
 srun python ../../deep_lss/apps/run_training.py \
-    --fidu_tfr_pattern="/pscratch/sd/a/athomsen/DESY3/v3/fiducial/DESy3_fiducial_???.tfrecord" \
-    --fidu_vali_tfr_pattern="/pscratch/sd/a/athomsen/DESY3/v3/fiducial/validation/DESy3_fiducial_???.tfrecord" \
-    --grid_vali_tfr_pattern="/pscratch/sd/a/athomsen/DESY3/v3/grid/DESy3_grid_???.tfrecord" \
-    --dir_base="/pscratch/sd/a/athomsen/run_files/v3/multi_worker" \
-    --dlss_config="configs/probe_combination/dlss_config.yaml" \
-    --net_config="configs/probe_combination/resnet_small.yaml"
+    --fidu_train_tfr_pattern="/pscratch/sd/a/athomsen/DESY3/v5/linear_bias/tfrecords/fiducial/DESy3_fiducial_???.tfrecord" \
+    --fidu_vali_tfr_pattern="/pscratch/sd/a/athomsen/DESY3/v5/linear_bias/tfrecords/fiducial/validation/DESy3_fiducial_???.tfrecord" \
+    --grid_vali_tfr_pattern="/pscratch/sd/a/athomsen/DESY3/v5/linear_bias/tfrecords/grid/DESy3_grid_???.tfrecord" \
+    --dir_base="/pscratch/sd/a/athomsen/run_files/v5/multi_worker" \
+    --dlss_config="configs/v5/clustering_only/linear_bias/dlss_config.yaml" \
+    --net_config="configs/v5/clustering_only/resnet_debug.yaml" \
+    --msfm_config="/global/homes/a/athomsen/multiprobe-simulation-forward-model/configs/config.yaml"
+# --dir_model="2023-11-13_02-39-14_resnet_vanilla" \
+# --restore_checkpoint
