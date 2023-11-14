@@ -73,34 +73,39 @@ def get_smoothing_kwargs(msfm_conf, dlss_conf, net_conf, dir_base=None):
     else:
         raise ValueError("At least one of with_lensing and with_clustering must be True")
 
-    fwhm = []
-    if with_lensing:
-        fwhm += dlss_conf["scale_cuts"]["lensing"]["theta_fwhm"]
-    if with_clustering:
-        fwhm += dlss_conf["scale_cuts"]["clustering"]["theta_fwhm"]
+    try:
+        fwhm = []
+        if with_lensing:
+            fwhm += dlss_conf["scale_cuts"]["lensing"]["theta_fwhm"]
+        if with_clustering:
+            fwhm += dlss_conf["scale_cuts"]["clustering"]["theta_fwhm"]
 
-    arcmin = dlss_conf["scale_cuts"]["arcmin"]
-    n_sigma_support = dlss_conf["scale_cuts"]["n_sigma_support"]
+        arcmin = dlss_conf["scale_cuts"]["arcmin"]
+        n_sigma_support = dlss_conf["scale_cuts"]["n_sigma_support"]
 
-    params = dlss_conf["dset"]["training"]["params"]
-    n_params = len(params)
+        params = dlss_conf["dset"]["training"]["params"]
+        n_params = len(params)
 
-    # net
-    local_batch_size = net_conf["dset"]["training"]["local_batch_size"]
-    local_delta_loss_batch_size = local_batch_size * (2 * n_params + 1)
+        # net
+        local_batch_size = net_conf["dset"]["training"]["local_batch_size"]
+        local_delta_loss_batch_size = local_batch_size * (2 * n_params + 1)
 
-    smoothing_kwargs = {
-        "nside": n_side,
-        "indices": data_vec_pix,
-        "nest": True,
-        "mask": mask,
-        "fwhm": fwhm,
-        "arcmin": arcmin,
-        "n_sigma_support": n_sigma_support,
-        "max_batch_size": local_delta_loss_batch_size,
-    }
+        smoothing_kwargs = {
+            "nside": n_side,
+            "indices": data_vec_pix,
+            "nest": True,
+            "mask": mask,
+            "fwhm": fwhm,
+            "arcmin": arcmin,
+            "n_sigma_support": n_sigma_support,
+            "max_batch_size": local_delta_loss_batch_size,
+        }
 
-    if dir_base is not None:
-        smoothing_kwargs["data_path"] = os.path.join(dir_base, "smoothing")
+        if dir_base is not None:
+            smoothing_kwargs["data_path"] = os.path.join(dir_base, "smoothing")
+
+    except (TypeError, KeyError):
+        LOGGER.warning("Could not build smoothing_kwargs")
+        smoothing_kwargs = None
 
     return smoothing_kwargs

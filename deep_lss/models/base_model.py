@@ -249,10 +249,8 @@ class BaseModel(object):
             task_id = self.strategy.cluster_resolver.task_id
             cluster_spec = self.strategy.cluster_resolver.cluster_spec()
 
-            return (
-                task_type is None
-                or task_type == "chief"
-                or (task_type == "worker" and task_id == 0 and "chief" not in cluster_spec.as_dict())
+            return task_type == "chief" or (
+                task_type == "worker" and task_id == 0 and "chief" not in cluster_spec.as_dict()
             )
 
         else:
