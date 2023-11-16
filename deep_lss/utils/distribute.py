@@ -65,12 +65,6 @@ def get_strategy(distributed):
             n_tasks_per_node = int(os.environ["SLURM_NTASKS_PER_NODE"])
             # always set to 1
             gpus_per_task = int(os.environ["SLURM_GPUS_PER_TASK"])
-            # in [0, n_nodes)
-            node_id = int(os.environ["SLURM_NODEID"])
-            # in [0, n_tasks_per_node)
-            task_id = int(os.environ["SLURM_LOCALID"])
-            # has the format 'nid[001013,001016]' for example, where $HOSTNAME = nid001013 for the first node
-            nodelist = os.environ["SLURM_NODELIST"]
 
         except KeyError:
             LOGGER.warning(
@@ -82,35 +76,26 @@ def get_strategy(distributed):
         # MultiWorkerMirroredStrategy on Perlmutter where every node has 4 GPUs. The .sh slurm submission script must
         # include --nodes=n --gpus-per-node=4 --ntasks-per-node=4 --gpus-per-task=1 --cpus-per-task=32
         if n_tasks_per_node == 4 and gpus_per_task == 1:
-            assert n_tasks < 100, f"n_tasks {n_tasks} is too large for the port numbers"
-
-            # \d+ matches one or more digits
-            pattern = re.compile(r"\d+")
-            node_names = pattern.findall(nodelist)
-            # repeat every list element n_tasks_per_node times
-            node_names = [name for name in node_names for _ in range(n_tasks_per_node)]
-            # generate unique addresses for each task (the format 123{i:02} is arbitrary)
-            worker_ports = [f"123{i:02}" for i in range(n_tasks)]
-            # combine into a list of the form 'nid001234:12345'
-            workers = [f"nid{name}:{port}" for name, port in zip(node_names, worker_ports)]
-
-            # in [0, n_tasks)
-            index = n_tasks_per_node * node_id + task_id
-
-            os.environ["TF_CONFIG"] = json.dumps(
-                {
-                    "cluster": {"worker": workers},
-                    "task": {"type": "worker", "index": index},
-                }
-            )
-            LOGGER.info(f"TF_CONFIG = " + os.environ["TF_CONFIG"])
-
             communication_options = tf.distribute.experimental.CommunicationOptions(
+                # RING would be possible instead, but NCCL is faster
                 implementation=tf.distribute.experimental.CommunicationImplementation.NCCL
-                # implementation=tf.distribute.experimental.CommunicationImplementation.RING
             )
 
-            strategy = tf.distribute.MultiWorkerMirroredStrategy(communication_options=communication_options)
+            cluster_resolver = tf.distribute.cluster_resolver.SlurmClusterResolver(
+                port_base=24816, gpus_per_node=4, gpus_per_task=1, tasks_per_node=4
+            )
+
+            tf_config = {
+                "cluster": cluster_resolver.cluster_spec().as_dict()["worker"],
+                "task": {"type": cluster_resolver.task_type, "index": cluster_resolver.task_id},
+            }
+            LOGGER.info(f"tf_config = {tf_config}")
+            os.environ["TF_CONFIG"] = json.dumps(tf_config)
+
+            strategy = tf.distribute.MultiWorkerMirroredStrategy(
+                cluster_resolver=cluster_resolver,
+                communication_options=communication_options,
+            )
             LOGGER.warning(f"Training is distributed, using the MultiWorkerMirroredStrategy with {n_tasks} workers")
 
         # MirroredStrategy
@@ -179,3 +164,56 @@ def get_global_batch_size(strategy, local_batch_size):
     LOGGER.info(f"Using the global batch size {global_batch_size}")
 
     return global_batch_size
+
+
+def get_manual_tf_config(port_base=12345):
+    """Manually constructs a tf_config dictionary for the MultiWorkerMirroredStrategy from the slurm environmental
+    variables. This is obsolete since tf.distribute.cluster_resolver.SlurmClusterResolver can be used instead.
+
+    Args:
+        port_base (int, optional): The first port number to start with for processes on a node. Defaults to 12345.
+
+    Raises:
+        KeyError: If one of the necessary slurm environmental variables is not set.
+
+    Returns:
+        dict: The tf_config dictionary.
+    """
+    try:
+        # equal to n_nodes * n_tasks_per_node
+        n_tasks = int(os.environ["SLURM_NTASKS"])
+        # equal to n_gpus_per_node
+        n_tasks_per_node = int(os.environ["SLURM_NTASKS_PER_NODE"])
+        # in [0, n_nodes)
+        node_id = int(os.environ["SLURM_NODEID"])
+        # in [0, n_tasks_per_node)
+        task_id = int(os.environ["SLURM_LOCALID"])
+        # has the format 'nid[001013,001016]' for example, where $HOSTNAME = nid001013 for the first node
+        nodelist = os.environ["SLURM_NODELIST"]
+    except KeyError:
+        LOGGER.warning(
+            f"One of the slurm environmental variables couldn't be retrieved, can't use the MultiWorkerMirroredStrategy "
+            f"like this"
+        )
+
+        raise KeyError
+
+    # \d+ matches one or more digits
+    pattern = re.compile(r"\d+")
+    node_names = pattern.findall(nodelist)
+    # repeat every list element n_tasks_per_node times
+    node_names = [name for name in node_names for _ in range(n_tasks_per_node)]
+    # generate unique addresses for each task (the format 123{i:02} is arbitrary)
+    worker_ports = [str(port_base + i) for i in range(n_tasks)]
+    # combine into a list of the form 'nid001234:12345'
+    workers = [f"nid{name}:{port}" for name, port in zip(node_names, worker_ports)]
+
+    # in [0, n_tasks)
+    index = n_tasks_per_node * node_id + task_id
+
+    tf_config = {
+        "cluster": {"worker": workers},
+        "task": {"type": "worker", "index": index},
+    }
+
+    return tf_config
