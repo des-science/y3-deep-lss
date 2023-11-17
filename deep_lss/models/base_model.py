@@ -407,14 +407,15 @@ class BaseModel(object):
                         tf.summary.scalar("l2_loss", l2_loss)
                 loss = loss + l2_norm_weight * l2_loss
 
-        # get the local gradients
+        # NOTE distributed delta loss, get the global gradients on the level of the tape for Horovod
+        if isinstance(self.strategy, HorovodStrategy):
+            tape = hvd.DistributedGradientTape(tape)
+
         gradients = tape.gradient(loss, trainable_variables)
 
-        # NOTE distributed, get the global gradients
+        # NOTE distribute delta loss, get global gradients on the level of the gradients for the builtin strategies
         if isinstance(self.strategy, tf.distribute.Strategy):
             gradients = tf.distribute.get_replica_context().all_reduce("MEAN", gradients)
-        elif isinstance(self.strategy, HorovodStrategy):
-            tape = hvd.DistributedGradientTape(tape)
 
         # clip the gradients
         if clip_by_value is not None:
