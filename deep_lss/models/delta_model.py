@@ -17,6 +17,7 @@ from deepsphere import HealpyGCNN
 
 from msfm.utils import logger
 from deep_lss.utils import delta_loss
+from deep_lss.utils.distribute import HorovodStrategy
 from deep_lss.models.base_model import BaseModel
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
@@ -70,7 +71,8 @@ class DeltaLossModel(BaseModel):
             restore_checkpoint (bool, optional): Whether to restore the network from a checkpoint, or initialize it.
                 Defaults to False.
             init_step (int, optional): Initial step. Defaults to 0.
-            strategy (tf.distribute.Strategy): The distribution strategy the model was created within
+            strategy (Union[tf.distribute.Strategy, deep_lss.utils.distribute.HorovodStrategy], optional):
+                The distribution strategy the model was created within. Defaults to None, then training is local.
         """
 
         # get the network
@@ -249,7 +251,7 @@ class DeltaLossModel(BaseModel):
                 in_shape = (n_batch, n_input, n_channels)
 
         # non distributed
-        if self.strategy is None:
+        if (self.strategy is None) or isinstance(self.strategy, HorovodStrategy):
 
             @tf.function(input_signature=[tf.TensorSpec(shape=in_shape, dtype=current_float)], jit_compile=False)
             def delta_train_step(input_batch):

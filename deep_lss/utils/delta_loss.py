@@ -12,6 +12,9 @@ the main difference is that here, the distribution happens via tf.distribute.Str
 
 import numpy as np
 import tensorflow as tf
+import horovod.tensorflow as hvd
+
+from deep_lss.utils.distribute import HorovodStrategy
 
 from msfm.utils import logger
 
@@ -67,7 +70,8 @@ def get_jac_and_cov_matrix(
         summary_writer (tf.summary.SummaryWriter, optional): Used to write tensorboard summaries. Defaults to None.
         training (bool, optional): Wheter the network is currently training. If False, no summary is written even if a
             writer is provided. Defaults to False.
-        strategy (tf.distribute.Strategy): The distribution strategy the model was created within
+            strategy (Union[tf.distribute.Strategy, deep_lss.utils.distribute.HorovodStrategy], optional):
+                The distribution strategy the model was created within. Defaults to None, then training is local.
 
     Returns:
         tf.tensor: Covariances and Jacobians, these have shape (n_output/n_params, n_output, n_output), where n_output
@@ -94,13 +98,14 @@ def get_jac_and_cov_matrix(
     if strategy is None:
         # minus one because this is the sample covariance
         cov_normalization = n_same - 1.0
-
     # NOTE distributed
     elif isinstance(strategy, tf.distribute.Strategy):
         # gather from the replicas to get a more stable estimate of the covariance and jacobian
         splits = [tf.distribute.get_replica_context().all_gather(split, axis=1) for split in splits]
         cov_normalization = strategy.num_replicas_in_sync * n_same - 1.0
-
+    elif isinstance(strategy, HorovodStrategy):
+        splits = [tf.transpose(hvd.allgather(tf.transpose(split, perm=[1, 0, 2])), perm=[1, 0, 2]) for split in splits]
+        cov_normalization = strategy.num_replicas_in_sync * n_same - 1.0
     else:
         raise ValueError(f"Invalid strategy {strategy} was passed")
 
@@ -488,7 +493,10 @@ def delta_loss(
         diff_loss = tf.scalar_mul(force_params_weight, diff_loss)
 
         # NOTE distributed
-        diff_loss = tf.distribute.get_replica_context().all_reduce("MEAN", diff_loss)
+        if isinstance(strategy, tf.distribute.Strategy):
+            diff_loss = tf.distribute.get_replica_context().all_reduce("MEAN", diff_loss)
+        elif isinstance(strategy, HorovodStrategy):
+            diff_loss = hvd.allreduce(diff_loss)
 
         # add to loss
         loss = tf.add(loss, diff_loss)

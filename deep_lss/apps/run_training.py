@@ -45,6 +45,12 @@ def setup():
         help="logging level",
     )
     parser.add_argument(
+        "--dist_strategy",
+        choices=[None, "mirrored", "multi_worker_mirrored", "horovod"],
+        default=None,
+        help="distribution strategy, use None to run locally",
+    )
+    parser.add_argument(
         "--fidu_train_tfr_pattern",
         type=str,
         required=True,
@@ -112,7 +118,6 @@ def setup():
         ),
     )
     parser.add_argument("--evaluate_training_set", action="store_true", help="evaluate the training set")
-    parser.add_argument("--local", action="store_true", help="don't distribute the training")
     parser.add_argument("--debug", action="store_true", help="activate debug mode")
     parser.add_argument("--profile", action="store_true", help="run the profiler")
 
@@ -150,7 +155,7 @@ def training():
     # hardware and distribution
     _, n_gpus = distribute.check_devices()
     total_gpu_mem = GPUtil.getGPUs()[0].memoryTotal * 1000
-    strategy = distribute.get_strategy(not args.local)
+    strategy = distribute.get_strategy(args.dist_strategy)
 
     # initialize a fresh model
     if not args.restore_checkpoint:
@@ -230,7 +235,7 @@ def training():
 
     smoothing_kwargs = configuration.get_smoothing_kwargs(msfm_conf, dlss_conf, net_conf, dir_base=args.dir_base)
 
-    LOGGER.info(f"Using global batch size {distribute.get_global_batch_size(strategy, local_batch_size)}")
+    _ = distribute.get_global_batch_size(strategy, local_batch_size)
 
     fiducial_pipeline = FiducialPipeline(
         conf=msfm_conf, **{**dlss_conf["dset"]["general"], **dlss_conf["dset"]["training"]}
@@ -388,6 +393,8 @@ def training():
         LOGGER.info(f"A final checkpoint already exists")
     else:
         LOGGER.info(f"No checkpoint has been saved")
+
+    model.delete_temp_summaries()
 
     LOGGER.info(f"Script completed successfully")
 

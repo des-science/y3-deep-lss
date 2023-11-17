@@ -12,11 +12,11 @@ checkpointing is handled differently.
 """
 
 import tensorflow as tf
+import horovod.tensorflow as hvd
 import os, warnings
 
+from deep_lss.utils.distribute import HorovodStrategy
 from msfm.utils import logger
-
-# from deep_lss.utils.estimators import estimator_1st_order
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 warnings.filterwarnings("ignore", category=RuntimeWarning)
@@ -55,7 +55,8 @@ class BaseModel(object):
             max_checkpoints (int, optional): The maximum number of checkpoints to keep. Older ones are automatically
                 deleted by the CheckpointManager.
             init_step (int, optional): Initial step. Defaults to 0.
-            strategy (tf.distribute.Strategy): The tensorflow distribution strategy the model was created within.
+            strategy (Union[tf.distribute.Strategy, deep_lss.utils.distribute.HorovodStrategy], optional):
+                The distribution strategy the model was created within. Defaults to None, then training is local.
         """
 
         # get the network
@@ -88,22 +89,25 @@ class BaseModel(object):
         if self.checkpoint_dir is not None:
             if isinstance(self.strategy, tf.distribute.MultiWorkerMirroredStrategy):
                 if not self.is_chief():
-                    # set up temporary directories for the non-chief workers
-                    self.checkpoint_dir = tf.io.gfile.join(
-                        self.checkpoint_dir, "temp_worker_" + str(self.strategy.cluster_resolver.task_id)
-                    )
-                    tf.io.gfile.makedirs(self.checkpoint_dir)
+                    # # set up temporary directories for the non-chief workers
+                    # self.checkpoint_dir = tf.io.gfile.join(
+                    #     self.checkpoint_dir, "temp_worker_" + str(self.strategy.cluster_resolver.task_id)
+                    # )
+                    # tf.io.gfile.makedirs(self.checkpoint_dir)
+
+                    self.checkpoint_dir = self.create_temp_dir(self.checkpoint_dir)
 
                     # copy over the checkpoints from the chief to the temporary directories of the non-chief workers
                     chief_dir = tf.io.gfile.join(self.checkpoint_dir, "..")
+                    self.copy_chief_to_temp_dir(chief_dir, self.checkpoint_dir)
 
-                    chief_files = tf.io.gfile.listdir(chief_dir)
-                    for chief_file in chief_files:
-                        full_chief_file = tf.io.gfile.join(chief_dir, chief_file)
+                    # chief_files = tf.io.gfile.listdir(chief_dir)
+                    # for chief_file in chief_files:
+                    #     full_chief_file = tf.io.gfile.join(chief_dir, chief_file)
 
-                        if os.path.isfile(full_chief_file):
-                            full_temp_file = tf.io.gfile.join(self.checkpoint_dir, chief_file)
-                            tf.io.gfile.copy(full_chief_file, full_temp_file, overwrite=True)
+                    #     if os.path.isfile(full_chief_file):
+                    #         full_temp_file = tf.io.gfile.join(self.checkpoint_dir, chief_file)
+                    #         tf.io.gfile.copy(full_chief_file, full_temp_file, overwrite=True)
 
                     LOGGER.info(
                         f"Copied over the chief's checkpoints to the temporary directory {self.checkpoint_dir}"
@@ -139,8 +143,21 @@ class BaseModel(object):
 
         # set up summary writer
         if self.summary_dir is not None:
-            tf.io.gfile.makedirs(self.summary_dir)
-            self.summary_writer = tf.summary.create_file_writer(summary_dir)
+            if isinstance(self.strategy, HorovodStrategy) and not self.is_chief():
+                self.summary_dir = self.create_temp_dir(self.summary_dir)
+            else:
+                tf.io.gfile.makedirs(self.summary_dir)
+
+            self.summary_writer = tf.summary.create_file_writer(self.summary_dir)
+
+            # if self.is_chief():
+            #     tf.io.gfile.makedirs(self.summary_dir)
+            # else:
+            #     self.summary_dir = self.create_temp_dir(self.summary_dir)
+
+            # # TODO make compatible with horovod (multiple summary writers)
+            # tf.io.gfile.makedirs(self.summary_dir)
+            # self.summary_writer = tf.summary.create_file_writer(summary_dir)
         else:
             self.summary_writer = None
 
@@ -195,7 +212,7 @@ class BaseModel(object):
         LOGGER.info(f"Successfully saved the model in {self.checkpoint_manager.directory}")
 
         # clean up the temoporary checkpoints of the non-chief workers
-        if isinstance(self.strategy, tf.distribute.MultiWorkerMirroredStrategy):
+        if isinstance(self.strategy, (tf.distribute.MultiWorkerMirroredStrategy, HorovodStrategy)):
             if not self.is_chief():
                 tf.io.gfile.rmtree(self.checkpoint_dir)
 
@@ -233,6 +250,37 @@ class BaseModel(object):
         """
         self.network.summary(**kwargs)
 
+    def create_temp_dir(self, chief_dir):
+        assert not self.is_chief(), f"Only the non-chief workers should create temporary directories"
+
+        assert isinstance(
+            self.strategy, (tf.distribute.MultiWorkerMirroredStrategy, HorovodStrategy)
+        ), f"Invalid strategy {self.strategy} was passed, should be MultiWorkerMirroredStrategy or HorovodStrategy"
+
+        # set up temporary directories for the non-chief workers
+        temp_dir = tf.io.gfile.join(chief_dir, "temp_worker_" + str(self.strategy.cluster_resolver.task_id))
+        tf.io.gfile.makedirs(temp_dir)
+
+        return temp_dir
+
+    def copy_chief_to_temp_dir(self, chief_dir, temp_dir):
+        # copy over the checkpoints from the chief to the temporary directories of the non-chief workers
+        chief_files = tf.io.gfile.listdir(chief_dir)
+        for chief_file in chief_files:
+            full_chief_file = tf.io.gfile.join(chief_dir, chief_file)
+
+            if os.path.isfile(full_chief_file):
+                full_temp_file = tf.io.gfile.join(temp_dir, chief_file)
+                tf.io.gfile.copy(full_chief_file, full_temp_file, overwrite=True)
+
+    def delete_temp_dir(self, temp_dir):
+        pass
+
+    def delete_temp_summaries(self):
+        if isinstance(self.strategy, HorovodStrategy) and not self.is_chief():
+            tf.io.gfile.rmtree(self.summary_dir)
+            LOGGER.info(f"Deleted the temporary summary directory {self.summary_dir}")
+
     def is_chief(self):
         """Within the tf.distribute.MultiWorkerStrategy, whether the worker is the chief or not. Adapted from
         https://www.tensorflow.org/tutorials/distribute/multi_worker_with_ctl#checkpoint_saving_and_restoring
@@ -253,11 +301,21 @@ class BaseModel(object):
                 task_type == "worker" and task_id == 0 and "chief" not in cluster_spec.as_dict()
             )
 
+        elif isinstance(self.strategy, HorovodStrategy):
+            return hvd.rank() == 0
+
         else:
             raise AttributeError(
                 f"The concept of chief only makes sense for tf.distribute.MultiWorkerMirroredStrategy, but this model "
                 f"is set up with {self.strategy}"
             )
+
+    def horovod_broadcast_variables(self):
+        """Broadcast the network and optimizer variables from the chief to all other workers. This is only relevant
+        for Horovod, as the builtin strategies do this under the hood.
+        """
+        hvd.broadcast_variables(self.network.weights, root_rank=0)
+        hvd.broadcast_variables(self.optimizer.variables(), root_rank=0)
 
     def train_step(
         self,
@@ -353,8 +411,10 @@ class BaseModel(object):
         gradients = tape.gradient(loss, trainable_variables)
 
         # NOTE distributed, get the global gradients
-        if self.strategy is not None:
+        if isinstance(self.strategy, tf.distribute.Strategy):
             gradients = tf.distribute.get_replica_context().all_reduce("MEAN", gradients)
+        elif isinstance(self.strategy, HorovodStrategy):
+            tape = hvd.DistributedGradientTape(tape)
 
         # clip the gradients
         if clip_by_value is not None:
@@ -389,7 +449,8 @@ class BaseModel(object):
         l2_norm_weight=None,
     ):
         """A distributed train step to be used in conjunction with a tf.distribute.Strategy like in
-        https://www.tensorflow.org/tutorials/distribute/custom_training
+        https://www.tensorflow.org/tutorials/distribute/custom_training.
+        Note that this method is not needed when training is distributed with Horovod.
 
         The method evaluates the network and performs a single gadient decent step. Note it should be wrapped in a
         tf.function. If multiple clippings are requested, the order will be:
