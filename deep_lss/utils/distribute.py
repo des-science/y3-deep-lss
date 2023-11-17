@@ -77,20 +77,28 @@ def get_strategy(distributed):
         # include --nodes=n --gpus-per-node=4 --ntasks-per-node=4 --gpus-per-task=1 --cpus-per-task=32
         if n_tasks_per_node == 4 and gpus_per_task == 1:
             communication_options = tf.distribute.experimental.CommunicationOptions(
-                # RING would be possible instead, but NCCL is faster
+                # RING would also be possible, but NCCL is faster
                 implementation=tf.distribute.experimental.CommunicationImplementation.NCCL
             )
 
             cluster_resolver = tf.distribute.cluster_resolver.SlurmClusterResolver(
-                port_base=24816, gpus_per_node=4, gpus_per_task=1, tasks_per_node=4
+                port_base=8888, gpus_per_node=4, gpus_per_task=1, tasks_per_node=4
             )
 
-            tf_config = {
-                "cluster": cluster_resolver.cluster_spec().as_dict()["worker"],
-                "task": {"type": cluster_resolver.task_type, "index": cluster_resolver.task_id},
-            }
-            LOGGER.info(f"tf_config = {tf_config}")
+            # NOTE The following commented code doesn't work since due to a suspected bug, when --nodes>1, the leading
+            # zeros in the node names are removed, e.g. for two nodes on Perlmutter:
+            # ['nid1444:8888', 'nid1444:8889', 'nid1444:8890', 'nid1444:8891', 'nid1445:8892', 'nid1445:8893', 'nid1445:8894', 'nid1445:8895']
+            # instead of
+            # ['nid001444:8888', 'nid001444:8889', 'nid001444:8890', 'nid001444:8891', 'nid001445:8892', 'nid001445:8893', 'nid001445:8894', 'nid001445:8895']
+            # tf_config = {
+            #     "cluster": {"worker": cluster_resolver.cluster_spec().as_dict()["worker"]},
+            #     "task": {"type": cluster_resolver.task_type, "index": cluster_resolver.task_id},
+            # }
+
+            # this function does not remove the leading zeros
+            tf_config = get_manual_tf_config(port_base=8888)
             os.environ["TF_CONFIG"] = json.dumps(tf_config)
+            LOGGER.info(f"tf_config = {tf_config}")
 
             strategy = tf.distribute.MultiWorkerMirroredStrategy(
                 cluster_resolver=cluster_resolver,

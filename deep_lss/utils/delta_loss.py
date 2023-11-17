@@ -495,6 +495,7 @@ def delta_loss(
 
     return loss
 
+
 def simplified_delta_loss(
     predictions,
     n_params,
@@ -732,7 +733,6 @@ def simplified_delta_loss(
     #     # add to loss
     #     loss = tf.add(loss, diff_loss)
 
-
     # tf.print("pre preds", replica_id, predictions)
     # tf.print("post preds", replica_id, predictions)
 
@@ -743,7 +743,6 @@ def simplified_delta_loss(
     # loss = tf.distribute.get_replica_context().all_reduce("MEAN", loss)
 
     # loss = tf.distribute.get_replica_context().all_reduce("MEAN", predictions)
-
 
     tf.print("simplified_loss", replica_id, loss)
     return loss
