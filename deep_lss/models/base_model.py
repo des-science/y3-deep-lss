@@ -87,32 +87,18 @@ class BaseModel(object):
 
         # set up the checkpointing
         if self.checkpoint_dir is not None:
-            if isinstance(self.strategy, tf.distribute.MultiWorkerMirroredStrategy):
+            if isinstance(self.strategy, (tf.distribute.MultiWorkerMirroredStrategy, HorovodStrategy)):
                 if not self.is_chief():
-                    # # set up temporary directories for the non-chief workers
-                    # self.checkpoint_dir = tf.io.gfile.join(
-                    #     self.checkpoint_dir, "temp_worker_" + str(self.strategy.cluster_resolver.task_id)
-                    # )
-                    # tf.io.gfile.makedirs(self.checkpoint_dir)
-
                     self.checkpoint_dir = self.create_temp_dir(self.checkpoint_dir)
 
-                    # copy over the checkpoints from the chief to the temporary directories of the non-chief workers
+                    # copy over the existing checkpoints from the chief to the temporary directories
                     chief_dir = tf.io.gfile.join(self.checkpoint_dir, "..")
                     self.copy_chief_to_temp_dir(chief_dir, self.checkpoint_dir)
-
-                    # chief_files = tf.io.gfile.listdir(chief_dir)
-                    # for chief_file in chief_files:
-                    #     full_chief_file = tf.io.gfile.join(chief_dir, chief_file)
-
-                    #     if os.path.isfile(full_chief_file):
-                    #         full_temp_file = tf.io.gfile.join(self.checkpoint_dir, chief_file)
-                    #         tf.io.gfile.copy(full_chief_file, full_temp_file, overwrite=True)
-
                     LOGGER.info(
                         f"Copied over the chief's checkpoints to the temporary directory {self.checkpoint_dir}"
                     )
 
+            # always create the checkpoint directory
             tf.io.gfile.makedirs(self.checkpoint_dir)
 
             self.checkpoint = tf.train.Checkpoint(

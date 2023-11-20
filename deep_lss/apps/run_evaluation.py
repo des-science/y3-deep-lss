@@ -37,6 +37,12 @@ def setup():
         help="logging level",
     )
     parser.add_argument(
+        "--dist_strategy",
+        choices=[None, "mirrored", "multi_worker_mirrored", "horovod"],
+        default=None,
+        help="distribution strategy, use None to run locally",
+    )
+    parser.add_argument(
         "--fidu_train_tfr_pattern",
         type=str,
         default=None,
@@ -57,7 +63,6 @@ def setup():
     parser.add_argument(
         "--dir_model", type=str, required=True, help="dir where the model checkpoints to be loaded are saved."
     )
-    parser.add_argument("--local", action="store_true", help="distribute the training")
     parser.add_argument("--debug", action="store_true", help="activate debug mode")
     parser.add_argument("--file_label", type=str, default=None, help="A suffix that is appended to the files")
 
@@ -85,7 +90,7 @@ if __name__ == "__main__":
     LOGGER.timer.start("main")
 
     _, _ = distribute.check_devices()
-    strategy = distribute.get_strategy(not args.local)
+    strategy = distribute.get_strategy(args.dist_strategy)
 
     # load the configs
     with open(os.path.join(args.dir_model, "configs.yaml"), "r") as f:
@@ -113,7 +118,6 @@ if __name__ == "__main__":
 
     # set up directories
     checkpoint_dir = os.path.abspath(os.path.join(args.dir_model, "checkpoint"))
-
 
     # create all of the variables within the strategy's scope, such that they are mirrored
     with strategy.scope():

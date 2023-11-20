@@ -54,6 +54,7 @@ class HorovodStrategy:
         self.cluster_resolver = HorovodClusterResolver()
 
     def distribute_datasets_from_function(self, dataset_fn):
+        """See https://www.tensorflow.org/tutorials/distribute/input#tfdistributestrategydistribute_datasets_from_function"""
         return dataset_fn(HorovodInputContext())
 
     def scope(self):
@@ -62,6 +63,40 @@ class HorovodStrategy:
         """
 
         return NullContextManager()
+
+    def gather(self, tensor, axis=0):
+        """For compatibility with tf.distribute.Strategy.
+
+        Args:
+            tensor (tf.Tensor): The tensor to gather, where every worker has its own.
+            axis (int, optional): The axis along which to gather. Defaults to 0, which is the only value that is
+                generally allowed with Horovod.
+
+        Returns:
+            tf.Tensor: A tensor of the same type as tensor, concatenated on dimension zero across all processes.
+                The shape is identical to the input shape, except for the first dimension, which may be greater and is
+                the sum of all first dimensions of the tensors in different Horovod processes.
+        """
+
+        # NOTE one could implement the gather along a different axis using transpose twice. But this is only possible
+        # if the number of dimensions of the tensor is known, so should be done outside this class.
+        assert axis == 0, f"Horovod only supports gathering along axis 0, but got {axis}"
+
+        return hvd.allgather(tensor)
+
+    def run(self, fn, args=(), kwargs={}):
+        """For compatibility with tf.distribute.Strategy.
+
+        Args:
+            fn (function): The function to evaluate on the different workers
+            args (tuple, optional): Ordered arguments. Defaults to ().
+            kwargs (dict, optional): Keyqord arguments. Defaults to {}.
+
+        Returns:
+            tf.Tensor: The result of fn(*args, **kwargs).
+        """
+        
+        return fn(*args, **kwargs)
 
 
 def setup_horovod():
