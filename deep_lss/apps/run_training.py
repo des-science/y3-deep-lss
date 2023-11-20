@@ -24,6 +24,7 @@ from msfm.utils import logger, input_output, files, parameters
 
 from deep_lss.utils import distribute, eval, configuration
 from deep_lss.models.delta_model import DeltaLossModel
+from deep_lss.utils.distribute import HorovodStrategy
 from deep_lss.nets import NETWORKS
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
@@ -297,6 +298,11 @@ def training():
             # train step
             dv_batch, _ = next(dist_iter)
             model.delta_train_step(dv_batch)
+
+            # horovod
+            if isinstance(model.strategy, HorovodStrategy) and step == 1:
+                LOGGER.info(f"First step, broadcasting the variables through Horovod")
+                model.horovod_broadcast_variables()
 
             # output
             if (output_every is not None) and (step % output_every == 0):

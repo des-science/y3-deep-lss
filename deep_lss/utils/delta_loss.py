@@ -104,6 +104,7 @@ def get_jac_and_cov_matrix(
         splits = [tf.distribute.get_replica_context().all_gather(split, axis=1) for split in splits]
         cov_normalization = strategy.num_replicas_in_sync * n_same - 1.0
     elif isinstance(strategy, HorovodStrategy):
+        # Horovod allgather is always performed along the first axis, so these transposes are a necesarry workaround
         splits = [tf.transpose(hvd.allgather(tf.transpose(split, perm=[1, 0, 2])), perm=[1, 0, 2]) for split in splits]
         cov_normalization = strategy.num_replicas_in_sync * n_same - 1.0
     else:

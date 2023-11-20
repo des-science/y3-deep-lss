@@ -57,10 +57,10 @@ class HorovodStrategy:
         return dataset_fn(HorovodInputContext())
 
     def scope(self):
-        """Don't do anything. For the builtin strategies, this is important as the trainable variable have to be
+        """Don't do anything. For the builtin strategies, this is important as the trainable variables have to be
         created within the context.
         """
-        
+
         return NullContextManager()
 
 

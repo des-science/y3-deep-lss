@@ -54,8 +54,10 @@ def setup_tf_distribute_multi_worker_mirrored_strategy():
         implementation=tf.distribute.experimental.CommunicationImplementation.NCCL
     )
 
+    port_base = 8888
+
     cluster_resolver = tf.distribute.cluster_resolver.SlurmClusterResolver(
-        port_base=8888, gpus_per_node=4, gpus_per_task=1, tasks_per_node=4
+        port_base=port_base, gpus_per_node=4, gpus_per_task=1, tasks_per_node=4
     )
 
     # NOTE The following commented code doesn't work since due to a suspected bug, when --nodes>1, the leading
@@ -69,7 +71,7 @@ def setup_tf_distribute_multi_worker_mirrored_strategy():
     # }
 
     # this function does not remove the leading zeros
-    tf_config = _get_handcrafted_tf_config(port_base=8888)
+    tf_config = _get_handcrafted_tf_config(port_base=port_base)
     os.environ["TF_CONFIG"] = json.dumps(tf_config)
     LOGGER.info(f"tf_config = {tf_config}")
 
