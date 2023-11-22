@@ -8,7 +8,7 @@ Utils for distributed training with tf.distribute and horovod.
 """
 
 import tensorflow as tf
-import os
+import os, wandb
 
 from deep_lss.utils.distribute import tensorflow, horovod
 
@@ -125,3 +125,27 @@ def get_global_batch_size(strategy, local_batch_size):
     LOGGER.info(f"Using the global batch size {global_batch_size}")
 
     return global_batch_size
+
+
+def get_wandb_group_name(strategy):
+    """Generate a group name that is unique for each run and the same for all replicas in a distributed run.
+
+    Args:
+        strategy (tf.distribute.Strategy): The instance of the strategy.
+
+    Returns:
+        str: The group name to use.
+    """
+    if isinstance(strategy, tf.distribute.MultiWorkerMirroredStrategy):
+        group_name = wandb.util.generate_id()
+        LOGGER.info(f"group = {group_name}")
+    elif isinstance(strategy, horovod.HorovodStrategy):
+        # can't broadcast a tf.string tensor, so generate a number and broadcast that
+        group_name = tf.random.uniform(shape=(), minval=1, maxval=int(1e8), dtype=tf.int32)
+        group_name = strategy.broadcast(group_name, root_rank=0)
+        group_name = str(group_name.numpy())
+        LOGGER.info(f"group = {group_name}")
+    else:
+        group_name = None
+
+    return group_name

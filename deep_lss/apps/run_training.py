@@ -240,17 +240,7 @@ def training():
 
     # weights and biases
     if args.wandb:
-        if isinstance(strategy, tf.distribute.MultiWorkerMirroredStrategy):
-            group_name = wandb.util.generate_id()
-            LOGGER.info(f"group = {group_name}")
-        elif isinstance(strategy, HorovodStrategy):
-            # can't broadcast a tf.string tensor, so generate a number and broadcast that
-            group_name = tf.random.uniform(shape=(), minval=1, maxval=int(1e8), dtype=tf.int32)
-            group_name = strategy.broadcast(group_name, root_rank=0)
-            group_name = str(group_name.numpy())
-            LOGGER.info(f"group = {group_name}")
-        else:
-            group_name = None
+        group_name = distribute.get_wandb_group_name(strategy)
 
         wandb_run = wandb.init(
             project="y3-deep-lss",
@@ -350,9 +340,11 @@ def training():
                 train_step = model.get_step()
                 LOGGER.info(f"Evaluating the model after a total of {train_step} training steps")
 
+                out_file = None
+
                 # fiducial training
                 if args.evaluate_training_set:
-                    eval.evaluate_fiducial(
+                    out_file = eval.evaluate_fiducial(
                         model=model,
                         tfr_pattern=args.fidu_train_tfr_pattern,
                         msfm_conf=msfm_conf,
@@ -361,14 +353,13 @@ def training():
                         dir_out=dir_out,
                         file_label=train_step,
                         training_set=True,
-                        wandb_run=wandb_run,
                     )
                 else:
                     LOGGER.warning(f"Skipping evaluation of the fiducial training set")
 
                 # fiducial validation
                 if args.fidu_vali_tfr_pattern is not None:
-                    eval.evaluate_fiducial(
+                    out_file = eval.evaluate_fiducial(
                         model=model,
                         tfr_pattern=args.fidu_vali_tfr_pattern,
                         msfm_conf=msfm_conf,
@@ -377,14 +368,13 @@ def training():
                         dir_out=dir_out,
                         file_label=train_step,
                         training_set=False,
-                        wandb_run=wandb_run,
                     )
                 else:
                     LOGGER.warning(f"Skipping evaluation of the fiducial validation set")
 
                 # grid validation
                 if args.grid_vali_tfr_pattern is not None:
-                    eval.evaluate_grid(
+                    out_file = eval.evaluate_grid(
                         model=model,
                         tfr_pattern=args.grid_vali_tfr_pattern,
                         msfm_conf=msfm_conf,
@@ -392,10 +382,16 @@ def training():
                         net_conf=net_conf,
                         dir_out=dir_out,
                         file_label=train_step,
-                        wandb_run=wandb_run,
                     )
                 else:
                     LOGGER.warning(f"Skipping evaluation of the grid validation set")
+
+                # log here instead of inside eval to avoid partial duplicate .h5 files
+                if args.wandb and (out_file is not None):
+                    LOGGER.info(f"Logged the predictions to weights & biases after step {step}")
+                    wandb_artifact = wandb.Artifact(name="training-predictions", type="predictions")
+                    wandb_artifact.add_file(local_path=out_file)
+                    wandb_run.log_artifact(wandb_artifact)
 
             # profile
             if args.profile and step == 200:

@@ -10,12 +10,13 @@ Meant for the GPU nodes of the Perlmutter cluster at NERSC.
 """
 
 import tensorflow as tf
-import os, argparse, warnings, yaml
+import os, argparse, warnings, yaml, wandb
 
 from msfm.utils import logger, files
 
 from deep_lss.utils import configuration, distribute, eval
 from deep_lss.models.delta_model import DeltaLossModel
+from deep_lss.utils.distribute import HorovodStrategy
 from deep_lss.nets import NETWORKS
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
@@ -65,6 +66,9 @@ def setup():
     )
     parser.add_argument("--debug", action="store_true", help="activate debug mode")
     parser.add_argument("--file_label", type=str, default=None, help="A suffix that is appended to the files")
+    parser.add_argument("--wandb", action="store_true", help="log to weights & biases, otherwise log to tensorboard")
+    parser.add_argument("--wandb_tags", nargs="+", type=str, default=None, help="tags for weights & biases")
+    parser.add_argument("--wandb_notes", type=str, default=None, help="notes for weights & biases (longer than tags)")
 
     args, _ = parser.parse_known_args()
 
@@ -114,6 +118,27 @@ if __name__ == "__main__":
     if dlss_conf["dset"]["general"]["with_clustering"]:
         n_z_bins += len(msfm_conf["survey"]["maglim"]["z_bins"])
 
+    # weights and biases
+    if args.wandb:
+        group_name = distribute.get_wandb_group_name(strategy)
+
+        # TODO track the model as an artifact too so this would be consistent with training in the graph
+        wandb_run = wandb.init(
+            project="y3-deep-lss",
+            config={"msfm": msfm_conf, "dlss": dlss_conf, "net": net_conf},
+            dir=args.dir_model,
+            group=group_name,
+            job_type="evaluation",
+            # make sure that wandb logs to the cloud
+            mode="online",
+            force=True,
+            # to be able to log within graph mode
+            sync_tensorboard=True,
+            # additional metadata
+            tags=args.wandb_tags,
+            notes=args.wandb_notes,
+        )
+
     smoothing_kwargs = configuration.get_smoothing_kwargs(msfm_conf, dlss_conf, net_conf, dir_base=args.dir_model)
 
     # set up directories
@@ -147,9 +172,11 @@ if __name__ == "__main__":
     else:
         file_label = f"{train_step}_{args.file_label}"
 
+    out_file = None
+
     # fiducial training
     if args.fidu_train_tfr_pattern is not None:
-        eval.evaluate_fiducial(
+        out_file = eval.evaluate_fiducial(
             model=model,
             tfr_pattern=args.fidu_train_tfr_pattern,
             msfm_conf=msfm_conf,
@@ -164,7 +191,7 @@ if __name__ == "__main__":
 
     # fiducial validation
     if args.fidu_vali_tfr_pattern is not None:
-        eval.evaluate_fiducial(
+        out_file = eval.evaluate_fiducial(
             model=model,
             tfr_pattern=args.fidu_vali_tfr_pattern,
             msfm_conf=msfm_conf,
@@ -179,7 +206,7 @@ if __name__ == "__main__":
 
     # grid validation
     if args.grid_vali_tfr_pattern is not None:
-        eval.evaluate_grid(
+        out_file = eval.evaluate_grid(
             model=model,
             tfr_pattern=args.grid_vali_tfr_pattern,
             msfm_conf=msfm_conf,
@@ -190,3 +217,9 @@ if __name__ == "__main__":
         )
     else:
         LOGGER.warning(f"Skipping evaluation of the grid set")
+
+    if args.wandb and out_file is not None:
+        LOGGER.info(f"Logged the predictions to weights & biases")
+        wandb_artifact = wandb.Artifact(name="evaluation-predictions", type="predictions")
+        wandb_artifact.add_file(local_path=out_file)
+        wandb_run.log_artifact(wandb_artifact)

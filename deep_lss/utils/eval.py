@@ -216,9 +216,11 @@ def evaluate_grid(model, tfr_pattern, msfm_conf, dlss_conf, net_conf, dir_out, f
         write_out_file()
 
     if wandb_run is not None:
-        artifact = wandb.Artifact(name="predictions", type="predictions")
+        artifact = wandb.Artifact(name="grid-predictions", type="predictions")
         artifact.add_file(local_path=out_file)
         wandb_run.log_artifact(artifact)
+
+    return out_file
 
 
 def evaluate_fiducial(
@@ -355,6 +357,8 @@ def evaluate_fiducial(
         write_out_file()
 
     if wandb_run is not None:
-        artifact = wandb.Artifact(name="predictions", type="predictions")
+        artifact = wandb.Artifact(name="fiducial-predictions", type="predictions")
         artifact.add_file(local_path=out_file)
         wandb_run.log_artifact(artifact)
+
+    return out_file
