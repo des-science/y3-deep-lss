@@ -13,7 +13,7 @@ TODO make esub compatible? The index could correspond to a neural net architectu
 """
 
 import tensorflow as tf
-import os, argparse, warnings, yaml, psutil, GPUtil
+import os, argparse, warnings, yaml, psutil, GPUtil, wandb
 
 from datetime import datetime
 from time import time
@@ -121,6 +121,9 @@ def setup():
     parser.add_argument("--evaluate_training_set", action="store_true", help="evaluate the training set")
     parser.add_argument("--debug", action="store_true", help="activate debug mode")
     parser.add_argument("--profile", action="store_true", help="run the profiler")
+    parser.add_argument("--wandb", action="store_true", help="log to weights & biases, otherwise log to tensorboard")
+    parser.add_argument("--wandb_tags", nargs="+", type=str, default=None, help="tags for weights & biases")
+    parser.add_argument("--wandb_notes", type=str, default=None, help="notes for weights & biases (longer than tags)")
 
     args, _ = parser.parse_known_args()
 
@@ -155,7 +158,7 @@ def training():
 
     # hardware and distribution
     _, n_gpus = distribute.check_devices()
-    total_gpu_mem = GPUtil.getGPUs()[0].memoryTotal * 1000
+    # total_gpu_mem = GPUtil.getGPUs()[0].memoryTotal * 1000
     strategy = distribute.get_strategy(args.dist_strategy)
 
     # initialize a fresh model
@@ -224,6 +227,7 @@ def training():
     eval_every = net_conf["training"]["eval_every"]
     dset_kwargs = net_conf["dset"]["training"]
     local_batch_size = dset_kwargs["local_batch_size"]
+    _ = distribute.get_global_batch_size(strategy, local_batch_size)
 
     try:
         n_z_bins = len(dset_kwargs["z_bin_inds"])
@@ -234,9 +238,37 @@ def training():
         if with_clustering:
             n_z_bins += len(msfm_conf["survey"]["maglim"]["z_bins"])
 
-    smoothing_kwargs = configuration.get_smoothing_kwargs(msfm_conf, dlss_conf, net_conf, dir_base=args.dir_base)
+    # weights and biases
+    if args.wandb:
+        if isinstance(strategy, tf.distribute.MultiWorkerMirroredStrategy):
+            group_name = wandb.util.generate_id()
+            LOGGER.info(f"group = {group_name}")
+        elif isinstance(strategy, HorovodStrategy):
+            # can't broadcast a tf.string tensor, so generate a number and broadcast that
+            group_name = tf.random.uniform(shape=(), minval=1, maxval=int(1e8), dtype=tf.int32)
+            group_name = strategy.broadcast(group_name, root_rank=0)
+            group_name = str(group_name.numpy())
+            LOGGER.info(f"group = {group_name}")
+        else:
+            group_name = None
 
-    _ = distribute.get_global_batch_size(strategy, local_batch_size)
+        wandb_run = wandb.init(
+            project="y3-deep-lss",
+            config={"msfm": msfm_conf, "dlss": dlss_conf, "net": net_conf},
+            dir=dir_out,
+            group=group_name,
+            job_type="training",
+            # make sure that wandb logs to the cloud
+            mode="online",
+            force=True,
+            # to be able to log within graph mode
+            sync_tensorboard=True,
+            # additional metadata
+            tags=args.wandb_tags,
+            notes=args.wandb_notes,
+        )
+
+    smoothing_kwargs = configuration.get_smoothing_kwargs(msfm_conf, dlss_conf, net_conf, dir_base=args.dir_base)
 
     fiducial_pipeline = FiducialPipeline(
         conf=msfm_conf, **{**dlss_conf["dset"]["general"], **dlss_conf["dset"]["training"]}
@@ -329,6 +361,7 @@ def training():
                         dir_out=dir_out,
                         file_label=train_step,
                         training_set=True,
+                        wandb_run=wandb_run,
                     )
                 else:
                     LOGGER.warning(f"Skipping evaluation of the fiducial training set")
@@ -344,6 +377,7 @@ def training():
                         dir_out=dir_out,
                         file_label=train_step,
                         training_set=False,
+                        wandb_run=wandb_run,
                     )
                 else:
                     LOGGER.warning(f"Skipping evaluation of the fiducial validation set")
@@ -358,6 +392,7 @@ def training():
                         net_conf=net_conf,
                         dir_out=dir_out,
                         file_label=train_step,
+                        wandb_run=wandb_run,
                     )
                 else:
                     LOGGER.warning(f"Skipping evaluation of the grid validation set")
@@ -373,21 +408,21 @@ def training():
                 tf.profiler.experimental.stop()
 
             # additional logs
-            with model.summary_writer.as_default():
-                # time per step
-                t_now = time()
-                tf.summary.scalar("step_time", t_now - t_prev)
-                t_prev = t_now
+            t_now = time()
+            model.write_summary("step_time", t_now - t_prev)
+            model.write_summary("global_step", step)
+            # wandb.log({"global_step": step})
+            t_prev = t_now
 
-                # memory usage
-                if step % 100 == 0:
-                    # CPU, in percent
-                    tf.summary.scalar(f"CPU_mem", psutil.virtual_memory().percent)
+            # # memory usage
+            # if step % 100 == 0:
+            #     # CPU, in percent
+            #     tf.summary.scalar(f"CPU_mem", psutil.virtual_memory().percent)
 
-                    for i in range(n_gpus):
-                        # GPU, in percent
-                        mem_info = tf.config.experimental.get_memory_info(f"/GPU:{i}")
-                        tf.summary.scalar(f"GPU_{i}_mem", mem_info["current"] / total_gpu_mem)
+            #     for i in range(n_gpus):
+            #         # GPU, in percent
+            #         mem_info = tf.config.experimental.get_memory_info(f"/GPU:{i}")
+            #         tf.summary.scalar(f"GPU_{i}_mem", mem_info["current"] / total_gpu_mem)
 
     LOGGER.info(f"Finished training after {n_steps} steps and {LOGGER.timer.elapsed('training')}")
 
@@ -401,6 +436,8 @@ def training():
         LOGGER.info(f"No checkpoint has been saved")
 
     model.delete_temp_summaries()
+    if args.wandb:
+        wandb.finish()
 
     LOGGER.info(f"Script completed successfully")
 

@@ -133,17 +133,7 @@ class BaseModel(object):
                 self.summary_dir = self.create_temp_dir(self.summary_dir)
             else:
                 tf.io.gfile.makedirs(self.summary_dir)
-
             self.summary_writer = tf.summary.create_file_writer(self.summary_dir)
-
-            # if self.is_chief():
-            #     tf.io.gfile.makedirs(self.summary_dir)
-            # else:
-            #     self.summary_dir = self.create_temp_dir(self.summary_dir)
-
-            # # TODO make compatible with horovod (multiple summary writers)
-            # tf.io.gfile.makedirs(self.summary_dir)
-            # self.summary_writer = tf.summary.create_file_writer(summary_dir)
         else:
             self.summary_writer = None
 
@@ -236,7 +226,29 @@ class BaseModel(object):
         """
         self.network.summary(**kwargs)
 
+    def write_summary(self, label, value, summary_type="scalar"):
+        # this is part of the model graph, so has to be executed with every step. An additional condition like
+        # step % log_every_n_steps == 0 is therefore not feasible 
+        if self.summary_writer is not None:
+            with self.summary_writer.as_default():
+                if summary_type == "scalar":
+                    tf.summary.scalar(label, value)
+                elif summary_type == "histogram":
+                    tf.summary.histogram(label, value)
+                elif summary_type == "image":
+                    tf.summary.image(label, value)
+                else:
+                    raise ValueError(f"Invalid summary type {summary_type} was passed")
+
     def create_temp_dir(self, chief_dir):
+        """For a distribution strategy with multiple workers, the non-chief workers need to create temporary files.
+
+        Args:
+            chief_dir (str): The directory of the chief worker, which is always one level above the temporary ones.
+
+        Returns:
+            str: The temporary directory associated with the worker.
+        """
         assert not self.is_chief(), f"Only the non-chief workers should create temporary directories"
 
         assert isinstance(
@@ -250,6 +262,13 @@ class BaseModel(object):
         return temp_dir
 
     def copy_chief_to_temp_dir(self, chief_dir, temp_dir):
+        """For a distribution strategy with multiple workers, copy the contents of the chief's directory to the
+        workers's temporary ones.
+
+        Args:
+            chief_dir (str): The directory of the chief worker, which is always one level above the temporary ones.
+            temp_dir (str): As set up by self.create_temp_dir, the temporary directory associated with the worker.
+        """
         # copy over the checkpoints from the chief to the temporary directories of the non-chief workers
         chief_files = tf.io.gfile.listdir(chief_dir)
         for chief_file in chief_files:
@@ -263,6 +282,9 @@ class BaseModel(object):
         pass
 
     def delete_temp_summaries(self):
+        """Only one copy of the TensorBoard summary is needed, so it can be deleted after training for non-chief
+        workers.
+        """
         if isinstance(self.strategy, HorovodStrategy) and not self.is_chief():
             tf.io.gfile.rmtree(self.summary_dir)
             LOGGER.info(f"Deleted the temporary summary directory {self.summary_dir}")
@@ -381,16 +403,13 @@ class BaseModel(object):
                 loss = loss_function(predictions)
             else:
                 loss = loss_function(predictions, input_labels)
-            if self.summary_writer is not None:
-                with self.summary_writer.as_default():
-                    tf.summary.scalar("loss", loss)
+            self.write_summary("loss", loss)
 
             # handle the l2 norm
             if l2_norm_weight is not None:
                 l2_loss = tf.linalg.global_norm(trainable_variables)
-                if self.summary_writer is not None:
-                    with self.summary_writer.as_default():
-                        tf.summary.scalar("l2_loss", l2_loss)
+                self.write_summary("l2_loss", l2_loss)
+
                 loss = loss + l2_norm_weight * l2_loss
 
         # NOTE distributed delta loss, get the global gradients on the level of the tape for Horovod
@@ -410,9 +429,8 @@ class BaseModel(object):
             gradients = [tf.clip_by_norm(g, clip_by_norm) for g in gradients]
 
         glob_norm = tf.linalg.global_norm(gradients)
-        if self.summary_writer is not None:
-            with self.summary_writer.as_default():
-                tf.summary.scalar("global_grad_norm", glob_norm)
+
+        self.write_summary("global_grad_norm", glob_norm)
 
         if clip_by_global_norm is not None:
             gradients, _ = tf.clip_by_global_norm(gradients, clip_by_global_norm, use_norm=glob_norm)
@@ -484,9 +502,7 @@ class BaseModel(object):
             f" of replicas, ensure that this is the case"
         )
 
-        if self.summary_writer is not None:
-            with self.summary_writer.as_default():
-                tf.summary.scalar("global_loss", global_loss)
+        self.write_summary("global_loss", global_loss)
 
         return global_loss
 

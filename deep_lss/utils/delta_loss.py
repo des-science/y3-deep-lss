@@ -41,6 +41,33 @@ def _get_backend_floatx():
         )
 
 
+def _write_summary(label, value, summary_writer, training=True, summary_type="scalar"):
+    """Handle different kinds of summaries to TensorBoard.
+
+    Args:
+        label (str): The name of the summary.
+        value (tf.Tensor): The value to log.
+        summary_writer (tf.summary.SummaryWriter): The summary writer.
+        training (bool, optional): Only log during training. Defaults to True.
+        summary_type (str, optional): The kind of summary, allowed are 'scalar', 'histogram' and 'image. Defaults to
+            "scalar".
+
+    Raises:
+        ValueError: If an invalid summary_type is passed.
+    """
+    if summary_writer is not None and training:
+        with summary_writer.as_default():
+            if summary_type == "scalar":
+                tf.summary.scalar(label, value)
+            elif summary_type == "histogram":
+                tf.summary.histogram(label, value)
+            elif summary_type == "image":
+                # value = tf.image.resize(value, size=(128, 128), method=tf.image.ResizeMethod.NEAREST_NEIGHBOR)
+                tf.summary.image(label, value)
+            else:
+                raise ValueError(f"Invalid summary type {summary_type} was passed")
+
+
 def tf_matrix_condition(m):
     """Calculate the matrix condition number of an input m over the last two axis, defined as the ratio of the largest
     and smallest singular value
@@ -116,9 +143,7 @@ def get_jac_and_cov_matrix(
         param_splits = tf.split(splits[0], num_or_size_splits=n_output, axis=-1)
 
         for num, single_param in enumerate(param_splits):
-            if summary_writer is not None:
-                with summary_writer.as_default():
-                    tf.summary.histogram(f"Param_{num}_hist", single_param)
+            _write_summary(f"param_{num}_hist", single_param, summary_writer, training, summary_type="histogram")
 
     # get the covariance NOTE the mean is taken over the n_same, the (local/global) batch size
     mean = tf.reduce_mean(splits[0], axis=1, keepdims=True)
@@ -277,35 +302,29 @@ def delta_loss(
         strategy=strategy,
     )
 
-    # tf.print("cov", replica_id, cov)
-
     # nice output
-    if training and summary_writer is not None:
-        with summary_writer.as_default():
-            tf.summary.histogram("Jacobian", jacobian)
-            if img_summary:
-                jac_img = tf.expand_dims(jacobian, axis=3)
-                jac_max = tf.reduce_max(jac_img, axis=(1, 2), keepdims=True)
-                jac_min = tf.reduce_min(jac_img, axis=(1, 2), keepdims=True)
-                jac_img = tf.math.divide(jac_img - jac_min, jac_max - jac_min)
-                jac_img = tf.image.resize(jac_img, size=(128, 128), method=tf.image.ResizeMethod.NEAREST_NEIGHBOR)
-                tf.summary.image("JacobianIMG", jac_img)
-                cov_img = tf.expand_dims(cov, axis=3)
-                cov_max = tf.reduce_max(cov_img, axis=(1, 2), keepdims=True)
-                cov_min = tf.reduce_min(cov_img, axis=(1, 2), keepdims=True)
-                cov_img = tf.math.divide(cov_img - cov_min, cov_max - cov_min)
-                cov_img = tf.image.resize(cov_img, size=(128, 128), method=tf.image.ResizeMethod.NEAREST_NEIGHBOR)
-                tf.summary.image("CovarianceIMG", cov_img)
-                # get corrlation matrix
-                v = tf.math.sqrt(tf.linalg.diag_part(cov))
-                outer_v = tf.einsum("ai,aj->aij", v, v)
-                cor = tf.divide(cov, outer_v)
-                cor_img = tf.expand_dims(cor, axis=3)
-                # fit between 0 and 1
-                cor_img = tf.math.add(0.5, tf.math.scalar_mul(0.5, cor_img))
-                # to image with good resolution
-                cor_img = tf.image.resize(cor_img, size=(128, 128), method=tf.image.ResizeMethod.NEAREST_NEIGHBOR)
-                tf.summary.image("CorrelationIMG", cor_img)
+    _write_summary("jacobian", jacobian, summary_writer, training, summary_type="histogram")
+    if img_summary:
+        jac_img = tf.expand_dims(jacobian, axis=3)
+        jac_max = tf.reduce_max(jac_img, axis=(1, 2), keepdims=True)
+        jac_min = tf.reduce_min(jac_img, axis=(1, 2), keepdims=True)
+        jac_img = tf.math.divide(jac_img - jac_min, jac_max - jac_min)
+        _write_summary("jacobian_img", jac_img, summary_writer, training, summary_type="image")
+
+        cov_img = tf.expand_dims(cov, axis=3)
+        cov_max = tf.reduce_max(cov_img, axis=(1, 2), keepdims=True)
+        cov_min = tf.reduce_min(cov_img, axis=(1, 2), keepdims=True)
+        cov_img = tf.math.divide(cov_img - cov_min, cov_max - cov_min)
+        _write_summary("covariance_img", cov_img, summary_writer, training, summary_type="image")
+
+        # get corrlation matrix
+        v = tf.math.sqrt(tf.linalg.diag_part(cov))
+        outer_v = tf.einsum("ai,aj->aij", v, v)
+        cor = tf.divide(cov, outer_v)
+        cor_img = tf.expand_dims(cor, axis=3)
+        # fit between 0 and 1
+        cor_img = tf.math.add(0.5, tf.math.scalar_mul(0.5, cor_img))
+        _write_summary("correlation_img", cor_img, summary_writer, training, summary_type="image")
 
     # get the current backend
     current_float = _get_backend_floatx()
@@ -406,9 +425,7 @@ def delta_loss(
     # normal mean, this is taken if the output dimension of the summary statistic is different than the number of
     # parameters. So nothing happens here if n_output = n_params, because then cov_det only has one entry.
     cov_det = tf.reduce_mean(cov_det)
-    if training and summary_writer is not None:
-        with summary_writer.as_default():
-            tf.summary.scalar("Cov_det_loss", cov_det)
+    _write_summary("cov_det_loss", cov_det, summary_writer, training)
 
     # jacobian loss (log of this is unstable)
     if cov_weight:
@@ -434,13 +451,10 @@ def delta_loss(
         jac_loss = tf.multiply(weights, jac_loss)
 
     jac_loss = tf.reduce_mean(jac_loss)
-
-    if training and summary_writer is not None:
-        with summary_writer.as_default():
-            if cov_weight:
-                tf.summary.scalar("Covariance_loss", jac_loss)
-            else:
-                tf.summary.scalar("Jacobian_loss", jac_loss)
+    if cov_weight:
+        _write_summary("covariance_loss", jac_loss, summary_writer, training)
+    else:
+        _write_summary("jacobian_loss", jac_loss, summary_writer, training)
 
     loss = tf.add(cov_det, tf.scalar_mul(jac_weight, jac_loss))
 
@@ -456,10 +470,7 @@ def delta_loss(
             c = tf.multiply(weights, c)
 
         jac_cond_loss = tf.reduce_mean(c)
-
-        if training and summary_writer is not None:
-            with summary_writer.as_default():
-                tf.summary.scalar("Jacobian_Condition", jac_cond_loss)
+        _write_summary("jacobian_condition_loss", jac_cond_loss, summary_writer, training)
 
         jac_cond_loss = tf.scalar_mul(jac_cond_weight, jac_cond_loss)
         loss = tf.add(loss, jac_cond_loss)
@@ -483,12 +494,7 @@ def delta_loss(
 
         # simple mean reduction
         diff_loss = tf.reduce_mean(diff_loss)
-
-        # summary
-        if training and summary_writer is not None:
-            diff_loss_sum = diff_loss
-            with summary_writer.as_default():
-                tf.summary.scalar("Diff_loss", diff_loss_sum)
+        _write_summary("diff_loss", diff_loss, summary_writer, training)
 
         # force weight
         diff_loss = tf.scalar_mul(force_params_weight, diff_loss)
@@ -502,256 +508,4 @@ def delta_loss(
         # add to loss
         loss = tf.add(loss, diff_loss)
 
-    return loss
-
-
-def simplified_delta_loss(
-    predictions,
-    n_params,
-    n_same,
-    off_sets,
-    # regularization
-    force_params_value=None,
-    force_params_weight=1.0,
-    jac_weight=100.0,
-    jac_cond_weight=None,
-    # numerical stability
-    use_log_det=True,
-    tikhonov_regu=False,
-    eps=1e-32,
-    # tf.summary
-    training=True,
-    summary_writer=None,
-    img_summary=False,
-    # distribution
-    strategy=None,
-):
-    """This function calculates the delta loss which tries to maximize the information of the summary statistics. Note
-    it needs the predictions to be ordered in a specific way:
-        * The shape of the predictions is (n_points * n_same * (2 * n_params + 1), n_output)
-        * If one splits the predictions into (2 * n_params + 1) parts among the first axis one has the following scheme:
-            * The first part was generated with the unperturbed parameters
-            * The second part was generated with parameters where off_sets[0] was subtracted from the first param
-            * The third part was generated with parameters where off_sets[0] was added from to first param
-            * The fourth part was generated with parameters where off_sets[1] was subtracted from the second param
-            * and so on
-
-    Args:
-        predictions (tf.tensor): The predictions a.k.a. summary statistics in the specified ordering.
-        n_params (int): Number of underlying (cosmological) model parameters.
-        n_same (int): Number of (uperturbed) summaries coming from the same parameter set, this is the same as the
-            (local) batch size
-        off_sets (np.ndarray): The off-sets used to perturb the original (fiducial) parameters. These are used as the
-            finite differences in the computation of the Jacobian.
-        force_params_value (float, np.ndarray, optional): Either None or a set of parameters with shape
-            (n_points, 1, n_output) which is used to compute a square loss of the unperturbed summaries. It is useful
-            to set this for example to zeros such that the network does not produces arbitrary high summary values.
-            Defaults to None, float inputs are broadcast to the appropriate shape.
-        force_params_weight (float, optional): The weight of the square loss of force_params_value. Defaults to 1.0.
-        jac_weight (float, optional): The weight of the Jacobian loss, which forces the Jacobian of the summaries
-            to be close to unity (or identity matrix). Defaults to 100.0.
-        jac_cond_weight (float, optional): If not None, this weight is used to add an additional loss using the matrix
-            condition number of the jacobian. Defaults to None.
-        cov_weight (bool, optional): If true, the jac weight will be used as cov_weight, i.e. loss cov mat will be
-            forced to be close to the identity matrix. Note that there will be an additional term forcing the inverse
-            of the covariance to be close to the identity as well since the cov is guaranteed to be square. This is the
-            same as Luca's regularization term, but without the adaptive weight. Defaults to False.
-        n_output (int, optional): Dimensionality of the summary statistic. Defaults to None, which corresponds to
-            predictions.shape[-1].
-        n_partial (np.ndarray, optional): To train only on a subset of parameters and not all underlying model
-            parameter. Defaults to None which means the information inequality is minimized in a normal fashion. Note
-            that due to the necessity of some algebraic manipulations n_partial == None and n_partial == n_params lead
-            to slightly different behaviour. Defaults to None.
-        weights (np.ndarray, optional): An 1d array of length n_points, used as weights in means of the different
-            points. Defaults to None.
-        no_correlations (bool, optional): Do not consider correlations between the parameter, this means that one tries
-            to find an optimal summary (single value) for each underlying model parameter, only possible if
-            n_output == n_params. Defaults to False.
-        use_log_det (bool, optional): Use the log of the determinants in the information inequality, should be True. If
-            False the information inequality is not minimized in a proper manner and the training can become unstable.
-            Defaults to True.
-        tikhonov_regu (bool, optional): Use Tikhonov regularization of matrices e.g. to avoid vanishing determinants.
-            This is the recommended regularization method as it allows the usage of some optimized routines. Defaults
-            to False.
-        eps (float, optional): A small positive value used for regularization of things like logs etc. This should
-            only be increased if tikhonov_regu is used and a error is raised. Defaults to 1e-32.
-        training (bool, optional): Whether the loss is used for training. If False, no summaries will be written even
-            if a summary_writer is supplied. Defaults to True.
-        summary_writer (tf.summary.SummaryWriter, optional): The writer used to write tensorboard summaries. Defaults
-            to None.
-        img_summary (bool, optional): Save image summaries of the Jacobian and the covariance. Defaults to False.
-        strategy (tf.distribute.Strategy): The distribution strategy the model was created within
-
-    Raises:
-        ValueError: When there are specifications that conflict with the no_correlations boolean.
-
-    Returns:
-        tf.tensor: The loss value, which can be negative.
-    """
-
-    # TODO: A fixed epsilon can lead to some problems. E.g. in tikonov regularization might fail because the lack
-    # TODO: of precision. A possible solution would be to use the machine epsilon for added regularization
-    # TODO: and a fixed epsilon for absolut regulatization (division or log errors...)
-
-    # get the current float
-    current_float = _get_backend_floatx()
-
-    # get number of outputs
-    n_output = int(predictions.shape[-1])
-
-    replica_id = tf.distribute.get_replica_context().replica_id_in_sync_group
-
-    # get cov and jac of shapes (n_output/n_params, n_output, n_output)
-    cov, jacobian = get_jac_and_cov_matrix(
-        predictions=predictions,
-        n_params=n_params,
-        n_same=n_same,
-        off_sets=off_sets,
-        n_output=n_output,
-        summary_writer=summary_writer,
-        training=training,
-        # distribution
-        strategy=strategy,
-    )
-
-    # cov = cov * 1e5
-
-    # tf.print("cov", replica_id, cov)
-    tf.print("jacobian", replica_id, jacobian)
-
-    # # nice output
-    # if training and summary_writer is not None:
-    #     with summary_writer.as_default():
-    #         tf.summary.histogram("Jacobian", jacobian)
-    #         if img_summary:
-    #             jac_img = tf.expand_dims(jacobian, axis=3)
-    #             jac_max = tf.reduce_max(jac_img, axis=(1, 2), keepdims=True)
-    #             jac_min = tf.reduce_min(jac_img, axis=(1, 2), keepdims=True)
-    #             jac_img = tf.math.divide(jac_img - jac_min, jac_max - jac_min)
-    #             jac_img = tf.image.resize(jac_img, size=(128, 128), method=tf.image.ResizeMethod.NEAREST_NEIGHBOR)
-    #             tf.summary.image("JacobianIMG", jac_img)
-    #             cov_img = tf.expand_dims(cov, axis=3)
-    #             cov_max = tf.reduce_max(cov_img, axis=(1, 2), keepdims=True)
-    #             cov_min = tf.reduce_min(cov_img, axis=(1, 2), keepdims=True)
-    #             cov_img = tf.math.divide(cov_img - cov_min, cov_max - cov_min)
-    #             cov_img = tf.image.resize(cov_img, size=(128, 128), method=tf.image.ResizeMethod.NEAREST_NEIGHBOR)
-    #             tf.summary.image("CovarianceIMG", cov_img)
-    #             # get corrlation matrix
-    #             v = tf.math.sqrt(tf.linalg.diag_part(cov))
-    #             outer_v = tf.einsum("ai,aj->aij", v, v)
-    #             cor = tf.divide(cov, outer_v)
-    #             cor_img = tf.expand_dims(cor, axis=3)
-    #             # fit between 0 and 1
-    #             cor_img = tf.math.add(0.5, tf.math.scalar_mul(0.5, cor_img))
-    #             # to image with good resolution
-    #             cor_img = tf.image.resize(cor_img, size=(128, 128), method=tf.image.ResizeMethod.NEAREST_NEIGHBOR)
-    #             tf.summary.image("CorrelationIMG", cor_img)
-
-    # get the current backend
-    current_float = _get_backend_floatx()
-
-    # in case predictions is a numpy array
-    if isinstance(predictions, np.ndarray):
-        predictions = tf.convert_to_tensor(predictions, dtype=current_float)
-
-    # if use_log_det:
-    #     # tf.logdet is much better for the backprop, but fails if the det is zero
-    #     # should we do cov + eps*identity?
-    #     if tikhonov_regu:
-    #         identity = tf.scalar_mul(eps, tf.eye(n_params, batch_shape=[1], dtype=current_float))
-    #         cov_log_det = tf.linalg.logdet(tf.add(cov, identity))
-    #         # we use that 2*log(det(A)) = log(det(A)^2) = log(det(A)*det(A)) = log(det(A)*det(A^T))
-    #         #                           = log(det(A*A^T))tf.eye
-    #         with tf.name_scope("jac_logdet") as scope:
-    #             jt_j = tf.einsum("aji,ajk->aik", jacobian, jacobian)
-    #             jac_log_det = tf.linalg.logdet(tf.add(jt_j, identity))
-    #         with tf.name_scope("cov_logdet") as scope:
-    #             cov_det = tf.subtract(cov_log_det, jac_log_det)
-    #     else:
-    #         # We add a abs here because of instabilities
-    #         cov_log_det = tf.math.log(tf.math.abs(tf.linalg.det(cov)) + eps)
-    #         with tf.name_scope("jac_logdet") as scope:
-    #             jac_log_det = tf.math.log(tf.math.abs(tf.linalg.det(jacobian)) + eps)
-    #         with tf.name_scope("cov_logdet") as scope:
-    #             cov_det = tf.subtract(cov_log_det, tf.scalar_mul(2.0, jac_log_det))
-
-    # else:
-    #     # dividing by the jac_det (for info inequality) does not work...
-    #     LOGGER.warning(
-    #         f"You are using use_log_det=False. Only the determinant of the covariance matrix will be"
-    #         f" optimized. This loss might be unbouned and could lead to unstable training."
-    #     )
-    #     cov_det = tf.linalg.det(cov)
-
-    # loss = cov_det
-
-    # Jacobian identity loss
-    if jac_weight is not None:
-        # shape (n_output/n_params, n_output, n_output)
-        diff = tf.subtract(jacobian, tf.expand_dims(tf.eye(n_output, n_params, dtype=current_float), axis=0))
-        # use everything
-        jac_loss = tf.reduce_mean(tf.square(diff), axis=(1, 2))
-        jac_loss = tf.reduce_mean(jac_loss)
-
-        if training and summary_writer is not None:
-            with summary_writer.as_default():
-                tf.summary.scalar("Jacobian_loss", jac_loss)
-
-        # add to loss
-        # loss = tf.add(cov_det, tf.scalar_mul(jac_weight, jac_loss))
-        loss = tf.scalar_mul(jac_weight, jac_loss)
-
-    # # Jacobian condition number loss
-    # if jac_cond_weight is not None:
-    #     c = tf_matrix_condition(jacobian)
-    #     jac_cond_loss = tf.reduce_mean(c)
-
-    #     if training and summary_writer is not None:
-    #         with summary_writer.as_default():
-    #             tf.summary.scalar("Jacobian_Condition", jac_cond_loss)
-
-    #     jac_cond_loss = tf.scalar_mul(jac_cond_weight, jac_cond_loss)
-
-    #     # add to loss
-    #     loss = tf.add(loss, jac_cond_loss)
-
-    # # summary size regularization
-    # if force_params_value is not None:
-    #     # calculate square distance between fidu mean and preds
-    #     mid_params = tf.split(predictions, num_or_size_splits=2 * n_params + 1, axis=0)[0]
-
-    #     # reshape
-    #     mid_params = tf.reshape(mid_params, shape=[-1, n_same, n_output])
-
-    #     # penalty
-    #     diff = tf.subtract(mid_params, force_params_value)
-    #     diff_loss = tf.square(tf.reduce_mean(diff, axis=1))
-
-    #     # simple mean reduction
-    #     diff_loss = tf.reduce_mean(diff_loss)
-
-    #     # summary
-    #     if training and summary_writer is not None:
-    #         diff_loss_sum = diff_loss
-    #         with summary_writer.as_default():
-    #             tf.summary.scalar("Diff_loss", diff_loss_sum)
-
-    #     # force weight
-    #     diff_loss = tf.scalar_mul(force_params_weight, diff_loss)
-
-    #     # add to loss
-    #     loss = tf.add(loss, diff_loss)
-
-    # tf.print("pre preds", replica_id, predictions)
-    # tf.print("post preds", replica_id, predictions)
-
-    # loss = tf.reduce_mean(tf.math.square(cov))
-
-    # predictions = tf.distribute.get_replica_context().all_gather(predictions, axis=0)
-    # loss = tf.reduce_mean(tf.math.square(predictions))
-    # loss = tf.distribute.get_replica_context().all_reduce("MEAN", loss)
-
-    # loss = tf.distribute.get_replica_context().all_reduce("MEAN", predictions)
-
-    tf.print("simplified_loss", replica_id, loss)
     return loss

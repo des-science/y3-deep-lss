@@ -9,7 +9,7 @@ Evaluate the DeepSphere graph neural networks on the CosmoGrid
 
 import numpy as np
 import tensorflow as tf
-import os, warnings, h5py, math, logging
+import os, warnings, h5py, math, logging, wandb
 
 from msfm.fiducial_pipeline import FiducialPipeline
 from msfm.grid_pipeline import GridPipeline
@@ -85,7 +85,7 @@ def _remove_example_axis(array):
     return array
 
 
-def evaluate_grid(model, tfr_pattern, msfm_conf, dlss_conf, net_conf, dir_out, file_label=None):
+def evaluate_grid(model, tfr_pattern, msfm_conf, dlss_conf, net_conf, dir_out, file_label=None, wandb_run=None):
     """Evaluate the model on the grid part of the CosmoGrid.
 
     Args:
@@ -194,8 +194,9 @@ def evaluate_grid(model, tfr_pattern, msfm_conf, dlss_conf, net_conf, dir_out, f
     cosmos = _remove_example_axis(cosmos)
     i_sobols = _remove_example_axis(i_sobols)
 
+    out_file = _get_out_file(dir_out, file_label)
+
     def write_out_file():
-        out_file = _get_out_file(dir_out, file_label)
         with h5py.File(out_file, "a") as f:
             f.create_dataset(name="grid/pred", data=preds)
             f.create_dataset(name="grid/cosmo", data=cosmos)
@@ -214,8 +215,15 @@ def evaluate_grid(model, tfr_pattern, msfm_conf, dlss_conf, net_conf, dir_out, f
     else:
         write_out_file()
 
+    if wandb_run is not None:
+        artifact = wandb.Artifact(name="predictions", type="predictions")
+        artifact.add_file(local_path=out_file)
+        wandb_run.log_artifact(artifact)
 
-def evaluate_fiducial(model, tfr_pattern, msfm_conf, dlss_conf, net_conf, dir_out, file_label=None, training_set=True):
+
+def evaluate_fiducial(
+    model, tfr_pattern, msfm_conf, dlss_conf, net_conf, dir_out, training_set=True, file_label=None, wandb_run=None
+):
     """Evaluate the model on the fiducial part of the CosmoGrid.
 
     Args:
@@ -320,8 +328,9 @@ def evaluate_fiducial(model, tfr_pattern, msfm_conf, dlss_conf, net_conf, dir_ou
         second_to_last_layer = tf.gather(second_to_last_layer, sorted_indices)
     LOGGER.info(f"Sorted the results")
 
+    out_file = _get_out_file(dir_out, file_label)
+
     def write_out_file():
-        out_file = _get_out_file(dir_out, file_label)
         with h5py.File(out_file, "a") as f:
             if training_set:
                 f.create_dataset(name="fiducial/train/pred", data=preds)
@@ -344,3 +353,8 @@ def evaluate_fiducial(model, tfr_pattern, msfm_conf, dlss_conf, net_conf, dir_ou
             write_out_file()
     else:
         write_out_file()
+
+    if wandb_run is not None:
+        artifact = wandb.Artifact(name="predictions", type="predictions")
+        artifact.add_file(local_path=out_file)
+        wandb_run.log_artifact(artifact)

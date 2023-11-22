@@ -95,8 +95,21 @@ class HorovodStrategy:
         Returns:
             tf.Tensor: The result of fn(*args, **kwargs).
         """
-        
+
         return fn(*args, **kwargs)
+
+    def broadcast(self, tensor, root_rank):
+        """For compatibility with tf.distribute.Strategy.
+
+        Args:
+            tensor (tf.Tensor): The tensor to broadcast.
+            root_rank (int): The rank to broadcast the value from.
+
+        Returns:
+            tf.Tensor: The tensor that has been broadcasted to all workers.
+        """
+
+        return hvd.broadcast(tensor, root_rank)
 
 
 def setup_horovod():
