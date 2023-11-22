@@ -1,9 +1,9 @@
 #!/bin/bash
 #SBATCH --account=des_g
 #SBATCH --constraint=gpu
-#SBATCH --qos=debug
-#SBATCH --time=00:15:00
-#SBATCH --nodes=2
+#SBATCH --qos=regular
+#SBATCH --time=12:00:00
+#SBATCH --nodes=1
 #SBATCH --gpus-per-node=4
 #SBATCH --ntasks-per-node=4
 #SBATCH --gpus-per-task=1
@@ -11,20 +11,19 @@
 #SBATCH --job-name=multi_training
 #SBATCH --output=./logs/multi_training.%j.log
 
-#OpenMP settings:
-# export OMP_NUM_THREADS=1
-# export OMP_PLACES=threads
-# export OMP_PROC_BIND=spread
+# export NCCL_DEBUG=INFO
 
-export SLURM_CPU_BIND="cores"
-
-srun python ../../deep_lss/apps/run_training.py \
+srun --cpu-bind=threads --gpu-bind=single:1 \
+    python ../../deep_lss/apps/run_training.py \
+    --dist_strategy="multi_worker_mirrored" \
     --fidu_train_tfr_pattern="/pscratch/sd/a/athomsen/DESY3/v5/linear_bias/tfrecords/fiducial/DESy3_fiducial_???.tfrecord" \
     --fidu_vali_tfr_pattern="/pscratch/sd/a/athomsen/DESY3/v5/linear_bias/tfrecords/fiducial/validation/DESy3_fiducial_???.tfrecord" \
     --grid_vali_tfr_pattern="/pscratch/sd/a/athomsen/DESY3/v5/linear_bias/tfrecords/grid/DESy3_grid_???.tfrecord" \
-    --dir_base="/pscratch/sd/a/athomsen/run_files/v5/multi_worker" \
-    --dlss_config="configs/v5/clustering_only/linear_bias/dlss_config.yaml" \
-    --net_config="configs/v5/clustering_only/resnet_debug.yaml" \
-    --msfm_config="/global/homes/a/athomsen/multiprobe-simulation-forward-model/configs/config.yaml"
+    --dir_base="/pscratch/sd/a/athomsen/run_files/v5/lensing_only" \
+    --dlss_config="configs/v5/lensing_only/dlss_config.yaml" \
+    --net_config="configs/v5/lensing_only/resnet_vanilla.yaml" \
+    --msfm_config="/global/homes/a/athomsen/multiprobe-simulation-forward-model/configs/config.yaml" \
+    --wandb \
+    --wandb_tags v5 multi_mirrored lensing
 # --dir_model="2023-11-13_02-39-14_resnet_vanilla" \
 # --restore_checkpoint

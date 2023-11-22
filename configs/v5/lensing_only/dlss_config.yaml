@@ -34,3 +34,4 @@ delta_loss:
   use_log_det: True
   tikhonov_regu: False
   eps: 1.0e-32
+  img_summary: True

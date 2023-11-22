@@ -1,8 +1,8 @@
 #!/bin/bash
 #SBATCH --account=des_g
 #SBATCH --constraint=gpu
-#SBATCH --qos=regular
-#SBATCH --time=12:00:00
+#SBATCH --qos=debug
+#SBATCH --time=00:10:00
 #SBATCH --nodes=1
 #SBATCH --gpus-per-node=4
 #SBATCH --ntasks-per-node=4

@@ -4,8 +4,8 @@ name: "resnet_vanilla"
 training:
   n_steps: 1000
   output_every: null
-  checkpoint_every: 500
-  eval_every: null
+  checkpoint_every: 1000
+  eval_every: 1000
   learning_rate: 0.001
   clip_by_value: null
   clip_by_norm: null
@@ -18,7 +18,7 @@ dset:
     local_batch_size: 4
     is_cached: False
     n_readers: 4
-    n_prefetch: null
+    n_prefetch: 3
     file_name_shuffle_buffer: 64
     examples_shuffle_buffer: 16
   eval:
