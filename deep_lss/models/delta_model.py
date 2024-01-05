@@ -19,6 +19,7 @@ from msfm.utils import logger
 from deep_lss.utils import delta_loss
 from deep_lss.utils.distribute import HorovodStrategy
 from deep_lss.models.base_model import BaseModel
+from deep_lss.utils.configuration import get_backend_floatx
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 warnings.filterwarnings("ignore", category=RuntimeWarning)
@@ -34,12 +35,14 @@ class DeltaLossModel(BaseModel):
     def __init__(
         self,
         network,
+        # DeepSphere
         n_side,
         indices,
         n_neighbors=20,
-        input_shape=None,
         max_batch_size=None,
         initial_Fin=None,
+        # general
+        input_shape=None,
         optimizer=None,
         summary_dir=None,
         checkpoint_dir=None,
@@ -51,44 +54,31 @@ class DeltaLossModel(BaseModel):
         """Initializes a graph convolutional neural network using the healpy pixelization scheme.
 
         Args:
-            network (list): A list of layers that make up the neural network.
+            network (Union[list, tf.keras.Sequential]): The underlying network of the model. Can be a list of layers,
+                then either a regular tf.keras.Sequential or HealpyGCNN model is initialized.
             n_side (int): The healpy n_side of the input.
             indices (np.ndarray): 1d array of indices, corresponding to the pixel ids of the input map footprint.
             n_neighbors (int, optional): Number of neighbors considered when building the graph, currently supported
                 values are: 8, 20, 40 and 60. Defaults to 20.
-            input_shape (tf.tensor, optional): Input shape of the network, necessary if one wants to restore the model.
-                Defaults to None.
             max_batch_size (int, optional): Maximal batch size this network is supposed to handle. This determines the
                 number of splits in the tf.sparse.sparse_dense_matmul operation, which are subsequently applied
                 independent of the actual batch size. Defaults to None, then no such precautions are taken, which may
                 cause an error.
             initial_Fin (int, optional) Initial number of input features. Defaults to None, then like for
                 max_batch_size, there are no precautions taken.
+            input_shape (tf.tensor, optional): Input shape of the network, necessary if one wants to restore the model.
+                Defaults to None.
             optimizer (tf.keras.optimizers.Optimizer, optional): Optimizer of the model. Defaults to None, which loads
                 Adam.
             summary_dir (str, optional): Directory to save the summaries. Defaults to None.
             checkpoint_dir (str, optional): Directory where to save the weights and optimizer. Defaults to None.
             restore_checkpoint (bool, optional): Whether to restore the network from a checkpoint, or initialize it.
                 Defaults to False.
+            max_checkpoints (int, optional): Maximum number of checkpoints to keep. Defaults to 3.
             init_step (int, optional): Initial step. Defaults to 0.
             strategy (Union[tf.distribute.Strategy, deep_lss.utils.distribute.HorovodStrategy], optional):
                 The distribution strategy the model was created within. Defaults to None, then training is local.
         """
-
-        # get the network
-        if n_side is None and indices is None:
-            LOGGER.info("Initializing DeltaLossModel with a normal Sequential model")
-            network = tf.keras.Sequential(layers=network)
-        else:
-            LOGGER.info("Initializing DeltaLossModel with a HealpyGCNN model")
-            network = HealpyGCNN(
-                nside=n_side,
-                indices=indices,
-                layers=network,
-                n_neighbors=n_neighbors,
-                max_batch_size=max_batch_size,
-                initial_Fin=initial_Fin,
-            )
 
         # init the base model
         super(DeltaLossModel, self).__init__(
@@ -101,6 +91,12 @@ class DeltaLossModel(BaseModel):
             max_checkpoints=max_checkpoints,
             init_step=init_step,
             strategy=strategy,
+            # DeepSphere
+            n_side=n_side,
+            indices=indices,
+            n_neighbors=n_neighbors,
+            max_batch_size=max_batch_size,
+            initial_Fin=initial_Fin,
         )
         LOGGER.info(f"Initialized the DeltaLossModel")
 
@@ -124,7 +120,7 @@ class DeltaLossModel(BaseModel):
         n_partial=None,
         weights=None,
         no_correlations=False,
-        # gradient clipping
+        # gradient clipping + regularization
         clip_by_value=None,
         clip_by_norm=None,
         clip_by_global_norm=5.0,
@@ -239,7 +235,7 @@ class DeltaLossModel(BaseModel):
             )
 
         # get the backend float and input shape
-        current_float = delta_loss._get_backend_floatx()
+        current_float = get_backend_floatx()
 
         n_batch = n_points * n_same * (2 * n_params + 1)
         if isinstance(self.network, HealpyGCNN):

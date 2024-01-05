@@ -14,31 +14,12 @@ import numpy as np
 import tensorflow as tf
 import horovod.tensorflow as hvd
 
+from deep_lss.utils.configuration import get_backend_floatx
 from deep_lss.utils.distribute import HorovodStrategy
 
 from msfm.utils import logger
 
 LOGGER = logger.get_logger(__file__)
-
-
-def _get_backend_floatx():
-    """Returns the current backend float of the keras backend.
-
-    Raises:
-        ValueError: If something other than tf.float32 or tf.float64 is used.
-
-    Returns:
-        tf.floatx: either tf.float32 or tf.float64 depending on the current backend setting
-    """
-    if tf.keras.backend.floatx() == "float32":
-        return tf.float32
-    elif tf.keras.backend.floatx() == "float64":
-        return tf.float64
-    else:
-        raise ValueError(
-            f"The only suppored keras backend floatx are float64 and float32 not "
-            f"{tf.keras.backend.floatx()}! Please use tf.keras.backend.set_floatx to set an appropiate value."
-        )
 
 
 def _write_summary(label, value, summary_writer, training=True, summary_type="scalar"):
@@ -105,7 +86,7 @@ def get_jac_and_cov_matrix(
             is the dimensionality of the summary statistic.
     """
     # get the current backend
-    current_float = _get_backend_floatx()
+    current_float = get_backend_floatx()
 
     # needs to be a tf.tensor, has shape (n_same * (1 + 2 * n_params), n_params)
     if isinstance(predictions, np.ndarray):
@@ -287,7 +268,7 @@ def delta_loss(
     # replica_id = tf.distribute.get_replica_context().replica_id_in_sync_group
 
     # get the current float
-    current_float = _get_backend_floatx()
+    current_float = get_backend_floatx()
 
     # get cov and jac of shapes (n_output/n_params, n_output, n_output)
     cov, jacobian = get_jac_and_cov_matrix(
@@ -303,7 +284,7 @@ def delta_loss(
     )
 
     # nice output
-    _write_summary("jacobian", jacobian, summary_writer, training, summary_type="histogram")
+    _write_summary("jacobian_hist", jacobian, summary_writer, training, summary_type="histogram")
     if img_summary:
         jac_img = tf.expand_dims(jacobian, axis=3)
         jac_max = tf.reduce_max(jac_img, axis=(1, 2), keepdims=True)
@@ -327,7 +308,7 @@ def delta_loss(
         _write_summary("correlation_img", cor_img, summary_writer, training, summary_type="image")
 
     # get the current backend
-    current_float = _get_backend_floatx()
+    current_float = get_backend_floatx()
 
     # in case predictions is a numpy array
     if isinstance(predictions, np.ndarray):

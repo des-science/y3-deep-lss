@@ -109,3 +109,23 @@ def get_smoothing_kwargs(msfm_conf, dlss_conf, net_conf, dir_base=None):
         smoothing_kwargs = None
 
     return smoothing_kwargs
+
+
+def get_backend_floatx():
+    """Returns the current backend float of the keras backend.
+
+    Raises:
+        ValueError: If something other than tf.float32 or tf.float64 is used.
+
+    Returns:
+        tf.floatx: either tf.float32 or tf.float64 depending on the current backend setting
+    """
+    if tf.keras.backend.floatx() == "float32":
+        return tf.float32
+    elif tf.keras.backend.floatx() == "float64":
+        return tf.float64
+    else:
+        raise ValueError(
+            f"The only suppored keras backend floatx are float64 and float32 not "
+            f"{tf.keras.backend.floatx()}! Please use tf.keras.backend.set_floatx to set an appropiate value."
+        )

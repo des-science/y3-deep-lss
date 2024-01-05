@@ -389,7 +389,9 @@ def training():
                 # log here instead of inside eval to avoid partial duplicate .h5 files
                 if args.wandb and (out_file is not None):
                     LOGGER.info(f"Logged the predictions to weights & biases after step {step}")
-                    wandb_artifact = wandb.Artifact(name="training-predictions", type="predictions")
+                    wandb_artifact = wandb.Artifact(
+                        name=f"training-predictions-nsteps{train_step}", type="predictions"
+                    )
                     wandb_artifact.add_file(local_path=out_file)
                     wandb_run.log_artifact(wandb_artifact)
 
