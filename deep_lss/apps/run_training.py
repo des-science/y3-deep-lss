@@ -241,7 +241,9 @@ def training():
     eval_every = net_conf["training"]["eval_every"]
 
     # constants: miscellaneous
-    smoothing_kwargs = configuration.get_smoothing_kwargs(msfm_conf, dlss_conf, net_conf, dir_base=args.dir_base)
+    smoothing_kwargs = configuration.get_smoothing_kwargs(
+        args.loss_function, msfm_conf, dlss_conf, net_conf, dir_base=args.dir_base
+    )
 
     if args.loss_function == "delta":
         Pipeline = FiducialPipeline
