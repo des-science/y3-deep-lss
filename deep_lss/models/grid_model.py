@@ -1,0 +1,172 @@
+# Copyright (C) 2024 ETH Zurich, Institute for Particle Physics and Astrophysics
+
+"""
+Created January 2024
+Author: Arne Thomsen
+
+To train over the grid part of the CosmoGrid with the 
+    - Mean Squared Error (MSE)
+    - Likelihood loss (see https://arxiv.org/abs/1906.03156) 
+    - mutual information loss (see Section 7.3 in https://arxiv.org/pdf/2009.08459).
+"""
+
+import warnings
+import tensorflow as tf
+
+from msfm.utils import logger
+from deep_lss.utils import delta_loss
+from deep_lss.utils.distribute import HorovodStrategy
+from deep_lss.models.base_model import BaseModel
+from deep_lss.utils.configuration import get_backend_floatx
+
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+warnings.filterwarnings("ignore", category=RuntimeWarning)
+warnings.filterwarnings("once", category=UserWarning)
+LOGGER = logger.get_logger(__file__)
+
+
+class GridLossModel(BaseModel):
+    """
+    This class subclasses the BaseModel to employ a HealpyGCNN with the information maximizing delta loss, which trains
+    at the fiducial and its perturbations.
+    """
+
+    def __init__(
+        self,
+        network,
+        # DeepSphere
+        n_side,
+        indices,
+        n_neighbors=20,
+        max_batch_size=None,
+        initial_Fin=None,
+        # general
+        input_shape=None,
+        optimizer=None,
+        optimizer_kwargs={},
+        summary_dir=None,
+        checkpoint_dir=None,
+        restore_checkpoint=False,
+        max_checkpoints=3,
+        init_step=0,
+        strategy=None,
+    ):
+        """Initializes a graph convolutional neural network using the healpy pixelization scheme.
+
+        Args:
+            network (Union[list, tf.keras.Sequential]): The underlying network of the model. Can be a list of layers,
+                then either a regular tf.keras.Sequential or HealpyGCNN model is initialized.
+            n_side (int): The healpy n_side of the input.
+            indices (np.ndarray): 1d array of indices, corresponding to the pixel ids of the input map footprint.
+            n_neighbors (int, optional): Number of neighbors considered when building the graph, currently supported
+                values are: 8, 20, 40 and 60. Defaults to 20.
+            max_batch_size (int, optional): Maximal batch size this network is supposed to handle. This determines the
+                number of splits in the tf.sparse.sparse_dense_matmul operation, which are subsequently applied
+                independent of the actual batch size. Defaults to None, then no such precautions are taken, which may
+                cause an error.
+            initial_Fin (int, optional) Initial number of input features. Defaults to None, then like for
+                max_batch_size, there are no precautions taken.
+            input_shape (tf.tensor, optional): Input shape of the network, necessary if one wants to restore the model.
+                Defaults to None.
+            optimizer (tf.keras.optimizers.Optimizer, optional): Optimizer of the model. Defaults to None, which loads
+                Adam.
+            optimizer_kwargs (dict, optional): Keyword arguments passed to the optimizer. Defaults to {}.
+            summary_dir (str, optional): Directory to save the summaries. Defaults to None.
+            checkpoint_dir (str, optional): Directory where to save the weights and optimizer. Defaults to None.
+            restore_checkpoint (bool, optional): Whether to restore the network from a checkpoint, or initialize it.
+                Defaults to False.
+            max_checkpoints (int, optional): Maximum number of checkpoints to keep. Defaults to 3.
+            init_step (int, optional): Initial step. Defaults to 0.
+            strategy (Union[tf.distribute.Strategy, deep_lss.utils.distribute.HorovodStrategy], optional):
+                The distribution strategy the model was created within. Defaults to None, then training is local.
+        """
+
+        # init the base model
+        super(GridLossModel, self).__init__(
+            network=network,
+            input_shape=input_shape,
+            optimizer=optimizer,
+            optimizer_kwargs=optimizer_kwargs,
+            summary_dir=summary_dir,
+            checkpoint_dir=checkpoint_dir,
+            restore_from_checkpoint=restore_checkpoint,
+            max_checkpoints=max_checkpoints,
+            init_step=init_step,
+            strategy=strategy,
+            # DeepSphere
+            n_side=n_side,
+            indices=indices,
+            n_neighbors=n_neighbors,
+            max_batch_size=max_batch_size,
+            initial_Fin=initial_Fin,
+        )
+        LOGGER.info(f"Initialized the GridLossModel")
+
+    def setup_grid_loss_step(
+        self,
+        batch_size,
+        n_channels,
+        loss="mse",
+        # gradient clipping + regularization
+        clip_by_value=None,
+        clip_by_norm=None,
+        clip_by_global_norm=10.0,
+        l2_norm_weight=None,
+    ):
+        if loss == "mse":
+            if isinstance(self.strategy, (tf.distribute.MirroredStrategy, tf.distribute.MultiWorkerMirroredStrategy)):
+                # to be compatible with the delta loss, the loss is averaged per replica
+                loss_func = lambda x, y: (1.0 / batch_size) * tf.keras.losses.MeanSquaredError(
+                    reduction=tf.keras.losses.Reduction.SUM
+                )(x, y)
+            else:
+                loss_func = tf.keras.losses.MeanSquaredError(reduction=tf.keras.losses.Reduction.AUTO)
+            LOGGER.warning(f"Using the Mean Squared Error")
+        elif loss == "likelihood":
+            raise NotImplementedError
+        elif loss == "mutual_info":
+            raise NotImplementedError
+
+        current_float = get_backend_floatx()
+        in_shape = (batch_size, len(self.network.indices_in), n_channels)
+
+        # not distributed via tensorflow builtin
+        if (self.strategy is None) or isinstance(self.strategy, HorovodStrategy):
+            @tf.function(input_signature=[tf.TensorSpec(shape=in_shape, dtype=current_float)], jit_compile=False)
+            def grid_train_step(input_preds, input_labels):
+                LOGGER.warning(f"Tracing grid_train_step")
+                self.base_train_step(
+                    input_tensor=input_preds,
+                    input_labels=input_labels,
+                    loss_function=loss_func,
+                    # gradient clipping + regularization
+                    clip_by_value=clip_by_value,
+                    clip_by_norm=clip_by_norm,
+                    clip_by_global_norm=clip_by_global_norm,
+                    l2_norm_weight=l2_norm_weight,
+                )
+
+        # distributed via tensorflow builtin
+        elif isinstance(self.strategy, tf.distribute.Strategy):
+            # passing an input_signature like above for a distributed dset leads the following error:
+            # AttributeError: 'PerReplica' object has no attribute 'dtype'
+            # Instead do like https://www.tensorflow.org/tutorials/distribute/input#using_the_element_spec_property
+            @tf.function(jit_compile=False)
+            def grid_train_step(input_preds, input_labels):
+                LOGGER.warning(f"Tracing distributed delta_train_step")
+                self.distributed_train_step(
+                    input_tensor=input_preds,
+                    input_labels=input_labels,
+                    loss_function=loss_func,
+                    # gradient clipping + regularization
+                    clip_by_value=clip_by_value,
+                    clip_by_norm=clip_by_norm,
+                    clip_by_global_norm=clip_by_global_norm,
+                    l2_norm_weight=l2_norm_weight,
+                )
+
+        else:
+            raise ValueError(f"Invalid strategy {self.strategy} was passed")
+
+        LOGGER.info(f"Set up the training step of the {loss} loss")
+        self.grid_train_step = grid_train_step

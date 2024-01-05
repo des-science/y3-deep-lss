@@ -36,6 +36,7 @@ class BaseModel(object):
         network,
         input_shape=None,
         optimizer=None,
+        optimizer_kwargs={},
         summary_dir=None,
         checkpoint_dir=None,
         restore_from_checkpoint=False,
@@ -57,6 +58,7 @@ class BaseModel(object):
             input_shape (tf.tensor, optional): Input shape of the network, necessary if one wants to restore the
                 model. Defaults to None.
             optimizer (tf.keras.optimizers.Optimizer, optional): Optimizer of the model. Defaults to None.
+            optimizer_kwargs (dict, optional): Additional keyword arguments passed to the optimizer. Defaults to {}.
             summary_dir (str, optional): Directory to save the summaries. Defaults to None.
             checkpoint_dir (str, optional): Directory where to save the weights and optimizer. Defaults to None.
             restore_checkpoint (boo, optional): Whether to restore the network from a checkpoint, or initialize it.
@@ -115,7 +117,7 @@ class BaseModel(object):
 
         # set up the optimizer
         if self.optimizer is None:
-            self.optimizer = tf.keras.optimizers.Adam(learning_rate=1e-4)
+            self.optimizer = tf.keras.optimizers.Adam(**optimizer_kwargs)
 
         # build the network
         if self.input_shape is not None:

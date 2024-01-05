@@ -44,6 +44,7 @@ class DeltaLossModel(BaseModel):
         # general
         input_shape=None,
         optimizer=None,
+        optimizer_kwargs={},
         summary_dir=None,
         checkpoint_dir=None,
         restore_checkpoint=False,
@@ -70,6 +71,7 @@ class DeltaLossModel(BaseModel):
                 Defaults to None.
             optimizer (tf.keras.optimizers.Optimizer, optional): Optimizer of the model. Defaults to None, which loads
                 Adam.
+            optimizer_kwargs (dict, optional): Keyword arguments for the optimizer. Defaults to {}.
             summary_dir (str, optional): Directory to save the summaries. Defaults to None.
             checkpoint_dir (str, optional): Directory where to save the weights and optimizer. Defaults to None.
             restore_checkpoint (bool, optional): Whether to restore the network from a checkpoint, or initialize it.
@@ -85,6 +87,7 @@ class DeltaLossModel(BaseModel):
             network=network,
             input_shape=input_shape,
             optimizer=optimizer,
+            optimizer_kwargs=optimizer_kwargs,
             summary_dir=summary_dir,
             checkpoint_dir=checkpoint_dir,
             restore_from_checkpoint=restore_checkpoint,
@@ -283,5 +286,5 @@ class DeltaLossModel(BaseModel):
         else:
             raise ValueError(f"Invalid strategy {self.strategy} was passed")
 
-        LOGGER.info("Set up the traing step of the delta loss")
+        LOGGER.info("Set up the training step of the delta loss")
         self.delta_train_step = delta_train_step

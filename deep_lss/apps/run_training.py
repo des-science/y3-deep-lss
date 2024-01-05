@@ -13,17 +13,19 @@ TODO make esub compatible? The index could correspond to a neural net architectu
 """
 
 import tensorflow as tf
-import os, argparse, warnings, yaml, psutil, GPUtil, wandb
+import os, argparse, warnings, yaml, wandb
 
 from datetime import datetime
 from time import time
 from contextlib import nullcontext
 
 from msfm.fiducial_pipeline import FiducialPipeline
+from msfm.grid_pipeline import GridPipeline
 from msfm.utils import logger, input_output, files, parameters
 
 from deep_lss.utils import distribute, eval, configuration
 from deep_lss.models.delta_model import DeltaLossModel
+from deep_lss.models.grid_model import GridLossModel
 from deep_lss.utils.distribute import HorovodStrategy
 from deep_lss.nets import NETWORKS
 
@@ -46,13 +48,20 @@ def setup():
         help="logging level",
     )
     parser.add_argument(
+        "--loss_function",
+        type=str,
+        default="delta",
+        choices=["delta", "mse", "likelihood", "mutual_info"],
+        help="loss function to train the network with",
+    )
+    parser.add_argument(
         "--dist_strategy",
         choices=[None, "mirrored", "multi_worker_mirrored", "horovod"],
         default=None,
         help="distribution strategy, use None to run locally",
     )
     parser.add_argument(
-        "--fidu_train_tfr_pattern",
+        "--train_tfr_pattern",
         type=str,
         required=True,
         help="input root dir of the fiducial data vectors (training)",
@@ -126,6 +135,11 @@ def setup():
     parser.add_argument("--wandb_notes", type=str, default=None, help="notes for weights & biases (longer than tags)")
 
     args, _ = parser.parse_known_args()
+
+    if args.loss_function == "delta":
+        assert "fiducial" in args.train_tfr_pattern, f"The delta loss can only be used for the fiducial dataset"
+    else:
+        assert "grid" in args.train_tfr_pattern, f"The {args.loss_function} loss can only be used for the grid dataset"
 
     # set up directories
     file_dir = os.path.dirname(__file__)
@@ -225,9 +239,27 @@ def training():
     output_every = net_conf["training"]["output_every"]
     checkpoint_every = net_conf["training"]["checkpoint_every"]
     eval_every = net_conf["training"]["eval_every"]
-    dset_kwargs = net_conf["dset"]["training"]
-    local_batch_size = dset_kwargs["local_batch_size"]
-    _ = distribute.get_global_batch_size(strategy, local_batch_size)
+
+    # constants: miscellaneous
+    smoothing_kwargs = configuration.get_smoothing_kwargs(msfm_conf, dlss_conf, net_conf, dir_base=args.dir_base)
+
+    if args.loss_function == "delta":
+        Pipeline = FiducialPipeline
+        Model = DeltaLossModel
+        n_output = n_params
+        dset_kwargs = {**net_conf["dset"]["training"]["general"], **net_conf["dset"]["training"]["delta_loss"]}
+        local_batch_size = dset_kwargs["local_batch_size"]
+        effective_local_batch_size = local_batch_size * (2 * n_params + 1)
+    else:
+        if args.loss_function == "likelihood":
+            n_output = n_params + n_params * (n_params + 1) // 2
+        else:
+            n_output = n_params
+        Pipeline = GridPipeline
+        Model = GridLossModel
+        dset_kwargs = {**net_conf["dset"]["training"]["general"], **net_conf["dset"]["training"]["grid_loss"]}
+        local_batch_size = dset_kwargs["local_batch_size"]
+        effective_local_batch_size = local_batch_size
 
     try:
         n_z_bins = len(dset_kwargs["z_bin_inds"])
@@ -258,16 +290,13 @@ def training():
             notes=args.wandb_notes,
         )
 
-    smoothing_kwargs = configuration.get_smoothing_kwargs(msfm_conf, dlss_conf, net_conf, dir_base=args.dir_base)
-
-    fiducial_pipeline = FiducialPipeline(
-        conf=msfm_conf, **{**dlss_conf["dset"]["general"], **dlss_conf["dset"]["training"]}
-    )
+    # dataset
+    train_pipeline = Pipeline(conf=msfm_conf, **{**dlss_conf["dset"]["general"], **dlss_conf["dset"]["training"]})
 
     # like https://www.tensorflow.org/tutorials/distribute/input#tfdistributestrategydistribute_datasets_from_function
     def dataset_fn(input_context):
-        dset = fiducial_pipeline.get_dset(
-            tfr_pattern=args.fidu_train_tfr_pattern,
+        dset = train_pipeline.get_dset(
+            tfr_pattern=args.train_tfr_pattern,
             **dset_kwargs,
             # distribution
             input_context=input_context,
@@ -278,36 +307,45 @@ def training():
     dist_dset = strategy.distribute_datasets_from_function(dataset_fn)
     dist_iter = iter(dist_dset)
 
-    # create all of the variables within the strategy's scope, such that they are mirrored
+    # network, create all of the variables within the strategy's scope, such that they are mirrored
     with strategy.scope():
         network = NETWORKS[net_conf["model"]["name"]](
-            output_shape=n_params, smoothing_kwargs=smoothing_kwargs, **net_conf["model"]["kwargs"]
+            output_shape=n_output, smoothing_kwargs=smoothing_kwargs, **net_conf["model"]["kwargs"]
         ).get_layers()
         LOGGER.info(f"Loaded a network specification of type {NETWORKS[net_conf['model']['name']]}")
 
-        # build the model
-        model = DeltaLossModel(
+        model = Model(
             network=network,
             n_side=n_side,
             indices=data_vec_pix,
             n_neighbors=net_conf["model"]["n_neighbors"],
             max_checkpoints=net_conf["model"]["max_checkpoints"],
+            optimizer_kwargs=net_conf["training"]["optimization"]["optimizer"],
             input_shape=(None, len(data_vec_pix), n_z_bins),
-            max_batch_size=local_batch_size * (2 * n_params + 1),
+            max_batch_size=effective_local_batch_size,
             checkpoint_dir=checkpoint_dir,
             summary_dir=summary_dir,
             restore_checkpoint=args.restore_checkpoint,
             strategy=strategy,
         )
 
-    # set up the training loss
-    model.setup_delta_loss_step(
-        n_params,
-        local_batch_size,
-        perts,
-        n_channels=n_z_bins,
-        **dlss_conf["delta_loss"],
-    )
+    # training step
+    if args.loss_function == "delta":
+        model.setup_delta_loss_step(
+            n_params,
+            local_batch_size,
+            perts,
+            n_channels=n_z_bins,
+            **dlss_conf["delta_loss"],
+            **net_conf["training"]["optimization"]["gradient_clipping"],
+        )
+    else:
+        model.setup_grid_loss_step(
+            loss=args.loss_function,
+            batch_size=local_batch_size,
+            n_channels=n_z_bins,
+            **net_conf["training"]["optimization"]["gradient_clipping"],
+        )
 
     LOGGER.info(f"Starting training")
     LOGGER.timer.start("training")
@@ -318,8 +356,14 @@ def training():
         # optional context like https://stackoverflow.com/a/34798330
         with tf.profiler.experimental.Trace("step", step_num=step, _r=1) if args.profile else nullcontext():
             # train step
-            dv_batch, _ = next(dist_iter)
-            model.delta_train_step(dv_batch)
+            if args.loss_function == "delta":
+                dv_batch, index = next(dist_iter)
+                model.delta_train_step(dv_batch)
+                # ic(index[0])
+            else:
+                dv_batch, cosmo_batch, index = next(dist_iter)
+                model.grid_train_step(dv_batch, cosmo_batch)
+                # ic(index[0])
 
             # horovod
             if isinstance(model.strategy, HorovodStrategy) and step == 1:
@@ -346,7 +390,7 @@ def training():
                 if args.evaluate_training_set:
                     out_file = eval.evaluate_fiducial(
                         model=model,
-                        tfr_pattern=args.fidu_train_tfr_pattern,
+                        tfr_pattern=args.train_tfr_pattern,
                         msfm_conf=msfm_conf,
                         dlss_conf=dlss_conf,
                         net_conf=net_conf,
@@ -411,16 +455,6 @@ def training():
             model.write_summary("global_step", step)
             # wandb.log({"global_step": step})
             t_prev = t_now
-
-            # # memory usage
-            # if step % 100 == 0:
-            #     # CPU, in percent
-            #     tf.summary.scalar(f"CPU_mem", psutil.virtual_memory().percent)
-
-            #     for i in range(n_gpus):
-            #         # GPU, in percent
-            #         mem_info = tf.config.experimental.get_memory_info(f"/GPU:{i}")
-            #         tf.summary.scalar(f"GPU_{i}_mem", mem_info["current"] / total_gpu_mem)
 
     LOGGER.info(f"Finished training after {n_steps} steps and {LOGGER.timer.elapsed('training')}")
 
