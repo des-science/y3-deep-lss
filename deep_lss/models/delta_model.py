@@ -90,7 +90,7 @@ class DeltaLossModel(BaseModel):
             optimizer_kwargs=optimizer_kwargs,
             summary_dir=summary_dir,
             checkpoint_dir=checkpoint_dir,
-            restore_from_checkpoint=restore_checkpoint,
+            restore_checkpoint=restore_checkpoint,
             max_checkpoints=max_checkpoints,
             init_step=init_step,
             strategy=strategy,

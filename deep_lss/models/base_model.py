@@ -39,7 +39,7 @@ class BaseModel(object):
         optimizer_kwargs={},
         summary_dir=None,
         checkpoint_dir=None,
-        restore_from_checkpoint=False,
+        restore_checkpoint=False,
         max_checkpoints=3,
         init_step=0,
         strategy=None,
@@ -110,7 +110,7 @@ class BaseModel(object):
         self.optimizer = optimizer
         self.summary_dir = summary_dir
         self.checkpoint_dir = checkpoint_dir
-        self.restore_from_checkpoint = restore_from_checkpoint
+        self.restore_from_checkpoint = restore_checkpoint
         self.max_checkpoints = max_checkpoints
         self.init_step = init_step
         self.strategy = strategy

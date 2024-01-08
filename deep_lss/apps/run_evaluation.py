@@ -15,8 +15,7 @@ import os, argparse, warnings, yaml, wandb
 from msfm.utils import logger, files
 
 from deep_lss.utils import configuration, distribute, eval
-from deep_lss.models.delta_model import DeltaLossModel
-from deep_lss.utils.distribute import HorovodStrategy
+from deep_lss.models.base_model import BaseModel
 from deep_lss.nets import NETWORKS
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
@@ -103,10 +102,11 @@ if __name__ == "__main__":
     LOGGER.info(f"Loaded configs from the model directory")
 
     # general constants
+    loss_func = net_conf["training"]["loss"]
     all_params = msfm_conf["analysis"]["params"]
     target_params = dlss_conf["dset"]["training"]["params"]
-    n_output = len(target_params)
-    LOGGER.info(f"The networks have output shape {n_output} and target {target_params}")
+    n_params = len(target_params)
+    LOGGER.info(f"The networks have output shape {n_params} and target {target_params}")
 
     # pipeline constants
     n_side = msfm_conf["analysis"]["n_side"]
@@ -139,7 +139,14 @@ if __name__ == "__main__":
             notes=args.wandb_notes,
         )
 
-    smoothing_kwargs = configuration.get_smoothing_kwargs(msfm_conf, dlss_conf, net_conf, dir_base=args.dir_model)
+    smoothing_kwargs = configuration.get_smoothing_kwargs(
+        loss_func, msfm_conf, dlss_conf, net_conf, dir_base=args.dir_model
+    )
+
+    if loss_func == "likelihood":
+        n_output = n_params + n_params * (n_params + 1) // 2
+    else:
+        n_output = n_params
 
     # set up directories
     checkpoint_dir = os.path.abspath(os.path.join(args.dir_model, "checkpoint"))
@@ -152,8 +159,8 @@ if __name__ == "__main__":
         ).get_layers()
         LOGGER.info(f"Loaded a network specification of type {NETWORKS[net_conf['model']['name']]}")
 
-        # build the model
-        model = DeltaLossModel(
+        # build the model, same regardless of the loss function (fiducial or grid)
+        model = BaseModel(
             network=network,
             n_side=n_side,
             indices=data_vec_pix,

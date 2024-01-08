@@ -116,7 +116,7 @@ def evaluate_grid(model, tfr_pattern, msfm_conf, dlss_conf, net_conf, dir_out, f
     # network constants
     strategy = model.strategy
     global_batch_size = distribute.get_global_batch_size(strategy, dset_kwargs["local_batch_size"])
-    n_steps = math.ceil(n_examples / global_batch_size)
+    n_batches = math.ceil(n_examples / global_batch_size)
     save_second_to_last_layer = net_conf["model"]["save_second_to_last_layer"]
 
     grid_pipeline = GridPipeline(
@@ -151,7 +151,7 @@ def evaluate_grid(model, tfr_pattern, msfm_conf, dlss_conf, net_conf, dir_out, f
     i_noises = []
     i_examples = []
     for dv_batch, cosmo_batch, index_batch in LOGGER.progressbar(
-        dist_dset, at_level="info", total=n_steps, desc="evaluating the grid"
+        dist_dset, at_level="info", total=n_batches, desc="evaluating the grid"
     ):
         # DistributedValues of shape (local_batch_size, n_output)
         if save_second_to_last_layer:
@@ -260,7 +260,7 @@ def evaluate_fiducial(
     # network constants
     strategy = model.strategy
     global_batch_size = distribute.get_global_batch_size(strategy, dset_kwargs["local_batch_size"])
-    n_steps = math.ceil(n_examples / global_batch_size)
+    n_batches = math.ceil(n_examples / global_batch_size)
     save_second_to_last_layer = net_conf["model"]["save_second_to_last_layer"]
 
     fiducial_pipeline = FiducialPipeline(
@@ -293,7 +293,7 @@ def evaluate_fiducial(
     i_examples = []
     i_noises = []
     for dv_batch, index_batch in LOGGER.progressbar(
-        dist_dset, at_level="info", total=n_steps, desc="evaluating at the fiducial"
+        dist_dset, at_level="info", total=n_batches, desc="evaluating at the fiducial"
     ):
         # DistributedValues of shape (local_batch_size, n_output)
         if save_second_to_last_layer:

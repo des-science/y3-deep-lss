@@ -8,8 +8,6 @@ Train the DeepSphere graph neural networks at the fiducial cosmology and its per
 maximizing loss to find an informative summary statistic.
 
 Meant for the GPU nodes of the Perlmutter cluster at NERSC.
-TODO implement weights & biases versioning
-TODO make esub compatible? The index could correspond to a neural net architecture in the hyperparameter search
 """
 
 import tensorflow as tf
@@ -183,6 +181,9 @@ def training():
         msfm_conf = files.load_config(args.msfm_config)
         LOGGER.info(f"Loaded configs from the provided paths")
 
+        # add the loss function to the network config
+        net_conf["training"]["loss"] = args.loss_function
+
         if args.dir_model is None:
             net_name = net_conf["name"]
             now = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
@@ -346,6 +347,7 @@ def training():
             loss=args.loss_function,
             batch_size=local_batch_size,
             n_channels=n_z_bins,
+            n_params=n_params,
             **net_conf["training"]["optimization"]["gradient_clipping"],
         )
 

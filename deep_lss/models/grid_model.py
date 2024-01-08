@@ -14,7 +14,7 @@ import warnings
 import tensorflow as tf
 
 from msfm.utils import logger
-from deep_lss.utils import delta_loss
+from deep_lss.utils import likelihood_loss
 from deep_lss.utils.distribute import HorovodStrategy
 from deep_lss.models.base_model import BaseModel
 from deep_lss.utils.configuration import get_backend_floatx
@@ -89,7 +89,7 @@ class GridLossModel(BaseModel):
             optimizer_kwargs=optimizer_kwargs,
             summary_dir=summary_dir,
             checkpoint_dir=checkpoint_dir,
-            restore_from_checkpoint=restore_checkpoint,
+            restore_checkpoint=restore_checkpoint,
             max_checkpoints=max_checkpoints,
             init_step=init_step,
             strategy=strategy,
@@ -107,6 +107,8 @@ class GridLossModel(BaseModel):
         batch_size,
         n_channels,
         loss="mse",
+        # likelihood loss
+        n_params=None,
         # gradient clipping + regularization
         clip_by_value=None,
         clip_by_norm=None,
@@ -116,14 +118,21 @@ class GridLossModel(BaseModel):
         if loss == "mse":
             if isinstance(self.strategy, (tf.distribute.MirroredStrategy, tf.distribute.MultiWorkerMirroredStrategy)):
                 # to be compatible with the delta loss, the loss is averaged per replica
-                loss_func = lambda x, y: (1.0 / batch_size) * tf.keras.losses.MeanSquaredError(
+                loss_func = lambda preds, labels: (1.0 / batch_size) * tf.keras.losses.MeanSquaredError(
                     reduction=tf.keras.losses.Reduction.SUM
-                )(x, y)
+                )(preds, labels)
             else:
                 loss_func = tf.keras.losses.MeanSquaredError(reduction=tf.keras.losses.Reduction.AUTO)
             LOGGER.warning(f"Using the Mean Squared Error")
         elif loss == "likelihood":
-            raise NotImplementedError
+            assert n_params is not None, f"n_theta must be passed for the likelihood loss"
+
+            # analogously to the delta loss, the per replica averaging of the likelihood loss is done in 
+            # likelihood_loss.py, so no distinction between distributed and non-distributed training is necessary here
+            loss_func = lambda preds, labels: likelihood_loss.neg_likelihood_loss(
+                preds, labels, n_params, summary_writer=self.summary_writer, training=True
+            )
+
         elif loss == "mutual_info":
             raise NotImplementedError
 
@@ -132,6 +141,7 @@ class GridLossModel(BaseModel):
 
         # not distributed via tensorflow builtin
         if (self.strategy is None) or isinstance(self.strategy, HorovodStrategy):
+
             @tf.function(input_signature=[tf.TensorSpec(shape=in_shape, dtype=current_float)], jit_compile=False)
             def grid_train_step(input_preds, input_labels):
                 LOGGER.warning(f"Tracing grid_train_step")
@@ -153,7 +163,7 @@ class GridLossModel(BaseModel):
             # Instead do like https://www.tensorflow.org/tutorials/distribute/input#using_the_element_spec_property
             @tf.function(jit_compile=False)
             def grid_train_step(input_preds, input_labels):
-                LOGGER.warning(f"Tracing distributed delta_train_step")
+                LOGGER.warning(f"Tracing distributed grid_train_step")
                 self.distributed_train_step(
                     input_tensor=input_preds,
                     input_labels=input_labels,

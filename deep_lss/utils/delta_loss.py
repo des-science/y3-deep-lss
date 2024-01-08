@@ -14,39 +14,12 @@ import numpy as np
 import tensorflow as tf
 import horovod.tensorflow as hvd
 
-from deep_lss.utils.configuration import get_backend_floatx
+from deep_lss.utils import summary, configuration
 from deep_lss.utils.distribute import HorovodStrategy
 
 from msfm.utils import logger
 
 LOGGER = logger.get_logger(__file__)
-
-
-def _write_summary(label, value, summary_writer, training=True, summary_type="scalar"):
-    """Handle different kinds of summaries to TensorBoard.
-
-    Args:
-        label (str): The name of the summary.
-        value (tf.Tensor): The value to log.
-        summary_writer (tf.summary.SummaryWriter): The summary writer.
-        training (bool, optional): Only log during training. Defaults to True.
-        summary_type (str, optional): The kind of summary, allowed are 'scalar', 'histogram' and 'image. Defaults to
-            "scalar".
-
-    Raises:
-        ValueError: If an invalid summary_type is passed.
-    """
-    if summary_writer is not None and training:
-        with summary_writer.as_default():
-            if summary_type == "scalar":
-                tf.summary.scalar(label, value)
-            elif summary_type == "histogram":
-                tf.summary.histogram(label, value)
-            elif summary_type == "image":
-                # value = tf.image.resize(value, size=(128, 128), method=tf.image.ResizeMethod.NEAREST_NEIGHBOR)
-                tf.summary.image(label, value)
-            else:
-                raise ValueError(f"Invalid summary type {summary_type} was passed")
 
 
 def tf_matrix_condition(m):
@@ -86,7 +59,7 @@ def get_jac_and_cov_matrix(
             is the dimensionality of the summary statistic.
     """
     # get the current backend
-    current_float = get_backend_floatx()
+    current_float = configuration.get_backend_floatx()
 
     # needs to be a tf.tensor, has shape (n_same * (1 + 2 * n_params), n_params)
     if isinstance(predictions, np.ndarray):
@@ -124,7 +97,9 @@ def get_jac_and_cov_matrix(
         param_splits = tf.split(splits[0], num_or_size_splits=n_output, axis=-1)
 
         for num, single_param in enumerate(param_splits):
-            _write_summary(f"param_{num}_hist", single_param, summary_writer, training, summary_type="histogram")
+            summary.write_summary(
+                f"delta_param_{num}_hist", single_param, summary_writer, training, summary_type="histogram"
+            )
 
     # get the covariance NOTE the mean is taken over the n_same, the (local/global) batch size
     mean = tf.reduce_mean(splits[0], axis=1, keepdims=True)
@@ -268,7 +243,7 @@ def delta_loss(
     # replica_id = tf.distribute.get_replica_context().replica_id_in_sync_group
 
     # get the current float
-    current_float = get_backend_floatx()
+    current_float = configuration.get_backend_floatx()
 
     # get cov and jac of shapes (n_output/n_params, n_output, n_output)
     cov, jacobian = get_jac_and_cov_matrix(
@@ -284,19 +259,19 @@ def delta_loss(
     )
 
     # nice output
-    _write_summary("jacobian_hist", jacobian, summary_writer, training, summary_type="histogram")
+    summary.write_summary("delta_jacobian_hist", jacobian, summary_writer, training, summary_type="histogram")
     if img_summary:
         jac_img = tf.expand_dims(jacobian, axis=3)
         jac_max = tf.reduce_max(jac_img, axis=(1, 2), keepdims=True)
         jac_min = tf.reduce_min(jac_img, axis=(1, 2), keepdims=True)
         jac_img = tf.math.divide(jac_img - jac_min, jac_max - jac_min)
-        _write_summary("jacobian_img", jac_img, summary_writer, training, summary_type="image")
+        summary.write_summary("delta_jacobian_img", jac_img, summary_writer, training, summary_type="image")
 
         cov_img = tf.expand_dims(cov, axis=3)
         cov_max = tf.reduce_max(cov_img, axis=(1, 2), keepdims=True)
         cov_min = tf.reduce_min(cov_img, axis=(1, 2), keepdims=True)
         cov_img = tf.math.divide(cov_img - cov_min, cov_max - cov_min)
-        _write_summary("covariance_img", cov_img, summary_writer, training, summary_type="image")
+        summary.write_summary("delta_covariance_img", cov_img, summary_writer, training, summary_type="image")
 
         # get corrlation matrix
         v = tf.math.sqrt(tf.linalg.diag_part(cov))
@@ -305,10 +280,10 @@ def delta_loss(
         cor_img = tf.expand_dims(cor, axis=3)
         # fit between 0 and 1
         cor_img = tf.math.add(0.5, tf.math.scalar_mul(0.5, cor_img))
-        _write_summary("correlation_img", cor_img, summary_writer, training, summary_type="image")
+        summary.write_summary("delta_correlation_img", cor_img, summary_writer, training, summary_type="image")
 
     # get the current backend
-    current_float = get_backend_floatx()
+    current_float = configuration.get_backend_floatx()
 
     # in case predictions is a numpy array
     if isinstance(predictions, np.ndarray):
@@ -406,7 +381,7 @@ def delta_loss(
     # normal mean, this is taken if the output dimension of the summary statistic is different than the number of
     # parameters. So nothing happens here if n_output = n_params, because then cov_det only has one entry.
     cov_det = tf.reduce_mean(cov_det)
-    _write_summary("cov_det_loss", cov_det, summary_writer, training)
+    summary.write_summary("delta_cov_det_loss", cov_det, summary_writer, training)
 
     # jacobian loss (log of this is unstable)
     if cov_weight:
@@ -433,9 +408,9 @@ def delta_loss(
 
     jac_loss = tf.reduce_mean(jac_loss)
     if cov_weight:
-        _write_summary("covariance_loss", jac_loss, summary_writer, training)
+        summary.write_summary("delta_covariance_loss", jac_loss, summary_writer, training)
     else:
-        _write_summary("jacobian_loss", jac_loss, summary_writer, training)
+        summary.write_summary("delta_jacobian_loss", jac_loss, summary_writer, training)
 
     loss = tf.add(cov_det, tf.scalar_mul(jac_weight, jac_loss))
 
@@ -451,7 +426,7 @@ def delta_loss(
             c = tf.multiply(weights, c)
 
         jac_cond_loss = tf.reduce_mean(c)
-        _write_summary("jacobian_condition_loss", jac_cond_loss, summary_writer, training)
+        summary.write_summary("delta_jacobian_condition_loss", jac_cond_loss, summary_writer, training)
 
         jac_cond_loss = tf.scalar_mul(jac_cond_weight, jac_cond_loss)
         loss = tf.add(loss, jac_cond_loss)
@@ -475,7 +450,7 @@ def delta_loss(
 
         # simple mean reduction
         diff_loss = tf.reduce_mean(diff_loss)
-        _write_summary("diff_loss", diff_loss, summary_writer, training)
+        summary.write_summary("delta_diff_loss", diff_loss, summary_writer, training)
 
         # force weight
         diff_loss = tf.scalar_mul(force_params_weight, diff_loss)
