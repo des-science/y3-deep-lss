@@ -102,8 +102,8 @@ if __name__ == "__main__":
     LOGGER.info(f"Loaded configs from the model directory")
 
     # general constants
-    loss_func = net_conf["training"]["loss"]
     all_params = msfm_conf["analysis"]["params"]
+    loss_func = dlss_conf["run"]["loss_func"]
     target_params = dlss_conf["dset"]["training"]["params"]
     n_params = len(target_params)
     LOGGER.info(f"The networks have output shape {n_params} and target {target_params}")

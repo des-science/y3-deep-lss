@@ -11,7 +11,7 @@ Meant for the GPU nodes of the Perlmutter cluster at NERSC.
 """
 
 import tensorflow as tf
-import os, argparse, warnings, yaml, wandb
+import os, argparse, warnings, yaml, wandb, shutil
 
 from datetime import datetime
 from time import time
@@ -131,6 +131,7 @@ def setup():
     parser.add_argument("--wandb", action="store_true", help="log to weights & biases, otherwise log to tensorboard")
     parser.add_argument("--wandb_tags", nargs="+", type=str, default=None, help="tags for weights & biases")
     parser.add_argument("--wandb_notes", type=str, default=None, help="notes for weights & biases (longer than tags)")
+    parser.add_argument("--slurm_output", type=str, default=None, help="path to the slurm output file")
 
     args, _ = parser.parse_known_args()
 
@@ -147,6 +148,9 @@ def setup():
         args.dir_base = os.path.join(args.repo_dir, "run_files")
         os.makedirs(args.dir_base, exist_ok=True)
         LOGGER.info(f"Created base directory {args.dir_base}")
+
+    if args.slurm_output is not None:
+        args.slurm_output = os.path.abspath(args.slurm_output)
 
     # print arguments
     logger.set_all_loggers_level(args.verbosity)
@@ -181,9 +185,6 @@ def training():
         msfm_conf = files.load_config(args.msfm_config)
         LOGGER.info(f"Loaded configs from the provided paths")
 
-        # add the loss function to the network config
-        net_conf["training"]["loss"] = args.loss_function
-
         if args.dir_model is None:
             net_name = net_conf["name"]
             now = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
@@ -194,6 +195,13 @@ def training():
         dir_out = os.path.join(args.dir_base, args.dir_model)
         os.makedirs(dir_out, exist_ok=True)
         LOGGER.info(f"Created output directory {dir_out}")
+
+        # additions to the configs
+        dlss_conf["run"] = {}
+        dlss_conf["run"]["dir_model"] = dir_out
+        dlss_conf["run"]["dir_log"] = args.slurm_output
+        dlss_conf["run"]["loss_func"] = args.loss_function
+        dlss_conf["run"]["dist_strategy"] = args.dist_strategy
 
         # save the configs
         with open(os.path.join(dir_out, "configs.yaml"), "w") as f:
@@ -361,13 +369,11 @@ def training():
         with tf.profiler.experimental.Trace("step", step_num=step, _r=1) if args.profile else nullcontext():
             # train step
             if args.loss_function == "delta":
-                dv_batch, index = next(dist_iter)
+                dv_batch, _ = next(dist_iter)
                 model.delta_train_step(dv_batch)
-                # ic(index[0])
             else:
-                dv_batch, cosmo_batch, index = next(dist_iter)
+                dv_batch, cosmo_batch, _ = next(dist_iter)
                 model.grid_train_step(dv_batch, cosmo_batch)
-                # ic(index[0])
 
             # horovod
             if isinstance(model.strategy, HorovodStrategy) and step == 1:
@@ -376,8 +382,7 @@ def training():
 
             # output
             if (output_every is not None) and (step % output_every == 0):
-                print("\n")
-                LOGGER.info(f"Done with {step}/{n_steps} training steps after {LOGGER.timer.elapsed('training')}")
+                _copy_log(args, dir_out)
 
             # checkpoint
             if (checkpoint_every is not None) and (step % checkpoint_every == 0):
@@ -476,7 +481,13 @@ def training():
         wandb.finish()
 
     LOGGER.info(f"Script completed successfully")
+    _copy_log(args, dir_out)
 
 
-if __name__ == "__main__":
-    training()
+def _copy_log(args, dir_out):
+    if args.slurm_output is not None:
+        dir_log = os.path.join(dir_out, "logs")
+        os.makedirs(dir_log, exist_ok=True)
+
+        file_log = os.path.join(dir_log, os.path.basename(args.slurm_output))
+        shutil.copy(args.slurm_output, file_log)
