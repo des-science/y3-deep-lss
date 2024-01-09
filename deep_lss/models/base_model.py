@@ -118,6 +118,12 @@ class BaseModel(object):
         # set up the optimizer
         if self.optimizer is None:
             self.optimizer = tf.keras.optimizers.Adam(**optimizer_kwargs)
+        elif self.optimizer == "adam":
+            self.optimizer = tf.keras.optimizers.Adam(**optimizer_kwargs)
+        elif self.optimizer == "sgd":
+            self.optimizer = tf.keras.optimizers.SGD(**optimizer_kwargs)
+        else:
+            raise NotImplementedError(f"Optimizer {self.optimizer} is not implemented")
 
         # build the network
         if self.input_shape is not None:

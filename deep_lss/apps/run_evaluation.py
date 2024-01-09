@@ -103,8 +103,8 @@ if __name__ == "__main__":
 
     # general constants
     all_params = msfm_conf["analysis"]["params"]
-    loss_func = dlss_conf["run"]["loss_func"]
     target_params = dlss_conf["dset"]["training"]["params"]
+    loss_func = net_conf["run"]["loss_func"]
     n_params = len(target_params)
     LOGGER.info(f"The networks have output shape {n_params} and target {target_params}")
 
@@ -113,9 +113,9 @@ if __name__ == "__main__":
     data_vec_pix, _, _, _ = files.load_pixel_file(msfm_conf)
 
     n_z_bins = 0
-    if dlss_conf["dset"]["general"]["with_lensing"]:
+    if dlss_conf["dset"]["commmon"]["with_lensing"]:
         n_z_bins += len(msfm_conf["survey"]["metacal"]["z_bins"])
-    if dlss_conf["dset"]["general"]["with_clustering"]:
+    if dlss_conf["dset"]["commmon"]["with_clustering"]:
         n_z_bins += len(msfm_conf["survey"]["maglim"]["z_bins"])
 
     # weights and biases
@@ -154,17 +154,17 @@ if __name__ == "__main__":
     # create all of the variables within the strategy's scope, such that they are mirrored
     with strategy.scope():
         # load the layers
-        network = NETWORKS[net_conf["model"]["name"]](
-            output_shape=n_output, smoothing_kwargs=smoothing_kwargs, **net_conf["model"]["kwargs"]
+        network = NETWORKS[net_conf["network"]["name"]](
+            output_shape=n_output, smoothing_kwargs=smoothing_kwargs, **net_conf["network"]["kwargs"]
         ).get_layers()
-        LOGGER.info(f"Loaded a network specification of type {NETWORKS[net_conf['model']['name']]}")
+        LOGGER.info(f"Loaded a network specification of type {NETWORKS[net_conf['network']['name']]}")
 
         # build the model, same regardless of the loss function (fiducial or grid)
         model = BaseModel(
             network=network,
             n_side=n_side,
             indices=data_vec_pix,
-            n_neighbors=net_conf["model"]["n_neighbors"],
+            n_neighbors=net_conf["network"]["n_neighbors"],
             input_shape=(None, len(data_vec_pix), n_z_bins),
             checkpoint_dir=checkpoint_dir,
             # always load from a checkpoint

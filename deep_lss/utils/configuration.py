@@ -62,8 +62,8 @@ def get_smoothing_kwargs(loss_function, msfm_conf, dlss_conf, net_conf, dir_base
     mask_dict = files.get_tomo_dv_masks(msfm_conf)
 
     # dlss
-    with_lensing = dlss_conf["dset"]["general"]["with_lensing"]
-    with_clustering = dlss_conf["dset"]["general"]["with_clustering"]
+    with_lensing = dlss_conf["dset"]["common"]["with_lensing"]
+    with_clustering = dlss_conf["dset"]["common"]["with_clustering"]
 
     if with_lensing and with_clustering:
         mask = tf.concat([mask_dict["metacal"], mask_dict["maglim"]], axis=1)

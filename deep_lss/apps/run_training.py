@@ -128,10 +128,10 @@ def setup():
     parser.add_argument("--evaluate_training_set", action="store_true", help="evaluate the training set")
     parser.add_argument("--debug", action="store_true", help="activate debug mode")
     parser.add_argument("--profile", action="store_true", help="run the profiler")
+    parser.add_argument("--slurm_output", type=str, default=None, help="path to the slurm output file")
     parser.add_argument("--wandb", action="store_true", help="log to weights & biases, otherwise log to tensorboard")
     parser.add_argument("--wandb_tags", nargs="+", type=str, default=None, help="tags for weights & biases")
     parser.add_argument("--wandb_notes", type=str, default=None, help="notes for weights & biases (longer than tags)")
-    parser.add_argument("--slurm_output", type=str, default=None, help="path to the slurm output file")
 
     args, _ = parser.parse_known_args()
 
@@ -197,11 +197,11 @@ def training():
         LOGGER.info(f"Created output directory {dir_out}")
 
         # additions to the configs
-        dlss_conf["run"] = {}
-        dlss_conf["run"]["dir_model"] = dir_out
-        dlss_conf["run"]["dir_log"] = args.slurm_output
-        dlss_conf["run"]["loss_func"] = args.loss_function
-        dlss_conf["run"]["dist_strategy"] = args.dist_strategy
+        net_conf["run"] = {}
+        net_conf["run"]["dir_model"] = dir_out
+        net_conf["run"]["dir_log"] = args.slurm_output
+        net_conf["run"]["loss_func"] = args.loss_function
+        net_conf["run"]["dist_strategy"] = args.dist_strategy
 
         # save the configs
         with open(os.path.join(dir_out, "configs.yaml"), "w") as f:
@@ -261,11 +261,10 @@ def training():
     perts = parameters.get_fiducial_perturbations(params)
     LOGGER.info(f"Training with respect to the {n_params} parameters {params} with off sets {perts}")
 
-    with_lensing = dlss_conf["dset"]["general"]["with_lensing"]
-    with_clustering = dlss_conf["dset"]["general"]["with_clustering"]
+    with_lensing = dlss_conf["dset"]["common"]["with_lensing"]
+    with_clustering = dlss_conf["dset"]["common"]["with_clustering"]
 
     # constants: network
-    net_name = net_conf["name"]
     n_steps = net_conf["training"]["n_steps"]
     output_every = net_conf["training"]["output_every"]
     checkpoint_every = net_conf["training"]["checkpoint_every"]
@@ -276,11 +275,12 @@ def training():
         args.loss_function, msfm_conf, dlss_conf, net_conf, dir_base=args.dir_base
     )
 
+    dset_kwargs = net_conf["dset"]["training"]["common"]
     if args.loss_function == "delta":
         Pipeline = FiducialPipeline
         Model = DeltaLossModel
         n_output = n_params
-        dset_kwargs = {**net_conf["dset"]["training"]["general"], **net_conf["dset"]["training"]["delta_loss"]}
+        dset_kwargs.update(net_conf["dset"]["training"]["delta_loss"])
         local_batch_size = dset_kwargs["local_batch_size"]
         effective_local_batch_size = local_batch_size * (2 * n_params + 1)
     else:
@@ -290,7 +290,7 @@ def training():
             n_output = n_params
         Pipeline = GridPipeline
         Model = GridLossModel
-        dset_kwargs = {**net_conf["dset"]["training"]["general"], **net_conf["dset"]["training"]["grid_loss"]}
+        dset_kwargs.update(net_conf["dset"]["training"]["likelihood_loss"])
         local_batch_size = dset_kwargs["local_batch_size"]
         effective_local_batch_size = local_batch_size
 
@@ -304,7 +304,7 @@ def training():
             n_z_bins += len(msfm_conf["survey"]["maglim"]["z_bins"])
 
     # dataset
-    train_pipeline = Pipeline(conf=msfm_conf, **{**dlss_conf["dset"]["general"], **dlss_conf["dset"]["training"]})
+    train_pipeline = Pipeline(conf=msfm_conf, **{**dlss_conf["dset"]["common"], **dlss_conf["dset"]["training"]})
 
     # like https://www.tensorflow.org/tutorials/distribute/input#tfdistributestrategydistribute_datasets_from_function
     def dataset_fn(input_context):
@@ -322,18 +322,19 @@ def training():
 
     # network, create all of the variables within the strategy's scope, such that they are mirrored
     with strategy.scope():
-        network = NETWORKS[net_conf["model"]["name"]](
-            output_shape=n_output, smoothing_kwargs=smoothing_kwargs, **net_conf["model"]["kwargs"]
+        network = NETWORKS[net_conf["network"]["name"]](
+            output_shape=n_output, smoothing_kwargs=smoothing_kwargs, **net_conf["network"]["kwargs"]
         ).get_layers()
-        LOGGER.info(f"Loaded a network specification of type {NETWORKS[net_conf['model']['name']]}")
+        LOGGER.info(f"Loaded a network specification of type {NETWORKS[net_conf['network']['name']]}")
 
         model = Model(
             network=network,
             n_side=n_side,
             indices=data_vec_pix,
-            n_neighbors=net_conf["model"]["n_neighbors"],
-            max_checkpoints=net_conf["model"]["max_checkpoints"],
-            optimizer_kwargs=net_conf["training"]["optimization"]["optimizer"],
+            n_neighbors=net_conf["network"]["n_neighbors"],
+            max_checkpoints=net_conf["network"]["max_checkpoints"],
+            optimizer=net_conf["optimization"]["optimizer"],
+            optimizer_kwargs=net_conf["optimization"]["optimizer_kwargs"],
             input_shape=(None, len(data_vec_pix), n_z_bins),
             max_batch_size=effective_local_batch_size,
             checkpoint_dir=checkpoint_dir,
@@ -350,7 +351,7 @@ def training():
             perts,
             n_channels=n_z_bins,
             **dlss_conf["delta_loss"],
-            **net_conf["training"]["optimization"]["gradient_clipping"],
+            **net_conf["optimization"]["gradient_clipping"],
         )
     else:
         model.setup_grid_loss_step(
@@ -358,7 +359,7 @@ def training():
             batch_size=local_batch_size,
             n_channels=n_z_bins,
             n_params=n_params,
-            **net_conf["training"]["optimization"]["gradient_clipping"],
+            **net_conf["optimization"]["gradient_clipping"],
         )
 
     LOGGER.info(f"Starting training")
@@ -493,3 +494,7 @@ def _copy_log(args, dir_out):
 
         file_log = os.path.join(dir_log, os.path.basename(args.slurm_output))
         shutil.copy(args.slurm_output, file_log)
+
+
+if __name__ == "__main__":
+    training()
