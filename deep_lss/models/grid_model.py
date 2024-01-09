@@ -123,17 +123,20 @@ class GridLossModel(BaseModel):
                 )(preds, labels)
             else:
                 loss_func = tf.keras.losses.MeanSquaredError(reduction=tf.keras.losses.Reduction.AUTO)
-            LOGGER.warning(f"Using the Mean Squared Error")
+            LOGGER.warning(f"Using the Mean Squared Error. Note that the labels should be normalized!")
+
         elif loss == "likelihood":
             assert n_params is not None, f"n_theta must be passed for the likelihood loss"
 
-            # analogously to the delta loss, the per replica averaging of the likelihood loss is done in 
+            # analogously to the delta loss, the per replica averaging of the likelihood loss is done in
             # likelihood_loss.py, so no distinction between distributed and non-distributed training is necessary here
             loss_func = lambda preds, labels: likelihood_loss.neg_likelihood_loss(
                 preds, labels, n_params, summary_writer=self.summary_writer, training=True
             )
+            LOGGER.warning(f"Using the likelihood loss")
 
         elif loss == "mutual_info":
+            # see Section 7.3 in https://arxiv.org/pdf/2009.08459
             raise NotImplementedError
 
         current_float = get_backend_floatx()

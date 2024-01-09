@@ -223,6 +223,28 @@ def training():
     else:
         raise ValueError(f"Can't restore the model from an unspecified dir_model")
 
+    # weights and biases
+    if args.wandb:
+        group_name = distribute.get_wandb_group_name(strategy)
+
+        wandb_run = wandb.init(
+            project="y3-deep-lss",
+            config={"msfm": msfm_conf, "dlss": dlss_conf, "net": net_conf},
+            dir=dir_out,
+            group=group_name,
+            job_type="training",
+            # make sure that wandb logs to the cloud
+            mode="online",
+            force=True,
+            # to be able to log within graph mode
+            sync_tensorboard=True,
+            # additional metadata
+            tags=args.wandb_tags,
+            notes=args.wandb_notes,
+        )
+
+        LOGGER.info(f"Initialized weights & biases to {dir_out}")
+
     # set up subdirectories
     checkpoint_dir = os.path.abspath(os.path.join(dir_out, "checkpoint"))
     os.makedirs(checkpoint_dir, exist_ok=True)
@@ -280,26 +302,6 @@ def training():
             n_z_bins += len(msfm_conf["survey"]["metacal"]["z_bins"])
         if with_clustering:
             n_z_bins += len(msfm_conf["survey"]["maglim"]["z_bins"])
-
-    # weights and biases
-    if args.wandb:
-        group_name = distribute.get_wandb_group_name(strategy)
-
-        wandb_run = wandb.init(
-            project="y3-deep-lss",
-            config={"msfm": msfm_conf, "dlss": dlss_conf, "net": net_conf},
-            dir=dir_out,
-            group=group_name,
-            job_type="training",
-            # make sure that wandb logs to the cloud
-            mode="online",
-            force=True,
-            # to be able to log within graph mode
-            sync_tensorboard=True,
-            # additional metadata
-            tags=args.wandb_tags,
-            notes=args.wandb_notes,
-        )
 
     # dataset
     train_pipeline = Pipeline(conf=msfm_conf, **{**dlss_conf["dset"]["general"], **dlss_conf["dset"]["training"]})
