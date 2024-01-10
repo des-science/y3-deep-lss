@@ -1,14 +1,14 @@
 # contains the model specific configuration parameters for training and hyperparameter optimization
-name: "resnet_vanilla"
+name: resnet_vanilla
 
 training:
-  n_steps: 100
+  n_steps: 1000
   output_every: null
   checkpoint_every: null
   eval_every: null
 
 optimization:
-  optimizer: "adam"
+  optimizer: adam
   optimizer_kwargs:
     learning_rate: 0.0001
   gradient_clipping:
