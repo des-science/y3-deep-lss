@@ -500,9 +500,9 @@ def training():
     else:
         LOGGER.info(f"No checkpoint has been saved")
 
-    model.delete_temp_summaries()
     if args.wandb:
         wandb.finish()
+    model.delete_temp_summaries()
 
     LOGGER.info(f"Script completed successfully")
     _copy_log(args, dir_out)
