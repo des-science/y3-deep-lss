@@ -134,3 +134,51 @@ def get_backend_floatx():
             f"The only suppored keras backend floatx are float64 and float32 not "
             f"{tf.keras.backend.floatx()}! Please use tf.keras.backend.set_floatx to set an appropiate value."
         )
+
+
+def convert_dotted_to_nested_dict(dotted_dict):
+    """Convert a dictionary like {'a.b.c': 1, 'a.b.d': 2, 'a.e': 3} to a nested dictionary like
+    {'a': {'b': {'c': 1, 'd': 2}, 'e': 3}. This is needed to handle wandb configs in hyperparameter sweeps. Modified
+    from ChatGPT.
+
+    Args:
+        dotted_dict (dict): Dictionary with only one level of keys, where the keys are strings with dots.
+
+    Returns:
+        dict: A dictionary where the dots have been converted into nesting.
+    """
+
+    nested_dict = {}
+    for key, value in dotted_dict.items():
+        keys = key.split(".")
+        current_dict = nested_dict
+
+        for k in keys[:-1]:
+            current_dict = current_dict.setdefault(k, {})
+
+        current_dict[keys[-1]] = value
+
+    return nested_dict
+
+
+def update_nested_dict(original_dict, update_dict):
+    """
+    Recursively updates a nested dictionary with the key-value pairs from another dictionary. Written by ChatGPT.
+
+    Args:
+        original_dict (dict): The original dictionary to be updated.
+        update_dict (dict): The dictionary containing the key-value pairs to update the original dictionary.
+
+    Returns:
+        dict: The updated dictionary.
+
+    """
+    for key, value in update_dict.items():
+        if key in original_dict and isinstance(original_dict[key], dict) and isinstance(value, dict):
+            # recursively update nested dictionaries
+            original_dict[key] = update_nested_dict(original_dict[key], value)
+        else:
+            # update non-dictionary values or add new key-value pairs
+            original_dict[key] = value
+
+    return original_dict

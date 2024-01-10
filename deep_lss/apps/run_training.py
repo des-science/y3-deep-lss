@@ -132,6 +132,7 @@ def setup():
     parser.add_argument("--wandb", action="store_true", help="log to weights & biases, otherwise log to tensorboard")
     parser.add_argument("--wandb_tags", nargs="+", type=str, default=None, help="tags for weights & biases")
     parser.add_argument("--wandb_notes", type=str, default=None, help="notes for weights & biases (longer than tags)")
+    parser.add_argument("--wandb_sweep_id", type=str, default=None, help="id of the sweep. If None, no sweep is used")
 
     args, _ = parser.parse_known_args()
 
@@ -173,8 +174,7 @@ def training():
     args = setup()
 
     # hardware and distribution
-    _, n_gpus = distribute.check_devices()
-    # total_gpu_mem = GPUtil.getGPUs()[0].memoryTotal * 1000
+    _, _ = distribute.check_devices()
     strategy = distribute.get_strategy(args.dist_strategy)
 
     # initialize a fresh model
@@ -229,7 +229,6 @@ def training():
 
         wandb_run = wandb.init(
             project="y3-deep-lss",
-            config={"msfm": msfm_conf, "dlss": dlss_conf, "net": net_conf},
             dir=dir_out,
             group=group_name,
             job_type="training",
@@ -242,6 +241,20 @@ def training():
             tags=args.wandb_tags,
             notes=args.wandb_notes,
         )
+
+        if args.wandb_sweep_id is not None:
+            # in the wandb sweep config, the hyperparameters are defined like net.optimization.optimizer, while the
+            # .yaml config files are structured as nested dictionaries
+            nested_hyperparam_conf = configuration.convert_dotted_to_nested_dict(wandb_run.config)
+
+            # dict.update() would discard branches that are not present in the update dict
+            net_conf = configuration.update_nested_dict(net_conf, nested_hyperparam_conf["net"])
+
+            # NOTE for horovod, only the chief calls an agent, so the swept hyperparams have to be broadcast to the
+            # other ranks here. This is cumbersome since only tensors can be broadcast, while dicts can't
+
+        # only update the config here instead of in the init so that possible changes by a sweep agent are included
+        wandb_run.config.setdefaults({"msfm": msfm_conf, "dlss": dlss_conf, "net": net_conf})
 
         LOGGER.info(f"Initialized weights & biases to {dir_out}")
 
@@ -497,4 +510,19 @@ def _copy_log(args, dir_out):
 
 
 if __name__ == "__main__":
-    training()
+    args = setup()
+
+    if args.wandb_sweep_id is None:
+        training()
+    else:
+        if args.dist_strategy == "horovod":
+            raise NotImplementedError(f"Horovod doesn't work with wandb sweeps")
+            # similar to https://github.com/NERSC/nersc-dl-wandb/blob/main/utils/trainer.py
+            # and https://github.com/NERSC/nersc-dl-wandb/blob/main/train.py
+            # hvd.init()
+            # if hvd.rank() == 0:
+            #     wandb.agent(args.wandb_sweep_id, function=training, project="y3-deep-lss", count=1)
+            # else:
+            #     training()
+        else:
+            wandb.agent(args.wandb_sweep_id, function=training, project="y3-deep-lss", count=1)
