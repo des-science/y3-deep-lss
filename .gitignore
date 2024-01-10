@@ -1,6 +1,7 @@
 # repository specific
 .vscode
 notebooks/temp
+wandb
 
 # training
 run_files/*

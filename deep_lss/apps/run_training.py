@@ -11,6 +11,7 @@ Meant for the GPU nodes of the Perlmutter cluster at NERSC.
 """
 
 import tensorflow as tf
+import horovod.tensorflow as hvd
 import os, argparse, warnings, yaml, wandb, shutil
 
 from datetime import datetime
@@ -243,15 +244,22 @@ def training():
         )
 
         if args.wandb_sweep_id is not None:
-            # in the wandb sweep config, the hyperparameters are defined like net.optimization.optimizer, while the
-            # .yaml config files are structured as nested dictionaries
-            nested_hyperparam_conf = configuration.convert_dotted_to_nested_dict(wandb_run.config)
+            if isinstance(strategy, HorovodStrategy):
+                # only the chief gets an agent, which provides the hyperparameters
+                if hvd.rank() == 0:
+                    nested_hyperparam_conf = configuration.convert_dotted_to_nested_dict(wandb_run.config)
+                    net_conf = configuration.update_nested_dict(net_conf, nested_hyperparam_conf["net"])
 
-            # dict.update() would discard branches that are not present in the update dict
-            net_conf = configuration.update_nested_dict(net_conf, nested_hyperparam_conf["net"])
+                net_conf = strategy.broadcast_object(net_conf, root_rank=0)
+                LOGGER.info(f"Broadcast the chief/agent's hyperparameters to the other ranks")
 
-            # NOTE for horovod, only the chief calls an agent, so the swept hyperparams have to be broadcast to the
-            # other ranks here. This is cumbersome since only tensors can be broadcast, while dicts can't
+            else:
+                # in the wandb sweep config, the hyperparameters are defined like net.optimization.optimizer, while the
+                # .yaml config files are structured as nested dictionaries
+                nested_hyperparam_conf = configuration.convert_dotted_to_nested_dict(wandb_run.config)
+
+                # dict.update() would discard branches that are not present in the update dict
+                net_conf = configuration.update_nested_dict(net_conf, nested_hyperparam_conf["net"])
 
         # only update the config here instead of in the init so that possible changes by a sweep agent are included
         wandb_run.config.setdefaults({"msfm": msfm_conf, "dlss": dlss_conf, "net": net_conf})
@@ -516,13 +524,16 @@ if __name__ == "__main__":
         training()
     else:
         if args.dist_strategy == "horovod":
-            raise NotImplementedError(f"Horovod doesn't work with wandb sweeps")
-            # similar to https://github.com/NERSC/nersc-dl-wandb/blob/main/utils/trainer.py
-            # and https://github.com/NERSC/nersc-dl-wandb/blob/main/train.py
-            # hvd.init()
-            # if hvd.rank() == 0:
-            #     wandb.agent(args.wandb_sweep_id, function=training, project="y3-deep-lss", count=1)
-            # else:
-            #     training()
+            # it doesn't hurt to initialize horovod more than once
+            hvd.init()
+
+            # only the chief gets an agent, similar to
+            # https://github.com/NERSC/nersc-dl-wandb/blob/958d1c7710719b0f91ff3236a77b551d6566b952/utils/trainer.py#L91C2-L91C2
+            # and https://github.com/NERSC/nersc-dl-wandb/blob/958d1c7710719b0f91ff3236a77b551d6566b952/train.py#L24
+            if hvd.rank() == 0:
+                wandb.agent(args.wandb_sweep_id, function=training, project="y3-deep-lss", count=1)
+            # the workers get the agent's hyperparameters via broadcast
+            else:
+                training()
         else:
             wandb.agent(args.wandb_sweep_id, function=training, project="y3-deep-lss", count=1)
