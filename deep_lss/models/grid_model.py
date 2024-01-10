@@ -106,15 +106,37 @@ class GridLossModel(BaseModel):
         self,
         batch_size,
         n_channels,
-        loss="mse",
-        # likelihood loss
-        n_params=None,
-        # gradient clipping + regularization
+        n_params,
+        loss="likelihood",
         clip_by_value=None,
         clip_by_norm=None,
         clip_by_global_norm=10.0,
         l2_norm_weight=None,
     ):
+        """Set up the training step for the grid model.
+
+        Args:
+            batch_size (int): The batch size.
+            n_channels (int): The number of channels.
+            n_params (int): The number of cosmological parameters making up the label.
+            loss (str, optional): The type of loss function to use. Defaults to "likelihood".
+            clip_by_value (tf.tensor, optional): Clip the gradients by given 1d array of values into the interval
+                [value[0], value[1]]. Defaults to None (no clipping).
+            clip_by_norm (tf.tensor, optional): Clip the gradients by norm. Defaults to None (no clipping).
+            clip_by_global_norm (tf.tensor, optional): Clip the gradients by global norm. Defaults to None (no clipping).
+            l2_norm_weight (float, optional): Weight for the L2 norm of the trainable weights. Defaults to None
+                (no regularization).
+
+        Raises:
+            NotImplementedError: If the loss type is "mutual_info".
+            ValueError: If an invalid strategy is passed.
+
+        Note:
+            - If the loss type is "mse", the labels should be normalized.
+            - If the loss type is "likelihood", the number of parameters (n_params) must be passed.
+            - If the loss type is "mutual_info", it is not implemented and will raise a NotImplementedError.
+        """
+
         if loss == "mse":
             if isinstance(self.strategy, (tf.distribute.MirroredStrategy, tf.distribute.MultiWorkerMirroredStrategy)):
                 # to be compatible with the delta loss, the loss is averaged per replica
@@ -139,13 +161,21 @@ class GridLossModel(BaseModel):
             # see Section 7.3 in https://arxiv.org/pdf/2009.08459
             raise NotImplementedError
 
+        # this isn't strictly necessary and could be removed
         current_float = get_backend_floatx()
-        in_shape = (batch_size, len(self.network.indices_in), n_channels)
+        data_shape = (batch_size, len(self.network.indices_in), n_channels)
+        label_shape = (batch_size, n_params)
 
         # not distributed via tensorflow builtin
         if (self.strategy is None) or isinstance(self.strategy, HorovodStrategy):
 
-            @tf.function(input_signature=[tf.TensorSpec(shape=in_shape, dtype=current_float)], jit_compile=False)
+            @tf.function(
+                input_signature=[
+                    tf.TensorSpec(shape=data_shape, dtype=current_float),
+                    tf.TensorSpec(shape=label_shape, dtype=current_float),
+                ],
+                jit_compile=False,
+            )
             def grid_train_step(input_preds, input_labels):
                 LOGGER.warning(f"Tracing grid_train_step")
                 self.base_train_step(
