@@ -2,10 +2,10 @@
 name: resnet_vanilla
 
 training:
-  n_steps: 1000
-  output_every: null
-  checkpoint_every: null
-  eval_every: null
+  n_steps: 100000
+  output_every: 10000
+  checkpoint_every: 10000
+  eval_every: 10000
 
 optimization:
   optimizer: adam
@@ -46,9 +46,7 @@ dset:
       is_cached: False
     # GridPipeline
     likelihood_loss:
-      local_batch_size: 32
-      n_readers: 4
-      n_prefetch: 2
+      local_batch_size: 44
       file_name_shuffle_buffer: 64
       examples_shuffle_buffer: 128
   eval:

@@ -99,7 +99,7 @@ def evaluate_grid(model, tfr_pattern, msfm_conf, dlss_conf, net_conf, dir_out, f
     print("\n")
     LOGGER.info(f"Starting evaluation of the grid")
 
-    dset_kwargs = net_conf["dset"]["eval"]["grid"]
+    dset_kwargs = {**net_conf["dset"]["eval"]["common"], **net_conf["dset"]["eval"]["grid"]}
 
     # pipeline constants
     n_cosmos = msfm_conf["analysis"]["grid"]["n_cosmos"]
@@ -117,10 +117,10 @@ def evaluate_grid(model, tfr_pattern, msfm_conf, dlss_conf, net_conf, dir_out, f
     strategy = model.strategy
     global_batch_size = distribute.get_global_batch_size(strategy, dset_kwargs["local_batch_size"])
     n_batches = math.ceil(n_examples / global_batch_size)
-    save_second_to_last_layer = net_conf["model"]["save_second_to_last_layer"]
+    save_second_to_last_layer = net_conf["network"]["save_second_to_last_layer"]
 
     grid_pipeline = GridPipeline(
-        conf=msfm_conf, **{**dlss_conf["dset"]["general"], **dlss_conf["dset"]["eval"]["grid"]}
+        conf=msfm_conf, **{**dlss_conf["dset"]["common"], **dlss_conf["dset"]["eval"]["grid"]}
     )
 
     # like https://www.tensorflow.org/tutorials/distribute/input#tfdistributestrategydistribute_datasets_from_function
@@ -243,7 +243,7 @@ def evaluate_fiducial(
     print("\n")
     LOGGER.info(f"Starting evaluation of the fiducial")
 
-    dset_kwargs = net_conf["dset"]["eval"]["fiducial"]
+    dset_kwargs = {**net_conf["dset"]["eval"]["common"], **net_conf["dset"]["eval"]["fiducial"]}
 
     # pipeline constants
     n_cosmos = 1  # only the true fiducial
@@ -261,10 +261,10 @@ def evaluate_fiducial(
     strategy = model.strategy
     global_batch_size = distribute.get_global_batch_size(strategy, dset_kwargs["local_batch_size"])
     n_batches = math.ceil(n_examples / global_batch_size)
-    save_second_to_last_layer = net_conf["model"]["save_second_to_last_layer"]
+    save_second_to_last_layer = net_conf["network"]["save_second_to_last_layer"]
 
     fiducial_pipeline = FiducialPipeline(
-        conf=msfm_conf, **{**dlss_conf["dset"]["general"], **dlss_conf["dset"]["eval"]["fiducial"]}
+        conf=msfm_conf, **{**dlss_conf["dset"]["common"], **dlss_conf["dset"]["eval"]["fiducial"]}
     )
 
     # like https://www.tensorflow.org/tutorials/distribute/input#tfdistributestrategydistribute_datasets_from_function
