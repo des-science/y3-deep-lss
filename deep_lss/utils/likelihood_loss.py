@@ -70,12 +70,15 @@ def neg_likelihood_loss(
     upper_triangular = tfp.math.fill_triangular(cov_pred, upper=True, name="likeloss_fill_triangular")
 
     if img_summary:
-        upper_triangular_img = tf.reduce_mean(upper_triangular, axis=0, keepdims=True)
-        upper_triangular_img = tf.expand_dims(upper_triangular_img, axis=-1)
-
+        mean_upper_triangular = tf.reduce_mean(upper_triangular, axis=0, keepdims=True)
+        upper_triangular_img = tf.expand_dims(mean_upper_triangular, axis=-1)
         summary.write_summary(
-            "likelihood_cov_img", upper_triangular_img, summary_writer, training, summary_type="image"
+            "likelihood_tri_img", upper_triangular_img, summary_writer, training, summary_type="image"
         )
+
+        mean_cov = tf.matmul(mean_upper_triangular, mean_upper_triangular, transpose_b=True)
+        cov_img = tf.expand_dims(mean_cov, axis=-1)
+        summary.write_summary("likelihood_cov_img", cov_img, summary_writer, training, summary_type="image")
 
     # Get diagonal
     diag = tf.linalg.diag_part(upper_triangular, name="likeloss_diag_part")
