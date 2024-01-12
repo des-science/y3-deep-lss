@@ -13,10 +13,21 @@ import tensorflow as tf
 import tensorflow_probability as tfp
 
 from deep_lss.utils import summary
+from msfm.utils import logger
+
+LOGGER = logger.get_logger(__file__)
 
 
-@tf.function
-def neg_likelihood_loss(predictions, theta_true, n_theta, eps=1e-30, summary_writer=None, training=False):
+def neg_likelihood_loss(
+    predictions,
+    theta_true,
+    n_theta,
+    lambda_tikhonov=None,
+    eps=1e-30,
+    training=False,
+    summary_writer=None,
+    img_summary=False,
+):
     """Calculate the negative likelihood loss like in equation (17) in https://arxiv.org/pdf/1906.03156.pdf.
 
     Args:
@@ -25,16 +36,26 @@ def neg_likelihood_loss(predictions, theta_true, n_theta, eps=1e-30, summary_wri
         theta_true (tf.Tensor): True parameter values.
         n_theta (int): Number of parameters. This is used to infer the number of predicted matrix elements in the
             Cholesky decomposition.
+        lambda_tikhonov (Union[float, tf.Variable], optional): Regularization parameter for the Tikhonov
+            regularization. This penalizes predicting the zero matrix as the covariance. When this is a tf.Variable,
+            the regularization strength can be varied with a scheduler. It is recommended that tikhonov regularization
+            is only applied at the beginning of training, since the two terms of the likelihood loss is constructed to
+            balance its two terms and the regularization can skew results. Note that this has been implemented because
+            we have observed network training to get stuck close to the zero matrix. Defaults to None, then no
+            regularization is applied.
         eps (float, optional): Small value to ensure that the determinant is not zero, which would be a problem for the
             logarithm. Defaults to 1e-30.
         training (bool, optional): Whether the loss is used for training. If False, no summaries will be written even
             if a summary_writer is supplied. Defaults to True.
         summary_writer (tf.summary.SummaryWriter, optional): The writer used to write tensorboard summaries. Defaults
             to None.
+        img_summary (bool, optional): Whether to write image summaries of the covariance matrix. Defaults to False.
 
     Returns:
         tf.Tensor: Mean loss value over the batch.
     """
+
+    LOGGER.warning(f"Tracing neg_likelihood_loss")
 
     # number of entries in a triangular matrix (including the diagonal), as used to construct the covariance matrix
     # via the Cholesky decomposition
@@ -48,13 +69,21 @@ def neg_likelihood_loss(predictions, theta_true, n_theta, eps=1e-30, summary_wri
     # make upper triangular matrix L^T
     upper_triangular = tfp.math.fill_triangular(cov_pred, upper=True, name="likeloss_fill_triangular")
 
+    if img_summary:
+        upper_triangular_img = tf.reduce_mean(upper_triangular, axis=0, keepdims=True)
+        upper_triangular_img = tf.expand_dims(upper_triangular_img, axis=-1)
+
+        summary.write_summary(
+            "likelihood_cov_img", upper_triangular_img, summary_writer, training, summary_type="image"
+        )
+
     # Get diagonal
     diag = tf.linalg.diag_part(upper_triangular, name="likeloss_diag_part")
 
     # add a small number such that the diag is never zero to log it
     diag += eps
 
-    # get log determinant
+    # get log determinant from the Cholesky decomposition (first part of the likelihood loss)
     # https://math.stackexchange.com/questions/3158303/using-cholesky-decomposition-to-compute-covariance-matrix-determinant
     log_det = tf.reduce_sum(tf.math.log(tf.square(diag)), axis=1)
 
@@ -71,5 +100,15 @@ def neg_likelihood_loss(predictions, theta_true, n_theta, eps=1e-30, summary_wri
     summary.write_summary("likelihood_residual_loss", mean_Lt_residual_norm, summary_writer, training)
 
     neg_likelihood_loss = tf.add(mean_Lt_residual_norm, mean_log_det)
+
+    if lambda_tikhonov is not None:
+        # TODO derive a formula for the covariance matrix A (instead of its Cholesky decomposition L with A = L^T * L)
+        frob_norm = tf.linalg.norm(upper_triangular, ord="fro", axis=(-2, -1))
+        mean_frob_norm = tf.reduce_mean(frob_norm)
+        tikhonov_loss = -lambda_tikhonov * mean_frob_norm
+
+        summary.write_summary("likelihood_tikhonov_loss", tikhonov_loss, summary_writer, training)
+
+        neg_likelihood_loss = tf.add(neg_likelihood_loss, tikhonov_loss)
 
     return neg_likelihood_loss

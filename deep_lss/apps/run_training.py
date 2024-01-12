@@ -375,11 +375,19 @@ def training():
             **net_conf["optimization"]["gradient_clipping"],
         )
     else:
+        lambda_tikhonov_schedule = tf.keras.optimizers.schedules.CosineDecay(
+            dlss_conf["likelihood_loss"]["lambda_tikhonov_init"],
+            dlss_conf["likelihood_loss"]["lambda_tikhonov_decay_steps"],
+        )
+        lambda_tikhonov = tf.Variable(lambda_tikhonov_schedule(0), trainable=False, dtype=tf.float32)
+
         model.setup_grid_loss_step(
             loss=args.loss_function,
             batch_size=local_batch_size,
             n_channels=n_z_bins,
             n_params=n_params,
+            lambda_tikhonov=lambda_tikhonov,
+            img_summary=dlss_conf["likelihood_loss"]["img_summary"],
             **net_conf["optimization"]["gradient_clipping"],
         )
 
@@ -403,6 +411,11 @@ def training():
             if isinstance(model.strategy, HorovodStrategy) and step == 1:
                 LOGGER.info(f"First step, broadcasting the variables through Horovod")
                 model.horovod_broadcast_variables()
+
+            # likelihood loss
+            if args.loss_function == "likelihood":
+                # assignment has to happen outside the tf.function
+                lambda_tikhonov.assign(lambda_tikhonov_schedule(step))
 
             # output
             if (output_every is not None) and (step % output_every == 0):

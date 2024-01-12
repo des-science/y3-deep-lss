@@ -236,6 +236,8 @@ def delta_loss(
         tf.tensor: The loss value, which can be negative.
     """
 
+    LOGGER.warning(f"Tracing delta_loss")
+
     # TODO: A fixed epsilon can lead to some problems. E.g. in tikonov regularization might fail because the lack
     # TODO: of precision. A possible solution would be to use the machine epsilon for added regularization
     # TODO: and a fixed epsilon for absolut regulatization (division or log errors...)

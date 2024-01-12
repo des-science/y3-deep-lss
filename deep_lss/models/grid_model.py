@@ -104,14 +104,20 @@ class GridLossModel(BaseModel):
 
     def setup_grid_loss_step(
         self,
+        # input shape
         batch_size,
         n_channels,
         n_params,
         loss="likelihood",
+        # gradient clipping + regularization
         clip_by_value=None,
         clip_by_norm=None,
         clip_by_global_norm=10.0,
         l2_norm_weight=None,
+        # likelihood loss
+        lambda_tikhonov=None,
+        # misc
+        img_summary=False,
     ):
         """Set up the training step for the grid model.
 
@@ -126,6 +132,9 @@ class GridLossModel(BaseModel):
             clip_by_global_norm (tf.tensor, optional): Clip the gradients by global norm. Defaults to None (no clipping).
             l2_norm_weight (float, optional): Weight for the L2 norm of the trainable weights. Defaults to None
                 (no regularization).
+            lambda_tikhonov (float, optional): Regularization parameter for the Tikhonov regularization in the
+                likelihood loss. Defaults to None, then no regularization is applied.
+            img_summary (bool, optional): Whether to write image summaries of the covariance matrix. Defaults to False.
 
         Raises:
             NotImplementedError: If the loss type is "mutual_info".
@@ -153,7 +162,13 @@ class GridLossModel(BaseModel):
             # analogously to the delta loss, the per replica averaging of the likelihood loss is done in
             # likelihood_loss.py, so no distinction between distributed and non-distributed training is necessary here
             loss_func = lambda preds, labels: likelihood_loss.neg_likelihood_loss(
-                preds, labels, n_params, summary_writer=self.summary_writer, training=True
+                preds,
+                labels,
+                n_params,
+                lambda_tikhonov,
+                training=True,
+                summary_writer=self.summary_writer,
+                img_summary=img_summary,
             )
             LOGGER.warning(f"Using the likelihood loss")
 

@@ -34,4 +34,12 @@ delta_loss:
   use_log_det: True
   tikhonov_regu: False
   eps: 1.0e-32
+  # misc
+  img_summary: True
+
+likelihood_loss:
+  # regularization
+  lambda_tikhonov_init: 10.0
+  lambda_tikhonov_decay_steps: 500
+  # misc
   img_summary: True
