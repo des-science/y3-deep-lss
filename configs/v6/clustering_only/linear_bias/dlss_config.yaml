@@ -1,16 +1,16 @@
 # contains the general, non model specific configuration parameters of the analysis
 dset:
   common:
-    with_lensing: True
-    with_clustering: False
+    with_lensing: False
+    with_clustering: True
     apply_norm: True
   training:
-    params: [Om, s8, w0, Aia, n_Aia]
+    params: ["Om", "s8", "w0", "bg", "n_bg"]
   eval:
     fiducial:
       params: []
     grid:
-      params: [Om, s8, w0, Aia, n_Aia]
+      params: ["Om", "s8", "w0", "bg", "n_bg"]
 
 scale_cuts:
   n_sigma_support: 3

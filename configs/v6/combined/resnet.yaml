@@ -5,7 +5,7 @@ training:
   n_steps: 100000
   output_every: 10000
   checkpoint_every: 10000
-  eval_every: 10000
+  eval_every: 50000
 
 optimization:
   optimizer: adam

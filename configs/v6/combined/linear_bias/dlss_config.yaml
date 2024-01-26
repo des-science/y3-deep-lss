@@ -5,12 +5,12 @@ dset:
     with_clustering: False
     apply_norm: True
   training:
-    params: [Om, s8, w0, Aia, n_Aia]
+    params: ["Om", "s8", "H0", "Ob", "ns", "w0", "Aia", "n_Aia", "bg", "n_bg"]
   eval:
     fiducial:
       params: []
     grid:
-      params: [Om, s8, w0, Aia, n_Aia]
+      params: ["Om", "s8", "H0", "Ob", "ns", "w0", "Aia", "n_Aia", "bg", "n_bg"]
 
 scale_cuts:
   n_sigma_support: 3
