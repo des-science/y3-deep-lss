@@ -2,24 +2,24 @@
 #SBATCH --account=des_g
 #SBATCH --constraint=gpu
 #SBATCH --qos=regular
-#SBATCH --time=24:00:00
-#SBATCH --nodes=1
+#SBATCH --time=12:00:00
+#SBATCH --nodes=2
 #SBATCH --gpus-per-node=4
-#SBATCH --ntasks-per-node=1
-#SBATCH --gpus-per-task=4
-#SBATCH --cpus-per-task=128
-#SBATCH --job-name=training
+#SBATCH --ntasks-per-node=4
+#SBATCH --gpus-per-task=1
+#SBATCH --cpus-per-task=32
+#SBATCH --job-name=hvd_training
 #SBATCH --output="./logs/v6/training_%j.log"
 
-STRATEGY="mirrored"
+STRATEGY="horovod"
 VERSION="v6"
 # lensing, clustering, combined
 PROBE="combined"
 # linear_bias, quadratic_bias
 BIAS="linear_bias"
 # delta, likelihood
-# LOSS="delta"
-LOSS="likelihood"
+LOSS="delta"
+# LOSS="likelihood"
 
 OUTPUT="./logs/$VERSION/$PROBE/$LOSS/"$STRATEGY"_"$SLURM_JOB_ID".log"
 
@@ -29,7 +29,7 @@ else
     TRAINSET="grid"
 fi
 
-srun --cpu-bind=threads --gpu-bind=none --output="$OUTPUT" \
+srun --cpu-bind=threads --gpu-bind=single:1 --output="$OUTPUT" \
     python ../../deep_lss/apps/run_training.py \
     --loss_function="$LOSS" \
     --dist_strategy="$STRATEGY" \
@@ -43,5 +43,3 @@ srun --cpu-bind=threads --gpu-bind=none --output="$OUTPUT" \
     --slurm_output="$OUTPUT" \
     --wandb \
     --wandb_tags "$VERSION" "$PROBE" "$LOSS" "$STRATEGY" "$BIAS" "100k"
-# --dir_model="/pscratch/sd/a/athomsen/run_files/v6/combined/likelihood/2024-01-30_07-41-40_resnet_vanilla" \
-# --restore_checkpoint \

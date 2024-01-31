@@ -2,7 +2,7 @@
 dset:
   common:
     with_lensing: True
-    with_clustering: False
+    with_clustering: True
     apply_norm: True
   training:
     params: ["Om", "s8", "H0", "Ob", "ns", "w0", "Aia", "n_Aia", "bg", "n_bg"]
@@ -10,7 +10,7 @@ dset:
     fiducial:
       params: []
     grid:
-      params: ["Om", "s8", "H0", "Ob", "ns", "w0", "Aia", "n_Aia", "bg", "n_bg"]
+    params: ["Om", "s8", "H0", "Ob", "ns", "w0", "Aia", "n_Aia", "bg", "n_bg"]
 
 scale_cuts:
   n_sigma_support: 3
