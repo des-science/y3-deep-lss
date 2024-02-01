@@ -398,7 +398,7 @@ def training():
     LOGGER.timer.start("training")
     t_prev = time()
 
-    for step in LOGGER.progressbar(range(1, n_steps + 1), at_level="info", total=n_steps, desc="training at fiducial"):
+    for step in LOGGER.progressbar(range(1, n_steps + 1), at_level="info", total=n_steps, desc="training"):
         # context for profiling like https://www.tensorflow.org/guide/profiler#profiling_custom_training_loops
         # optional context like https://stackoverflow.com/a/34798330
         with tf.profiler.experimental.Trace("step", step_num=step, _r=1) if args.profile else nullcontext():

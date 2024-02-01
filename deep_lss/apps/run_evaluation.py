@@ -113,9 +113,9 @@ if __name__ == "__main__":
     data_vec_pix, _, _, _ = files.load_pixel_file(msfm_conf)
 
     n_z_bins = 0
-    if dlss_conf["dset"]["commmon"]["with_lensing"]:
+    if dlss_conf["dset"]["common"]["with_lensing"]:
         n_z_bins += len(msfm_conf["survey"]["metacal"]["z_bins"])
-    if dlss_conf["dset"]["commmon"]["with_clustering"]:
+    if dlss_conf["dset"]["common"]["with_clustering"]:
         n_z_bins += len(msfm_conf["survey"]["maglim"]["z_bins"])
 
     # weights and biases
