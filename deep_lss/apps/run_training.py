@@ -292,11 +292,14 @@ def training():
     eval_every = net_conf["training"]["eval_every"]
 
     # constants: miscellaneous
+    # smoothing_kwargs = None
+    # LOGGER.warning("NO SMOOTHING")
     smoothing_kwargs = configuration.get_smoothing_kwargs(
         args.loss_function, msfm_conf, dlss_conf, net_conf, dir_base=args.dir_base
     )
 
     dset_kwargs = net_conf["dset"]["training"]["common"]
+    noise_kwargs = {}
     if args.loss_function == "delta":
         Pipeline = FiducialPipeline
         Model = DeltaLossModel
@@ -304,6 +307,21 @@ def training():
         dset_kwargs.update(net_conf["dset"]["training"]["delta_loss"])
         local_batch_size = dset_kwargs["local_batch_size"]
         effective_local_batch_size = local_batch_size * (2 * n_params + 1)
+
+        try:
+            noise_schedule_steps = net_conf["optimization"]["noise_schedule_steps"]
+        except KeyError:
+            noise_schedule_steps = None
+        if noise_schedule_steps is not None:
+            LOGGER.warning(
+                f"Using a linearly increasing noise scheduler from 0 to 1 with {noise_schedule_steps} steps"
+            )
+            noise_scheduler = tf.keras.optimizers.schedules.PolynomialDecay(
+                initial_learning_rate=0.0, decay_steps=noise_schedule_steps, end_learning_rate=1.0, power=1.0
+            )
+            noise_scale = tf.Variable(noise_scheduler(0), trainable=False, dtype=tf.float32)
+            noise_kwargs = {"shape_noise_scale": noise_scale, "poisson_noise_scale": noise_scale}
+
     else:
         if args.loss_function == "likelihood":
             n_output = n_params + n_params * (n_params + 1) // 2
@@ -325,7 +343,9 @@ def training():
             n_z_bins += len(msfm_conf["survey"]["maglim"]["z_bins"])
 
     # dataset
-    train_pipeline = Pipeline(conf=msfm_conf, **{**dlss_conf["dset"]["common"], **dlss_conf["dset"]["training"]})
+    train_pipeline = Pipeline(
+        conf=msfm_conf, **{**dlss_conf["dset"]["common"], **dlss_conf["dset"]["training"], **noise_kwargs}
+    )
 
     # like https://www.tensorflow.org/tutorials/distribute/input#tfdistributestrategydistribute_datasets_from_function
     def dataset_fn(input_context):
@@ -415,9 +435,13 @@ def training():
                 LOGGER.info(f"First step, broadcasting the variables through Horovod")
                 model.horovod_broadcast_variables()
 
+            # delta loss
+            if args.loss_function == "delta" and not args.restore_checkpoint and noise_schedule_steps is not None:
+                # assignment has to happen outside the tf.function
+                noise_scale.assign(noise_scheduler(step))
+
             # likelihood loss
             if args.loss_function == "likelihood" and not args.restore_checkpoint:
-                # assignment has to happen outside the tf.function
                 lambda_tikhonov.assign(lambda_tikhonov_schedule(step))
 
             # output
