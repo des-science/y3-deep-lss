@@ -1,0 +1,64 @@
+# contains the model specific configuration parameters for training and hyperparameter optimization
+name: gt_vanilla
+
+training:
+  n_steps: 50000
+  output_every: 5000
+  checkpoint_every: 5000
+  eval_every: 10000
+
+optimization:
+  optimizer: adam
+  optimizer_kwargs:
+    learning_rate: 0.00001
+  gradient_clipping:
+    clip_by_value: null
+    clip_by_norm: null
+    clip_by_global_norm: 1.0
+  # only affects the delta loss
+  noise_schedule_steps: 1000
+
+network:
+  name: graph_transformer
+  n_neighbors: 20
+  max_checkpoints: 10
+  save_second_to_last_layer: False
+  kwargs:
+    base_channels: 32
+    downsampling_layers: 5
+    hidden_dim: 256
+    attention_heads: 4
+    transformer_layers: 4
+    pos_encoding: False
+    layer_norm: True
+
+dset:
+  training:
+    common:
+      is_eval: False
+      n_noise: 3
+      n_readers: 4
+      n_prefetch: null
+    # FiducialPipeline
+    delta_loss:
+      # because of the derivatives, this is multiplied by 1 + 2 * n_params
+      local_batch_size: 8
+      file_name_shuffle_buffer: 64
+      examples_shuffle_buffer: 128
+      is_cached: False
+    # GridPipeline
+    likelihood_loss:
+      local_batch_size: 32
+      file_name_shuffle_buffer: 64
+      examples_shuffle_buffer: 128
+  eval:
+    common:
+      is_eval: True
+      local_batch_size: 32
+      n_readers: 4
+      n_prefetch: 1
+    fiducial:
+      n_noise: 1
+      is_cached: False
+    grid:
+      n_noise: 3
