@@ -38,15 +38,17 @@ srun --cpu-bind=threads --gpu-bind=none --output="$OUTPUT" \
     --fidu_vali_tfr_pattern="/pscratch/sd/a/athomsen/DESY3/$VERSION/$BIAS/tfrecords/fiducial/validation/DESy3_fiducial_*.tfrecord" \
     --grid_vali_tfr_pattern="/pscratch/sd/a/athomsen/DESY3/$VERSION/$BIAS/tfrecords/grid/DESy3_grid_*.tfrecord" \
     --dir_base="/pscratch/sd/a/athomsen/run_files/$VERSION/$PROBE/$LOSS" \
+    --dlss_config="configs/$VERSION/$PROBE/$BIAS/dlss_config.yaml" \
+    --net_config="configs/$VERSION/$PROBE/grapht.yaml" \
+    --msfm_config="/global/homes/a/athomsen/multiprobe-simulation-forward-model/configs/$VERSION/$BIAS.yaml" \
     --slurm_output="$OUTPUT" \
     --wandb \
-    --wandb_tags "$VERSION" "$PROBE" "$LOSS" "$STRATEGY" "$BIAS" "300k" \
-    --dir_model="/pscratch/sd/a/athomsen/run_files/v6/combined/delta/2024-02-02_00-28-48_resnet_vanilla" \
-    --restore_checkpoint
+    --wandb_tags "$VERSION" "$PROBE" "$LOSS" "$STRATEGY" "$BIAS" "graph_transformer" \
+    # --dir_model="/pscratch/sd/a/athomsen/run_files/v6/lensing/delta/2024-02-13_07-42-20_vit_vanilla" \
+    # --restore_checkpoint
+    # --dir_model="/pscratch/sd/a/athomsen/run_files/v6/combined/delta/2024-02-02_00-28-48_resnet_vanilla" \
+    # --restore_checkpoint
     # --dir_model="/pscratch/sd/a/athomsen/run_files/v6/lensing_only/delta/2024-01-12_19-35-59_resnet_vanilla" \
-# --dlss_config="configs/$VERSION/$PROBE/$BIAS/dlss_config.yaml" \
-# --net_config="configs/$VERSION/$PROBE/resnet.yaml" \
-# --msfm_config="/global/homes/a/athomsen/multiprobe-simulation-forward-model/configs/$VERSION/$BIAS.yaml" \
 # --dlss_config="configs/$VERSION/$PROBE/smaller_scales/dlss_config.yaml" \
 
 # srun --cpu-bind=threads --gpu-bind=none --output="$OUTPUT" \
@@ -94,3 +96,29 @@ srun --cpu-bind=threads --gpu-bind=none --output="$OUTPUT" \
 #     --wandb_tags "$VERSION" "$PROBE" "$LOSS" "$STRATEGY" "$BIAS" "debug" \
 #     --dir_model="/pscratch/sd/a/athomsen/run_files/v6/lensing_only/delta/2024-01-12_19-35-59_resnet_vanilla" \
 #     --restore_checkpoint
+
+# python deep_lss/apps/run_training.py \
+#     --loss_function="$LOSS" \
+#     --train_tfr_pattern="/pscratch/sd/a/athomsen/DESY3/$VERSION/$BIAS/tfrecords/$TRAINSET/DESy3_${TRAINSET}_*.tfrecord" \
+#     --fidu_vali_tfr_pattern="/pscratch/sd/a/athomsen/DESY3/$VERSION/$BIAS/tfrecords/fiducial/validation/DESy3_fiducial_*.tfrecord" \
+#     --grid_vali_tfr_pattern="/pscratch/sd/a/athomsen/DESY3/$VERSION/$BIAS/tfrecords/grid/DESy3_grid_*.tfrecord" \
+#     --dir_base="/pscratch/sd/a/athomsen/run_files/$VERSION/$PROBE/$LOSS" \
+#     --dlss_config="configs/$VERSION/$PROBE/$BIAS/dlss_config.yaml" \
+#     --net_config="configs/$VERSION/$PROBE/one_d_conv.yaml" \
+#     --msfm_config="/global/homes/a/athomsen/multiprobe-simulation-forward-model/configs/$VERSION/$BIAS.yaml" \
+#     # --dist_strategy="$STRATEGY" \
+#     # --slurm_output="$OUTPUT" \
+#     # --wandb \
+#     # --wandb_tags "$VERSION" "$PROBE" "$LOSS" "$STRATEGY" "$BIAS" "1d_conv" "debug"
+
+# python deep_lss/apps/run_training.py \
+#     --loss_function="$LOSS" \
+#     --train_tfr_pattern="/pscratch/sd/a/athomsen/DESY3/$VERSION/$BIAS/tfrecords/$TRAINSET/DESy3_${TRAINSET}_*.tfrecord" \
+#     --fidu_vali_tfr_pattern="/pscratch/sd/a/athomsen/DESY3/$VERSION/$BIAS/tfrecords/fiducial/validation/DESy3_fiducial_*.tfrecord" \
+#     --grid_vali_tfr_pattern="/pscratch/sd/a/athomsen/DESY3/$VERSION/$BIAS/tfrecords/grid/DESy3_grid_*.tfrecord" \
+#     --dir_base="/pscratch/sd/a/athomsen/run_files/debug/$VERSION/$PROBE/$LOSS" \
+#     --dlss_config="configs/$VERSION/$PROBE/$BIAS/dlss_config.yaml" \
+#     --net_config="configs/$VERSION/$PROBE/grapht.yaml" \
+#     --msfm_config="/global/homes/a/athomsen/multiprobe-simulation-forward-model/configs/$VERSION/$BIAS.yaml" \
+#     --wandb \
+#     --wandb_tags "$VERSION" "$PROBE" "$LOSS" "$STRATEGY" "$BIAS" "graph_transformer" "debug"

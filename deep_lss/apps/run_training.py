@@ -292,8 +292,6 @@ def training():
     eval_every = net_conf["training"]["eval_every"]
 
     # constants: miscellaneous
-    # smoothing_kwargs = None
-    # LOGGER.warning("NO SMOOTHING")
     smoothing_kwargs = configuration.get_smoothing_kwargs(
         args.loss_function, msfm_conf, dlss_conf, net_conf, dir_base=args.dir_base
     )
@@ -364,7 +362,7 @@ def training():
     # network, create all of the variables within the strategy's scope, such that they are mirrored
     with strategy.scope():
         network = NETWORKS[net_conf["network"]["name"]](
-            output_shape=n_output, smoothing_kwargs=smoothing_kwargs, **net_conf["network"]["kwargs"]
+            out_dim=n_output, smoothing_kwargs=smoothing_kwargs, **net_conf["network"]["kwargs"]
         ).get_layers()
         LOGGER.info(f"Loaded a network specification of type {NETWORKS[net_conf['network']['name']]}")
 
