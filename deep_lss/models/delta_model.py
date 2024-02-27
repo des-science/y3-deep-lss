@@ -208,7 +208,7 @@ class DeltaLossModel(BaseModel):
         """
 
         # setup a loss function
-        def loss_func(predictions):
+        def loss_fn(predictions):
             return delta_loss.delta_loss(
                 predictions=predictions,
                 n_params=n_params,
@@ -237,6 +237,9 @@ class DeltaLossModel(BaseModel):
                 strategy=self.strategy,
             )
 
+        # to use the same loss function sepearately, without the need to perform the training step
+        self.loss_fn = loss_fn
+
         # get the backend float and input shape
         current_float = get_backend_floatx()
 
@@ -257,7 +260,7 @@ class DeltaLossModel(BaseModel):
                 LOGGER.warning(f"Tracing delta_train_step")
                 self.base_train_step(
                     input_tensor=input_batch,
-                    loss_function=loss_func,
+                    loss_function=loss_fn,
                     input_labels=None,
                     clip_by_value=clip_by_value,
                     clip_by_norm=clip_by_norm,
@@ -275,7 +278,7 @@ class DeltaLossModel(BaseModel):
                 LOGGER.warning(f"Tracing distributed delta_train_step")
                 self.distributed_train_step(
                     input_tensor=input_batch,
-                    loss_function=loss_func,
+                    loss_function=loss_fn,
                     input_labels=None,
                     clip_by_value=clip_by_value,
                     clip_by_norm=clip_by_norm,

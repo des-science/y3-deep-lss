@@ -116,7 +116,9 @@ class BaseModel(object):
         self.strategy = strategy
 
         # set up the optimizer
-        if self.optimizer is None:
+        if isinstance(self.optimizer, tf.keras.optimizers.Optimizer):
+            pass
+        elif self.optimizer is None:
             self.optimizer = tf.keras.optimizers.Adam(**optimizer_kwargs)
         elif self.optimizer == "adam":
             self.optimizer = tf.keras.optimizers.Adam(**optimizer_kwargs)

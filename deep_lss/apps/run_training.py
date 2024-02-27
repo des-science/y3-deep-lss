@@ -22,7 +22,7 @@ from msfm.fiducial_pipeline import FiducialPipeline
 from msfm.grid_pipeline import GridPipeline
 from msfm.utils import logger, input_output, files, parameters
 
-from deep_lss.utils import distribute, eval, configuration
+from deep_lss.utils import distribute, eval, configuration, optimization
 from deep_lss.models.delta_model import DeltaLossModel
 from deep_lss.models.grid_model import GridLossModel
 from deep_lss.utils.distribute import HorovodStrategy
@@ -289,6 +289,7 @@ def training():
     n_steps = net_conf["training"]["n_steps"]
     output_every = net_conf["training"]["output_every"]
     checkpoint_every = net_conf["training"]["checkpoint_every"]
+    vali_every = net_conf["training"]["vali_every"]
     eval_every = net_conf["training"]["eval_every"]
 
     # constants: miscellaneous
@@ -341,12 +342,12 @@ def training():
             n_z_bins += len(msfm_conf["survey"]["maglim"]["z_bins"])
 
     # dataset
-    train_pipeline = Pipeline(
-        conf=msfm_conf, **{**dlss_conf["dset"]["common"], **dlss_conf["dset"]["training"], **noise_kwargs}
-    )
+    LOGGER.warning(f"Training set")
+    pipe_kwargs = {**dlss_conf["dset"]["common"], **dlss_conf["dset"]["training"], **noise_kwargs}
+    train_pipeline = Pipeline(conf=msfm_conf, **pipe_kwargs)
 
     # like https://www.tensorflow.org/tutorials/distribute/input#tfdistributestrategydistribute_datasets_from_function
-    def dataset_fn(input_context):
+    def train_dataset_fn(input_context):
         dset = train_pipeline.get_dset(
             tfr_pattern=args.train_tfr_pattern,
             **dset_kwargs,
@@ -356,7 +357,7 @@ def training():
 
         return dset
 
-    dist_dset = strategy.distribute_datasets_from_function(dataset_fn)
+    dist_dset = strategy.distribute_datasets_from_function(train_dataset_fn)
     dist_iter = iter(dist_dset)
 
     # network, create all of the variables within the strategy's scope, such that they are mirrored
@@ -366,14 +367,15 @@ def training():
         ).get_layers()
         LOGGER.info(f"Loaded a network specification of type {NETWORKS[net_conf['network']['name']]}")
 
+        optimizer = optimization.get_optimizer(net_conf, args.loss_function, args.restore_checkpoint)
+
         model = Model(
             network=network,
             n_side=n_side,
             indices=data_vec_pix,
             n_neighbors=net_conf["network"]["n_neighbors"],
             max_checkpoints=net_conf["network"]["max_checkpoints"],
-            optimizer=net_conf["optimization"]["optimizer"],
-            optimizer_kwargs=net_conf["optimization"]["optimizer_kwargs"],
+            optimizer=optimizer,
             input_shape=(None, len(data_vec_pix), n_z_bins),
             max_batch_size=effective_local_batch_size,
             checkpoint_dir=checkpoint_dir,
@@ -397,6 +399,7 @@ def training():
             lambda_tikhonov_schedule = tf.keras.optimizers.schedules.CosineDecay(
                 dlss_conf["likelihood_loss"]["lambda_tikhonov_init"],
                 dlss_conf["likelihood_loss"]["lambda_tikhonov_decay_steps"],
+                alpha=0.0,
             )
             lambda_tikhonov = tf.Variable(lambda_tikhonov_schedule(0), trainable=False, dtype=tf.float32)
         else:
@@ -411,6 +414,50 @@ def training():
             img_summary=dlss_conf["likelihood_loss"]["img_summary"],
             **net_conf["optimization"]["gradient_clipping"],
         )
+
+    # validation loss (always with respect to the fiducial cosmology)
+    if vali_every is not None:
+        vali_pipe_kwargs = dlss_conf["dset"]["common"]
+
+        if args.loss_function == "delta":
+            # we need the perturbations
+            vali_pipe_kwargs["params"] = dlss_conf["dset"]["training"]["params"]
+
+            # to use the correct effective batch size with respect to the perturbations
+            vali_dset_kwargs = dset_kwargs.copy()
+            vali_dset_kwargs["is_eval"] = True
+
+            @tf.function
+            def vali_loss_fn(batch):
+                preds = model(batch)
+                loss = model.loss_fn(preds)
+                return loss
+
+        else:
+            # we don't need the perturbations
+            vali_pipe_kwargs["params"] = []
+            vali_dset_kwargs = {**net_conf["dset"]["eval"]["common"], **net_conf["dset"]["eval"]["fiducial"]}
+            labels = parameters.get_fiducials(params)
+
+            @tf.function
+            def vali_loss_fn(batch):
+                preds = model(batch)
+                loss = model.loss_fn(preds, labels)
+                return loss
+
+        LOGGER.warning(f"Validation set")
+        vali_fidu_pipe = FiducialPipeline(conf=msfm_conf, **vali_pipe_kwargs)
+
+        def vali_dset_fn(input_context):
+            dset = vali_fidu_pipe.get_dset(
+                tfr_pattern=args.fidu_vali_tfr_pattern,
+                **vali_dset_kwargs,
+                input_context=input_context,
+            )
+
+            return dset
+
+        dist_vali_dset = strategy.distribute_datasets_from_function(vali_dset_fn)
 
     LOGGER.info(f"Starting training")
     LOGGER.timer.start("training")
@@ -449,6 +496,29 @@ def training():
             # checkpoint
             if (checkpoint_every is not None) and (step % checkpoint_every == 0):
                 model.save_model()
+
+            # validate
+            if (vali_every is not None) and (step % vali_every == 0):
+                # since at that step, everything should be already traced
+                second_vali = step == 2 * vali_every
+                if second_vali:
+                    LOGGER.info(f"Validating the model every {vali_every} training steps")
+                    LOGGER.timer.start("vali")
+
+                vali_loss = []
+                n_vali_batches = 0
+                for vali_batch, _ in LOGGER.progressbar(dist_vali_dset, at_level="debug", desc="validation"):
+                    vali_loss.append(strategy.run(vali_loss_fn, args=(vali_batch,)))
+                    n_vali_batches += 1
+
+                assert n_vali_batches > 1, f"The validation batch size is too large, not all workers got a local batch"
+
+                vali_loss = strategy.run(tf.stack, args=(vali_loss, 0))
+                vali_loss = strategy.reduce(tf.distribute.ReduceOp.MEAN, vali_loss, axis=0)
+                model.write_summary("vali_loss", vali_loss)
+
+                if second_vali:
+                    LOGGER.info(f"Finished validating the model after {LOGGER.timer.elapsed('vali')}")
 
             # evaluate
             if (eval_every is not None) and (step % eval_every == 0):
@@ -503,12 +573,12 @@ def training():
 
                 # log here instead of inside eval to avoid partial duplicate .h5 files
                 if args.wandb and (out_file is not None):
-                    LOGGER.info(f"Logged the predictions to weights & biases after step {step}")
                     wandb_artifact = wandb.Artifact(
                         name=f"training-predictions-nsteps{train_step}", type="predictions"
                     )
                     wandb_artifact.add_file(local_path=out_file)
                     wandb_run.log_artifact(wandb_artifact)
+                    LOGGER.info(f"Logged the predictions to weights & biases after step {step}")
 
             # profile
             if args.profile and step == 200:

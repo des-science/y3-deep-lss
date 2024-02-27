@@ -319,26 +319,27 @@ def delta_loss(
             # the factor of 2 is in the square of the jac_diag
             cov_det = tf.reduce_mean(tf.subtract(cov_log_det, jac_log_det))
 
-        # use everything, this is the default branch
+        # NOTE use everything, this is the default branch
         elif n_partial is None:
             # tf.logdet is much better for the backprop, but fails if the det is zero
             # should we do cov + eps*identity?
             if tikhonov_regu:
                 identity = tf.scalar_mul(eps, tf.eye(n_params, batch_shape=[1], dtype=current_float))
-                cov_log_det = tf.linalg.logdet(tf.add(cov, identity))
                 # we use that 2*log(det(A)) = log(det(A)^2) = log(det(A)*det(A)) = log(det(A)*det(A^T))
                 #                           = log(det(A*A^T))tf.eye
                 with tf.name_scope("jac_logdet") as scope:
                     jt_j = tf.einsum("aji,ajk->aik", jacobian, jacobian)
                     jac_log_det = tf.linalg.logdet(tf.add(jt_j, identity))
                 with tf.name_scope("cov_logdet") as scope:
+                    cov_log_det = tf.linalg.logdet(tf.add(cov, identity))
                     cov_det = tf.subtract(cov_log_det, jac_log_det)
+            # NOTE no tikhonov regularization is the default
             else:
-                # We add a abs here because of instabilities
-                cov_log_det = tf.math.log(tf.math.abs(tf.linalg.det(cov)) + eps)
                 with tf.name_scope("jac_logdet") as scope:
                     jac_log_det = tf.math.log(tf.math.abs(tf.linalg.det(jacobian)) + eps)
                 with tf.name_scope("cov_logdet") as scope:
+                    # We add a abs here because of instabilities
+                    cov_log_det = tf.math.log(tf.math.abs(tf.linalg.det(cov)) + eps)
                     cov_det = tf.subtract(cov_log_det, tf.scalar_mul(2.0, jac_log_det))
 
         else:

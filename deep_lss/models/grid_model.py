@@ -149,11 +149,11 @@ class GridLossModel(BaseModel):
         if loss == "mse":
             if isinstance(self.strategy, (tf.distribute.MirroredStrategy, tf.distribute.MultiWorkerMirroredStrategy)):
                 # to be compatible with the delta loss, the loss is averaged per replica
-                loss_func = lambda preds, labels: (1.0 / batch_size) * tf.keras.losses.MeanSquaredError(
+                loss_fn = lambda preds, labels: (1.0 / batch_size) * tf.keras.losses.MeanSquaredError(
                     reduction=tf.keras.losses.Reduction.SUM
                 )(preds, labels)
             else:
-                loss_func = tf.keras.losses.MeanSquaredError(reduction=tf.keras.losses.Reduction.AUTO)
+                loss_fn = tf.keras.losses.MeanSquaredError(reduction=tf.keras.losses.Reduction.AUTO)
             LOGGER.warning(f"Using the Mean Squared Error. Note that the labels should be normalized!")
 
         elif loss == "likelihood":
@@ -161,7 +161,7 @@ class GridLossModel(BaseModel):
 
             # analogously to the delta loss, the per replica averaging of the likelihood loss is done in
             # likelihood_loss.py, so no distinction between distributed and non-distributed training is necessary here
-            loss_func = lambda preds, labels: likelihood_loss.neg_likelihood_loss(
+            loss_fn = lambda preds, labels: likelihood_loss.neg_likelihood_loss(
                 preds,
                 labels,
                 n_params,
@@ -175,6 +175,9 @@ class GridLossModel(BaseModel):
         elif loss == "mutual_info":
             # see Section 7.3 in https://arxiv.org/pdf/2009.08459
             raise NotImplementedError
+
+        # to use the same loss function sepearately, without the need to perform the training step
+        self.loss_fn = loss_fn
 
         # this isn't strictly necessary and could be removed
         current_float = get_backend_floatx()
@@ -196,7 +199,7 @@ class GridLossModel(BaseModel):
                 self.base_train_step(
                     input_tensor=input_preds,
                     input_labels=input_labels,
-                    loss_function=loss_func,
+                    loss_function=loss_fn,
                     # gradient clipping + regularization
                     clip_by_value=clip_by_value,
                     clip_by_norm=clip_by_norm,
@@ -215,7 +218,7 @@ class GridLossModel(BaseModel):
                 self.distributed_train_step(
                     input_tensor=input_preds,
                     input_labels=input_labels,
-                    loss_function=loss_func,
+                    loss_function=loss_fn,
                     # gradient clipping + regularization
                     clip_by_value=clip_by_value,
                     clip_by_norm=clip_by_norm,
