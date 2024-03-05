@@ -67,8 +67,12 @@ def get_optimizer(net_conf, loss_function="delta_loss", restore_checkpoint=False
         optimizer = tf.keras.optimizers.Adam(
             learning_rate=learning_rate_schedule, **net_conf["optimization"][loss_function]["optimizer_kwargs"]
         )
+        LOGGER.info(f"Using Adam optimizer")
     elif optimizer_name == "sgd":
-        raise NotImplementedError("SGD is not implemented yet")
+        optimizer = tf.keras.optimizers.SGD(
+            learning_rate=learning_rate_schedule, **net_conf["optimization"][loss_function]["optimizer_kwargs"]
+        )
+        LOGGER.info(f"Using SGD optimizer")
     else:
         raise ValueError(f"Unknown optimizer {optimizer_name}")
 

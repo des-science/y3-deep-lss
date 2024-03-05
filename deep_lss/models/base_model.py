@@ -492,6 +492,12 @@ class BaseModel(object):
         # update the step
         self.update_step()
 
+        # log the learning rate
+        current_learning_rate = self.optimizer.learning_rate
+        if callable(current_learning_rate):
+            current_learning_rate = current_learning_rate(self.train_step)
+        self.write_summary("learning_rate", current_learning_rate)
+
         return loss
 
     def distributed_train_step(

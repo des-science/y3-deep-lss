@@ -423,15 +423,9 @@ def training():
             # we need the perturbations
             vali_pipe_kwargs["params"] = dlss_conf["dset"]["training"]["params"]
 
+            vali_dset_kwargs = {**net_conf["dset"]["eval"]["common"], **net_conf["dset"]["eval"]["fiducial"]}
             # to use the correct effective batch size with respect to the perturbations
-            vali_dset_kwargs = dset_kwargs.copy()
-            vali_dset_kwargs["is_eval"] = True
-
-            @tf.function
-            def vali_loss_fn(batch):
-                preds = model(batch)
-                loss = model.loss_fn(preds)
-                return loss
+            vali_dset_kwargs["local_batch_size"] = local_batch_size
 
         else:
             # we don't need the perturbations
@@ -439,11 +433,22 @@ def training():
             vali_dset_kwargs = {**net_conf["dset"]["eval"]["common"], **net_conf["dset"]["eval"]["fiducial"]}
             labels = parameters.get_fiducials(params)
 
-            @tf.function
-            def vali_loss_fn(batch):
-                preds = model(batch)
+        # We want tf.functions in strategy.run
+        @tf.function
+        def vali_loss_fn(batch):
+            preds = model(batch)
+            if args.loss_function == "delta":
+                loss = model.loss_fn(preds)
+            else:
                 loss = model.loss_fn(preds, labels)
-                return loss
+            return loss
+
+        @tf.function
+        def vali_merge_mean(losses):
+            losses = tf.stack(losses, axis=0)
+            # to ignore NaNs, which can occur if the batch size is too large, such that some workers get empty batches
+            losses = tf.reduce_mean(tf.boolean_mask(losses, not tf.math.is_nan(losses)))
+            return losses
 
         LOGGER.warning(f"Validation set")
         vali_fidu_pipe = FiducialPipeline(conf=msfm_conf, **vali_pipe_kwargs)
@@ -459,6 +464,23 @@ def training():
 
         dist_vali_dset = strategy.distribute_datasets_from_function(vali_dset_fn)
 
+        def validation_loop():
+            loss_list = []
+            for vali_batch, _ in LOGGER.progressbar(dist_vali_dset, at_level="debug", desc="validation"):
+                loss = strategy.run(vali_loss_fn, args=(vali_batch,))
+                loss_list.append(loss)
+
+            vali_loss = strategy.run(vali_merge_mean, args=(loss_list,))
+            # only reduce over the replicas
+            vali_loss = strategy.reduce(tf.distribute.ReduceOp.MEAN, vali_loss, axis=None)
+
+            assert not tf.math.is_nan(
+                vali_loss
+            ), f"Validation loss is NaN, check the validation batch size as this is likely due to partially empty batches"
+            model.write_summary("vali_loss", vali_loss)
+
+            return vali_loss
+
     LOGGER.info(f"Starting training")
     LOGGER.timer.start("training")
     t_prev = time()
@@ -470,10 +492,10 @@ def training():
             # train step
             if args.loss_function == "delta":
                 dv_batch, _ = next(dist_iter)
-                model.delta_train_step(dv_batch)
+                loss = model.delta_train_step(dv_batch)
             else:
                 dv_batch, cosmo_batch, _ = next(dist_iter)
-                model.grid_train_step(dv_batch, cosmo_batch)
+                loss = model.grid_train_step(dv_batch, cosmo_batch)
 
             # horovod
             if isinstance(model.strategy, HorovodStrategy) and step == 1:
@@ -505,17 +527,7 @@ def training():
                     LOGGER.info(f"Validating the model every {vali_every} training steps")
                     LOGGER.timer.start("vali")
 
-                vali_loss = []
-                n_vali_batches = 0
-                for vali_batch, _ in LOGGER.progressbar(dist_vali_dset, at_level="debug", desc="validation"):
-                    vali_loss.append(strategy.run(vali_loss_fn, args=(vali_batch,)))
-                    n_vali_batches += 1
-
-                assert n_vali_batches > 1, f"The validation batch size is too large, not all workers got a local batch"
-
-                vali_loss = strategy.run(tf.stack, args=(vali_loss, 0))
-                vali_loss = strategy.reduce(tf.distribute.ReduceOp.MEAN, vali_loss, axis=0)
-                model.write_summary("vali_loss", vali_loss)
+                vali_loss = validation_loop()
 
                 if second_vali:
                     LOGGER.info(f"Finished validating the model after {LOGGER.timer.elapsed('vali')}")

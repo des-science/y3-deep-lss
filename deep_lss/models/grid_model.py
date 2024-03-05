@@ -196,7 +196,7 @@ class GridLossModel(BaseModel):
             )
             def grid_train_step(input_preds, input_labels):
                 LOGGER.warning(f"Tracing grid_train_step")
-                self.base_train_step(
+                loss = self.base_train_step(
                     input_tensor=input_preds,
                     input_labels=input_labels,
                     loss_function=loss_fn,
@@ -207,6 +207,8 @@ class GridLossModel(BaseModel):
                     l2_norm_weight=l2_norm_weight,
                 )
 
+                return loss
+
         # distributed via tensorflow builtin
         elif isinstance(self.strategy, tf.distribute.Strategy):
             # passing an input_signature like above for a distributed dset leads the following error:
@@ -215,7 +217,7 @@ class GridLossModel(BaseModel):
             @tf.function(jit_compile=False)
             def grid_train_step(input_preds, input_labels):
                 LOGGER.warning(f"Tracing distributed grid_train_step")
-                self.distributed_train_step(
+                global_loss = self.distributed_train_step(
                     input_tensor=input_preds,
                     input_labels=input_labels,
                     loss_function=loss_fn,
@@ -225,6 +227,8 @@ class GridLossModel(BaseModel):
                     clip_by_global_norm=clip_by_global_norm,
                     l2_norm_weight=l2_norm_weight,
                 )
+
+                return global_loss
 
         else:
             raise ValueError(f"Invalid strategy {self.strategy} was passed")
