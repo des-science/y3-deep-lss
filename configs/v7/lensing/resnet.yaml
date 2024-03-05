@@ -20,9 +20,11 @@ optimization:
     # at the end of the warmup or from the beginning, if there is no schedule
     learning_rate: 0.0001
     # for beta_1, beta_2, epsilon, etc.
-    optimizer_kwargs: {}
+    optimizer_kwargs:
+      beta_1: 0.9
+      beta_2: 0.95
     # None or "cosine"
-    scheduler: "cosine"
+    scheduler: cosine
     warmup_steps: 5000
     warmup_init_learning_rate: 0.00001
     # alpha = decay_end_learning_rate / learning_rate
@@ -31,10 +33,10 @@ optimization:
     noise_schedule_steps: Null
   likelihood_loss:
     learning_rate: 0.0001
-    optimizer_kwargs: 
+    optimizer_kwargs:
       beta_1: 0.9
       beta_2: 0.95
-    scheduler: "cosine"
+    scheduler: cosine
     warmup_steps: 5000
     warmup_init_learning_rate: 0.00001
     decay_alpha: 0.0
@@ -58,14 +60,15 @@ dset:
     common:
       is_eval: False
       n_noise: 3
-      n_readers: 4
-      n_prefetch: null
+      n_readers: 8
+      n_prefetch: 2
+      n_workers: 96
     # FiducialPipeline
     delta_loss:
       # because of the derivatives, this is multiplied by 1 + 2 * n_params
       local_batch_size: 4
       file_name_shuffle_buffer: 64
-      examples_shuffle_buffer: 24
+      examples_shuffle_buffer: 128
       is_cached: False
     # GridPipeline
     likelihood_loss:
@@ -75,11 +78,19 @@ dset:
   eval:
     common:
       is_eval: True
-      local_batch_size: 32
-      n_readers: 4
-      n_prefetch: 1
+      n_noise: 3
+      local_batch_size: 30
+    validation:
+      n_prefetch: 0
+      n_readers: 1
+      n_workers: 8
+      is_cached: False
     fiducial:
-      n_noise: 1
+      n_prefetch: 1
+      n_workers: 8
+      n_readers: 2
       is_cached: False
     grid:
-      n_noise: 3
+      n_prefetch: 1
+      n_workers: 16
+      n_readers: 4
