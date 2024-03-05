@@ -166,6 +166,18 @@ def setup():
         # tf.data.experimental.enable_debug_mode()
         LOGGER.warning(f"!!!!! Running the training in test mode, TensorFlow is executed eagerly !!!!!")
 
+    physical_devices = tf.config.list_physical_devices("GPU")
+    try:
+        for device in physical_devices:
+            if device.device_type == "GPU":
+                tf.config.experimental.set_memory_growth(device, True)
+        LOGGER.info(f"Configured the GPUs to memory growth mode")
+    except:
+        # Invalid device or cannot modify virtual devices once initialized.
+        LOGGER.warning(
+            f"Could not configure the GPUs to memory growth mode, all available GPU memory is reserved for TensorFlow"
+        )
+
     return args
 
 
