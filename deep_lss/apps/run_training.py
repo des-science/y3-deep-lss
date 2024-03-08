@@ -430,22 +430,23 @@ def training():
     # validation loss (always with respect to the fiducial cosmology)
     if vali_every is not None:
         vali_pipe_kwargs = dlss_conf["dset"]["common"]
+        vali_dset_kwargs = {**net_conf["dset"]["eval"]["common"], **net_conf["dset"]["eval"]["validation"]}
 
         if args.loss_function == "delta":
             # we need the perturbations
             vali_pipe_kwargs["params"] = dlss_conf["dset"]["training"]["params"]
 
-            vali_dset_kwargs = {**net_conf["dset"]["eval"]["common"], **net_conf["dset"]["eval"]["fiducial"]}
             # to use the correct effective batch size with respect to the perturbations
             vali_dset_kwargs["local_batch_size"] = local_batch_size
 
         else:
             # we don't need the perturbations
             vali_pipe_kwargs["params"] = []
-            vali_dset_kwargs = {**net_conf["dset"]["eval"]["common"], **net_conf["dset"]["eval"]["fiducial"]}
+
+            # as this loss is supervised
             labels = parameters.get_fiducials(params)
 
-        # We want tf.functions in strategy.run
+        # we only want tf.functions in strategy.run
         @tf.function
         def vali_loss_fn(batch):
             preds = model(batch)
