@@ -26,6 +26,7 @@ def neg_likelihood_loss(
     eps=1e-30,
     training=False,
     summary_writer=None,
+    summary_suffix="",
     img_summary=False,
 ):
     """Calculate the negative likelihood loss like in equation (17) in https://arxiv.org/pdf/1906.03156.pdf.
@@ -73,12 +74,14 @@ def neg_likelihood_loss(
         mean_upper_triangular = tf.reduce_mean(upper_triangular, axis=0, keepdims=True)
         upper_triangular_img = tf.expand_dims(mean_upper_triangular, axis=-1)
         summary.write_summary(
-            "likelihood_tri_img", upper_triangular_img, summary_writer, training, summary_type="image"
+            "likelihood_tri_img" + summary_suffix, upper_triangular_img, summary_writer, training, summary_type="image"
         )
 
         mean_cov = tf.matmul(mean_upper_triangular, mean_upper_triangular, transpose_b=True)
         cov_img = tf.expand_dims(mean_cov, axis=-1)
-        summary.write_summary("likelihood_cov_img", cov_img, summary_writer, training, summary_type="image")
+        summary.write_summary(
+            "likelihood_cov_img" + summary_suffix, cov_img, summary_writer, training, summary_type="image"
+        )
 
     # Get diagonal
     diag = tf.linalg.diag_part(upper_triangular, name="likeloss_diag_part")
@@ -99,8 +102,8 @@ def neg_likelihood_loss(
     Lt_residual_norm = tf.reduce_sum(tf.square(Lt_residual), axis=1, name="likeloss_norm_Lt_res")
     mean_Lt_residual_norm = tf.reduce_mean(Lt_residual_norm)
 
-    summary.write_summary("likelihood_log_det_loss", mean_log_det, summary_writer, training)
-    summary.write_summary("likelihood_residual_loss", mean_Lt_residual_norm, summary_writer, training)
+    summary.write_summary("likelihood_log_det_loss" + summary_suffix, mean_log_det, summary_writer, training)
+    summary.write_summary("likelihood_residual_loss" + summary_suffix, mean_Lt_residual_norm, summary_writer, training)
 
     neg_likelihood_loss = tf.add(mean_Lt_residual_norm, mean_log_det)
 
@@ -110,8 +113,7 @@ def neg_likelihood_loss(
         mean_frob_norm = tf.reduce_mean(frob_norm)
         tikhonov_loss = -lambda_tikhonov * mean_frob_norm
 
-        summary.write_summary("likelihood_tikhonov_loss", tikhonov_loss, summary_writer, training)
-
+        summary.write_summary("likelihood_tikhonov_loss" + summary_suffix, tikhonov_loss, summary_writer, training)
         neg_likelihood_loss = tf.add(neg_likelihood_loss, tikhonov_loss)
 
     return neg_likelihood_loss

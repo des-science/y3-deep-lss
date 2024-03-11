@@ -22,7 +22,7 @@ from msfm.fiducial_pipeline import FiducialPipeline
 from msfm.grid_pipeline import GridPipeline
 from msfm.utils import logger, input_output, files, parameters
 
-from deep_lss.utils import distribute, eval, configuration, optimization
+from deep_lss.utils import distribute, eval, configuration, optimization, delta_loss
 from deep_lss.models.delta_model import DeltaLossModel
 from deep_lss.models.grid_model import GridLossModel
 from deep_lss.utils.distribute import HorovodStrategy
@@ -439,22 +439,47 @@ def training():
             # to use the correct effective batch size with respect to the perturbations
             vali_dset_kwargs["local_batch_size"] = local_batch_size
 
+            # this is equal to the cov_det_loss term in the delta loss
+            non_regularized_loss_fn = lambda batch: delta_loss.delta_loss(
+                batch,
+                n_params=n_params,
+                n_same=local_batch_size,
+                n_output=n_params,
+                off_sets=perts,
+                force_params_value=None,
+                jac_weight=None,
+                jac_cond_weight=None,
+                tikhonov_regu=False,
+                training=False,
+                strategy=strategy,
+            )
+
+            # we only want tf.functions in strategy.run
+            @tf.function
+            def vali_loss_fn(batch):
+                preds = model(batch)
+                loss = model.vali_loss_fn(preds)
+                loss_non_regu = non_regularized_loss_fn(preds)
+
+                return loss, loss_non_regu
+
         else:
             # we don't need the perturbations
             vali_pipe_kwargs["params"] = []
 
+            # ignore the covariance term and rescaling
+            mse = tf.keras.metrics.MeanSquaredError()
+
             # as this loss is supervised
             labels = parameters.get_fiducials(params)
 
-        # we only want tf.functions in strategy.run
-        @tf.function
-        def vali_loss_fn(batch):
-            preds = model(batch)
-            if args.loss_function == "delta":
-                loss = model.loss_fn(preds)
-            else:
-                loss = model.loss_fn(preds, labels)
-            return loss
+            @tf.function
+            def vali_loss_fn(batch):
+                preds = model(batch)
+                loss = model.vali_loss_fn(preds, labels)
+                loss_non_regu = mse(tf.slice(preds, begin=[0, 0], size=[-1, n_params]), labels)
+
+                return loss, loss_non_regu
 
         @tf.function
         def vali_merge_mean(losses):
@@ -479,18 +504,28 @@ def training():
 
         def validation_loop():
             loss_list = []
+            loss_non_regu_list = []
             for vali_batch, _ in LOGGER.progressbar(dist_vali_dset, at_level="debug", desc="validation"):
-                loss = strategy.run(vali_loss_fn, args=(vali_batch,))
+                # NOTE the loss is also tracked within this, but since no step is performed, only the last batch is
+                # kept in tensorboard
+                loss, loss_non_regu = strategy.run(vali_loss_fn, args=(vali_batch,))
+
                 loss_list.append(loss)
+                loss_non_regu_list.append(loss_non_regu)
 
             vali_loss = strategy.run(vali_merge_mean, args=(loss_list,))
+            vali_loss_non_regu = strategy.run(vali_merge_mean, args=(loss_non_regu_list,))
+
             # only reduce over the replicas
             vali_loss = strategy.reduce(tf.distribute.ReduceOp.MEAN, vali_loss, axis=None)
+            vali_loss_non_regu = strategy.reduce(tf.distribute.ReduceOp.MEAN, vali_loss_non_regu, axis=None)
 
             assert not tf.math.is_nan(
                 vali_loss
             ), f"Validation loss is NaN, check the validation batch size as this is likely due to partially empty batches"
+
             model.write_summary("vali_loss", vali_loss)
+            model.write_summary("vali_loss_non_regu", vali_loss_non_regu)
 
             return vali_loss
 

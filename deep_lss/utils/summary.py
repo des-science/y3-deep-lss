@@ -8,7 +8,7 @@ Author: Arne Thomsen
 import tensorflow as tf
 
 
-def write_summary(label, value, summary_writer, training=True, summary_type="scalar"):
+def write_summary(label, value, summary_writer, training=True, summary_type="scalar", print_scalar=False):
     """Handle different kinds of summaries to TensorBoard.
 
     Args:
@@ -18,6 +18,7 @@ def write_summary(label, value, summary_writer, training=True, summary_type="sca
         training (bool, optional): Only log during training. Defaults to True.
         summary_type (str, optional): The kind of summary, allowed are 'scalar', 'histogram' and 'image. Defaults to
             "scalar".
+        print_scalar (bool, optional): Print the scalar value to the console. Defaults to False.
 
     Raises:
         ValueError: If an invalid summary_type is passed.
@@ -26,6 +27,8 @@ def write_summary(label, value, summary_writer, training=True, summary_type="sca
         with summary_writer.as_default():
             if summary_type == "scalar":
                 tf.summary.scalar(label, value)
+                if print_scalar:
+                    tf.print(f"{label}: {value}")
             elif summary_type == "histogram":
                 tf.summary.histogram(label, value)
             elif summary_type == "image":

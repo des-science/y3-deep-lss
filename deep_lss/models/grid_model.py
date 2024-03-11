@@ -161,15 +161,18 @@ class GridLossModel(BaseModel):
 
             # analogously to the delta loss, the per replica averaging of the likelihood loss is done in
             # likelihood_loss.py, so no distinction between distributed and non-distributed training is necessary here
-            loss_fn = lambda preds, labels: likelihood_loss.neg_likelihood_loss(
-                preds,
-                labels,
-                n_params,
-                lambda_tikhonov,
-                training=True,
-                summary_writer=self.summary_writer,
-                img_summary=img_summary,
-            )
+            def loss_fn(preds, labels, summary_suffix=""):
+                return likelihood_loss.neg_likelihood_loss(
+                    preds,
+                    labels,
+                    n_params,
+                    lambda_tikhonov,
+                    training=True,
+                    summary_writer=self.summary_writer,
+                    summary_suffix=summary_suffix,
+                    img_summary=img_summary,
+                )
+
             LOGGER.warning(f"Using the likelihood loss")
 
         elif loss == "mutual_info":
@@ -177,7 +180,7 @@ class GridLossModel(BaseModel):
             raise NotImplementedError
 
         # to use the same loss function sepearately, without the need to perform the training step
-        self.loss_fn = loss_fn
+        self.vali_loss_fn = lambda preds, labels: loss_fn(preds, labels, summary_suffix="_vali")
 
         # this isn't strictly necessary and could be removed
         current_float = get_backend_floatx()

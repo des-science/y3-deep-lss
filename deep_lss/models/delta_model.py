@@ -117,7 +117,7 @@ class DeltaLossModel(BaseModel):
         force_params_weight=1.0,
         jac_weight=100.0,
         jac_cond_weight=None,
-        cov_weight=False,
+        cov_loss=False,
         # summary statistic
         n_output=None,
         n_partial=None,
@@ -208,9 +208,9 @@ class DeltaLossModel(BaseModel):
         """
 
         # setup a loss function
-        def loss_fn(predictions):
+        def loss_fn(preds, summary_suffix=""):
             return delta_loss.delta_loss(
-                predictions=predictions,
+                predictions=preds,
                 n_params=n_params,
                 n_same=n_same,
                 off_sets=off_sets,
@@ -219,7 +219,7 @@ class DeltaLossModel(BaseModel):
                 force_params_weight=force_params_weight,
                 jac_weight=jac_weight,
                 jac_cond_weight=jac_cond_weight,
-                cov_weight=cov_weight,
+                cov_loss=cov_loss,
                 # summary statistic
                 n_output=n_output,
                 n_partial=n_partial,
@@ -230,15 +230,17 @@ class DeltaLossModel(BaseModel):
                 tikhonov_regu=tikhonov_regu,
                 eps=eps,
                 # tf.summary
-                training=True,
                 summary_writer=self.summary_writer,
+                training=True,
                 img_summary=img_summary,
+                print_scalar=False,
+                summary_suffix=summary_suffix,
                 # distribution
                 strategy=self.strategy,
             )
 
         # to use the same loss function sepearately, without the need to perform the training step
-        self.loss_fn = loss_fn
+        self.vali_loss_fn = lambda preds: loss_fn(preds, summary_suffix="_vali")
 
         # get the backend float and input shape
         current_float = get_backend_floatx()
