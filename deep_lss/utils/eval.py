@@ -108,7 +108,7 @@ def evaluate_grid(model, tfr_pattern, msfm_conf, dlss_conf, net_conf, dir_out, f
     n_examples_per_cosmo = n_patches * n_perms_per_cosmo
 
     # multiple shape and poisson noise realizations
-    n_examples_per_cosmo *= dset_kwargs["n_noise"]
+    n_examples_per_cosmo *= dset_kwargs["noise_indices"]
 
     n_examples = n_cosmos * n_examples_per_cosmo
     LOGGER.info(f"There's a total of {n_examples} data vectors to be evaluated ({n_examples_per_cosmo} per cosmology)")
@@ -252,7 +252,7 @@ def evaluate_fiducial(
     n_examples_per_cosmo = n_patches * n_perms_per_cosmo
 
     # multiple shape and poisson noise realizations
-    n_examples_per_cosmo *= dset_kwargs["n_noise"]
+    n_examples_per_cosmo *= dset_kwargs["noise_indices"]
 
     n_examples = n_cosmos * n_examples_per_cosmo
     LOGGER.info(f"There's a total of {n_examples} data vectors to be evaluated")

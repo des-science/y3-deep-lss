@@ -188,11 +188,20 @@ class BaseModel(object):
         else:
             self.summary_writer = None
 
-    def update_step(self):
+    def increment_step(self):
         """
         Increments the train step of the model by 1
         """
         self.train_step.assign(self.train_step + 1)
+
+    def change_step(self, delta):
+        """
+        Increments the train step of the model by a given value
+
+        Args:
+            delta (int): The value to increment the step by
+        """
+        self.train_step.assign_add(delta)
 
     def set_step(self, step):
         """Sets the current training step of the model to a given value
@@ -490,7 +499,7 @@ class BaseModel(object):
         self.optimizer.apply_gradients(zip(gradients, trainable_variables))
 
         # update the step
-        self.update_step()
+        self.increment_step()
 
         # log the learning rate
         current_learning_rate = self.optimizer.learning_rate

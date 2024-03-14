@@ -458,11 +458,11 @@ def training():
             @tf.function
             def vali_loss_fn(batch):
                 preds = model(batch)
-                model.increment_step()
-
                 loss = model.vali_loss_fn(preds)
                 loss_non_regu = non_regularized_loss_fn(preds)
 
+                # without this, the loss overwrites itself within the summary writer
+                model.increment_step()
                 return loss, loss_non_regu
 
         else:
@@ -478,11 +478,10 @@ def training():
             @tf.function
             def vali_loss_fn(batch):
                 preds = model(batch)
-                model.increment_step()
-
                 loss = model.vali_loss_fn(preds, labels)
                 loss_non_regu = mse(tf.slice(preds, begin=[0, 0], size=[-1, n_params]), labels)
 
+                model.increment_step()
                 return loss, loss_non_regu
 
         @tf.function
@@ -509,13 +508,13 @@ def training():
         def validation_loop():
             loss_list = []
             loss_non_regu_list = []
-            n_batches = 0
+            n_steps = 0
             for vali_batch, _ in LOGGER.progressbar(dist_vali_dset, at_level="debug", desc="validation"):
                 loss, loss_non_regu = strategy.run(vali_loss_fn, args=(vali_batch,))
 
                 loss_list.append(loss)
                 loss_non_regu_list.append(loss_non_regu)
-                n_batches += 1
+                n_steps += 1
 
             vali_loss = strategy.run(vali_merge_mean, args=(loss_list,))
             vali_loss_non_regu = strategy.run(vali_merge_mean, args=(loss_non_regu_list,))
@@ -528,10 +527,13 @@ def training():
                 vali_loss
             ), f"Validation loss is NaN, check the validation batch size as this is likely due to partially empty batches"
 
-            model.write_summary("vali_loss", vali_loss)
-            model.write_summary("vali_loss_non_regu", vali_loss_non_regu)
+            # reset the summary writer step to what it was before the validation
+            model.change_step(-n_steps)
 
-            return vali_loss, vali_loss_non_regu, n_batches
+            model.write_summary("loss_vali", vali_loss)
+            model.write_summary("loss_vali_non_regu", vali_loss_non_regu)
+
+            return vali_loss, vali_loss_non_regu, n_steps
 
     LOGGER.info(f"Starting training")
     LOGGER.timer.start("training")
@@ -579,11 +581,11 @@ def training():
                     LOGGER.info(f"Validating the model every {vali_every}")
                     LOGGER.timer.start("vali")
 
-                vali_loss, vali_loss_non_regu, n_batches = validation_loop()
+                vali_loss, vali_loss_non_regu, n_steps = validation_loop()
 
                 if second_vali:
                     LOGGER.info(
-                        f"Finished validating the model after {LOGGER.timer.elapsed('vali')} and {n_batches} batches"
+                        f"Finished validating the model after {LOGGER.timer.elapsed('vali')} and {n_steps} steps/batches"
                     )
 
             # evaluate

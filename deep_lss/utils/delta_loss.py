@@ -199,7 +199,7 @@ def delta_loss(
         force_params_weight (float, optional): The weight of the square loss of force_params_value. Defaults to 1.0.
         jac_weight (float, optional): The weight of the Jacobian loss, which forces the Jacobian of the summaries
             to be close to unity (or identity matrix). Defaults to 100.0.
-        cov_loss (bool, optional): If true, the jac weight will be used as cov_weight, i.e. loss cov mat will be
+        cov_loss (bool, optional): If true, the jac_weight will be used as cov_weight, i.e. loss cov mat will be
             forced to be close to the identity matrix. Note that there will be an additional term forcing the inverse
             of the covariance to be close to the identity as well since the cov is guaranteed to be square. This is the
             same as Luca's regularization term, but without the adaptive weight. Defaults to False.

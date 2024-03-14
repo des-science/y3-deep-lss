@@ -132,13 +132,17 @@ def setup_horovod():
         HorovodStrategy: Strategy compatible with distributed training on a single or multiple Perlmutter node(s).
     """
 
-    n_tasks_per_node = int(os.environ["SLURM_NTASKS_PER_NODE"])
-    assert (
-        n_tasks_per_node == 4
-    ), f"On Perlmutter, n_tasks_per_node should be equal to gpus_per_node 4, but is {n_tasks_per_node}"
+    # n_tasks_per_node = int(os.environ["SLURM_NTASKS_PER_NODE"])
 
-    gpus_per_task = int(os.environ["SLURM_GPUS_PER_TASK"])
-    assert gpus_per_task == 1, f"Horovod expects a single GPU per task, but got {gpus_per_task}"
+    # assert (
+    #     n_tasks_per_node == 4
+    # ), f"On Perlmutter, n_tasks_per_node should be equal to gpus_per_node 4, but is {n_tasks_per_node}"
 
-    LOGGER.warning(f"Training is distributed, using Horovod")
-    return HorovodStrategy()
+    # gpus_per_task = int(os.environ["SLURM_GPUS_PER_TASK"])
+
+    # assert gpus_per_task == 1, f"Horovod expects a single GPU per task, but got {gpus_per_task}"
+
+    strategy = HorovodStrategy()
+    LOGGER.warning(f"Training is distributed, using Horovod with {strategy.num_replicas_in_sync} replicas")
+
+    return strategy

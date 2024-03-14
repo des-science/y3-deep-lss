@@ -29,7 +29,7 @@ def get_strategy(strategy_name=None):
     """
     try:
         n_tasks = int(os.environ["SLURM_NTASKS"])
-        LOGGER.info(f"Running on {n_tasks} tasks")
+        LOGGER.info(f"Running on {n_tasks} tasks in total")
     except KeyError:
         LOGGER.info(f"Running locally as SLURM_NTASKS is not set")
 
@@ -69,7 +69,7 @@ def check_devices():
     if n_gpus == 0:
         LOGGER.warning(f"No GPU discovered by TensorFlow, running on CPUs only")
     else:
-        LOGGER.info(f"Running on {n_gpus} GPUs")
+        LOGGER.info(f"Individual task(s) running on {n_gpus} GPU(s)")
 
     try:
         n_gpus_cuda = len(os.environ["CUDA_VISIBLE_DEVICES"].split(","))
