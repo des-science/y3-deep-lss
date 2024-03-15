@@ -8,6 +8,11 @@ Author: Arne Thomsen
 import tensorflow as tf
 from deepsphere import healpy_layers
 
+from deep_lss.nets.regression_head import get_regression_head
+from msfm.utils import logger
+
+LOGGER = logger.get_logger(__file__)
+
 
 class ResNetLayers:
     """Class used to build the layers of the ResNet network, which was used as the fiducial architecture in Janis'
@@ -16,26 +21,27 @@ class ResNetLayers:
 
     def __init__(
         self,
-        out_dim=6,
-        # width
+        out_features,
+        # convolutions
         base_channels=32,
-        second_to_last_features=128,
-        # depth
         downsampling_layers=3,
         cheby_layers=2,
         residual_layers=6,
+        # regression head
+        head_type="dense",
+        second_to_last_features=None,
+        dropout_rate=None,
         # misc
         poly_degree=5,
         norm_kwargs={},
         activation=tf.nn.relu,
-        dropout_rate=0.0,
         smoothing_kwargs=None,
     ) -> None:
         """Class used to build the layers of the ResNet network, which was used as the fiducial architecture in Janis'
         KiDS1000 analysis.
 
         Args:
-            out_dim (int, optional): Output shape of the regression head. This determines the size of the learned
+            out_features (int, optional): Output shape of the regression head. This determines the size of the learned
                 summary statistics. Defaults to 6.
             base_channels (int, optional): Number of channels after the first layer of the network. This number gets
                 multiplied by a factor of two for every downsampling layer. Defaults to 32.
@@ -47,11 +53,16 @@ class ResNetLayers:
                 Defaults to 2.
             residual_layers (int, optional): Number of residual layers. These are the main graph convolutions. Defaults
                 to 6.
+            head_type (str, optional): Type of regression head to be used, allowed are "dense" and "conv. Defaults to
+                "dense".
+            second_to_last_features (int, optional): Number of features in the second to last layer of the regression.
+                Defaults to None, then no dense second to last layer is included.
+            dropout_rate (float, optional): Dropout rate within the regression head. Defaults to None, then it's not
+                included.
             poly_degree (int, optional): Degree of the polynomials within the Chebyshev convolutions. Defaults to 5.
             norm_kwargs (dict, optional): Keyword arguments to be passed to the normalization layers. Defaults to {}.
             activation (callable, optional): Non-linear activation function to be used throughout. Defaults to
                 tf.nn.relu.
-            dropout_rate (float, optional): Dropout rate within the regression head. Defaults to 0.0.
             smoothing_kwargs (dict, optional): Keyword arguments to be passed to the smoothing layer. Defaults to None,
                 then no smoothing is performed within the network.
         """
@@ -59,6 +70,8 @@ class ResNetLayers:
 
         if smoothing_kwargs is not None:
             self.layers.append(healpy_layers.HealpySmoothing(**smoothing_kwargs))
+        else:
+            LOGGER.warning("No smoothing layer is included in the network")
 
         # downsampling and increasing channels
         n_channels = base_channels
@@ -86,12 +99,16 @@ class ResNetLayers:
             )
 
         # regression head
-        self.layers.append(tf.keras.layers.Flatten())
-        self.layers.append(tf.keras.layers.LayerNormalization(axis=-1))
-        if second_to_last_features is not None:
-            self.layers.append(tf.keras.layers.Dense(second_to_last_features, activation=activation))
-        self.layers.append(tf.keras.layers.Dropout(dropout_rate))
-        self.layers.append(tf.keras.layers.Dense(out_dim))
+        regression_head_layers = get_regression_head(
+            out_features=out_features,
+            head_type=head_type,
+            second_to_last_features=second_to_last_features,
+            activation=activation,
+            dropout_rate=dropout_rate,
+            poly_degree=poly_degree,
+            norm_kwargs=norm_kwargs,
+        )
+        self.layers.extend(regression_head_layers)
 
     def get_layers(self):
         return self.layers

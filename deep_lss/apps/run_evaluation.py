@@ -155,7 +155,7 @@ if __name__ == "__main__":
     with strategy.scope():
         # load the layers
         network = NETWORKS[net_conf["network"]["name"]](
-            out_dim=n_output, smoothing_kwargs=smoothing_kwargs, **net_conf["network"]["kwargs"]
+            out_features=n_output, smoothing_kwargs=smoothing_kwargs, **net_conf["network"]["kwargs"]
         ).get_layers()
         LOGGER.info(f"Loaded a network specification of type {NETWORKS[net_conf['network']['name']]}")
 

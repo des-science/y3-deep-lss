@@ -375,7 +375,7 @@ def training():
     # network, create all of the variables within the strategy's scope, such that they are mirrored
     with strategy.scope():
         network = NETWORKS[net_conf["network"]["name"]](
-            out_dim=n_output, smoothing_kwargs=smoothing_kwargs, **net_conf["network"]["kwargs"]
+            out_features=n_output, smoothing_kwargs=smoothing_kwargs, **net_conf["network"]["kwargs"]
         ).get_layers()
         LOGGER.info(f"Loaded a network specification of type {NETWORKS[net_conf['network']['name']]}")
 
@@ -457,7 +457,7 @@ def training():
             # we only want tf.functions in strategy.run
             @tf.function
             def vali_loss_fn(batch):
-                preds = model(batch)
+                preds = model(batch, training=False)
                 loss = model.vali_loss_fn(preds)
                 loss_non_regu = non_regularized_loss_fn(preds)
 
@@ -477,7 +477,7 @@ def training():
 
             @tf.function
             def vali_loss_fn(batch):
-                preds = model(batch)
+                preds = model(batch, training=False)
                 loss = model.vali_loss_fn(preds, labels)
                 loss_non_regu = mse(tf.slice(preds, begin=[0, 0], size=[-1, n_params]), labels)
 
@@ -545,10 +545,10 @@ def training():
         with tf.profiler.experimental.Trace("step", step_num=step, _r=1) if args.profile else nullcontext():
             # train step
             if args.loss_function == "delta":
-                dv_batch, _ = next(dist_iter)
+                dv_batch, index_batch = next(dist_iter)
                 loss = model.delta_train_step(dv_batch)
             else:
-                dv_batch, cosmo_batch, _ = next(dist_iter)
+                dv_batch, cosmo_batch, index_batch = next(dist_iter)
                 loss = model.grid_train_step(dv_batch, cosmo_batch)
 
             # horovod

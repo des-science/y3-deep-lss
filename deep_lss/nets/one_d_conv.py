@@ -8,6 +8,8 @@ Author: Arne Thomsen
 import tensorflow as tf
 from deepsphere import healpy_layers
 
+from deep_lss.nets.regression_head import get_regression_head
+
 
 class OneDResidualBlock(tf.keras.Model):
     """Simple residual block for 1D convolutions. The block consists of two 1D convolutions, each followed by a layer
@@ -52,25 +54,26 @@ class OneDConvLayers:
 
     def __init__(
         self,
-        out_dim=6,
+        out_features,
         # width
         base_channels=8,
-        second_to_last_features=128,
         # depth
         downsampling_layers=5,
         residual_layers=5,
         # convolutions
         kernel_size=9,
+        # regression head
+        second_to_last_features=128,
+        dropout_rate=None,
         # misc
         activation=tf.nn.relu,
-        dropout_rate=0.0,
         smoothing_kwargs=None,
     ) -> None:
         """
         Initializes the OneDConvNet model, which only consists of 1D convolutions
 
         Args:
-            out_dim (int, optional): Number of output dimensions. Defaults to 6.
+            out_features (int, optional): Number of output dimensions. Defaults to 6.
             base_channels (int, optional): Number of channels at the input to the network. In the downsampling
                 layers, this gets doubled. Defaults to 8.
             second_to_last_features (int, optional): Number of channels in the second-to-last layer. Defaults to 128.
@@ -112,12 +115,14 @@ class OneDConvLayers:
             )
 
         # regression head
-        self.layers.append(tf.keras.layers.Flatten())
-        self.layers.append(tf.keras.layers.LayerNormalization(axis=-1))
-        if second_to_last_features is not None:
-            self.layers.append(tf.keras.layers.Dense(second_to_last_features, activation=activation))
-        self.layers.append(tf.keras.layers.Dropout(dropout_rate))
-        self.layers.append(tf.keras.layers.Dense(out_dim))
+        regression_head_layers = get_regression_head(
+            out_features=out_features,
+            head_type="dense",
+            second_to_last_features=second_to_last_features,
+            activation=activation,
+            dropout_rate=dropout_rate,
+        )
+        self.layers.extend(regression_head_layers)
 
     def get_layers(self):
         return self.layers

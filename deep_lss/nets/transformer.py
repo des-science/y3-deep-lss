@@ -8,6 +8,8 @@ Author: Arne Thomsen
 import tensorflow as tf
 from deepsphere import healpy_layers
 
+from deep_lss.nets.regression_head import get_regression_head
+
 
 class ViTLayers:
     """Class used to build the layers of a simple Vision Transformer network. Note that the spherical structure of the
@@ -16,7 +18,7 @@ class ViTLayers:
 
     def __init__(
         self,
-        out_dim=6,
+        out_features=6,
         # transformer
         hidden_dim=128,
         healpix_patch_fac=4,
@@ -34,7 +36,7 @@ class ViTLayers:
         Initialize the ViT layers, very similar to https://arxiv.org/abs/2010.11929.
 
         Args:
-            out_dim (int, optional): Output shape of the regression head. This determines the size of the learned
+            out_features (int, optional): Output shape of the regression head. This determines the size of the learned
                 summary statistics. Defaults to 6.
             hidden_dim (int, optional): The dimension of the key, value, and query space within the standard multi-head
                 transformer layers. Defaults to 128.
@@ -80,7 +82,7 @@ class ViTLayers:
             raise NotImplementedError
         # self.layers.append(tf.keras.layers.Dense(n_second_to_last_features, activation=activation))
         self.layers.append(tf.keras.layers.Dropout(dropout_rate))
-        self.layers.append(tf.keras.layers.Dense(out_dim))
+        self.layers.append(tf.keras.layers.Dense(out_features))
 
     def get_layers(self):
         return self.layers
@@ -92,7 +94,7 @@ class GTLayers:
 
     def __init__(
         self,
-        out_dim=6,
+        out_features,
         # downsampling
         base_channels=32,
         downsampling_layers=4,
@@ -102,17 +104,18 @@ class GTLayers:
         transformer_layers=4,
         pos_encoding=True,
         layer_norm=True,
-        # misc
+        # regression head
         second_to_last_features=None,
+        dropout_rate=None,
+        # misc
         activation=tf.nn.relu,
-        dropout_rate=0.0,
         smoothing_kwargs=None,
     ) -> None:
         """
         Initialize the graph Transformer layers.
 
         Args:
-            out_dim (int, optional): Output shape of the regression head. This determines the size of the learned
+            out_features (int, optional): Output shape of the regression head. This determines the size of the learned
                 summary statistics. Defaults to 6.
             base_channels (int, optional): Number of channels after the first layer of the network. This number gets
                 multiplied by a factor of two for every downsampling layer. Defaults to 32.
@@ -127,9 +130,10 @@ class GTLayers:
             layer_norm (bool, optional): Whether to use layer normalization. Defaults to True.
             second_to_last_features (int, optional): The number of features in the second-to-last layer. Defaults to
                 None.
+            dropout_rate (float, optional): Dropout rate within the regression head. Defaults to None, then it's not
+                included.
             activation (callable, optional): Non-linear activation function to be used throughout. Defaults to
                 tf.nn.relu.
-            dropout_rate (float, optional): Dropout rate within the regression head. Defaults to 0.0.
             smoothing_kwargs (dict, optional): Keyword arguments to be passed to the smoothing layer. Defaults to None,
                 then no smoothing is performed within the network.
         """
@@ -156,14 +160,16 @@ class GTLayers:
         )
 
         # regression head
-        self.layers.append(tf.keras.layers.Flatten())
-        self.layers.append(tf.keras.layers.LayerNormalization(axis=-1))
-        # TODO this creates too many trainable parameters
-        if second_to_last_features is not None:
-            raise NotImplementedError
-        # self.layers.append(tf.keras.layers.Dense(n_second_to_last_features, activation=activation))
-        self.layers.append(tf.keras.layers.Dropout(dropout_rate))
-        self.layers.append(tf.keras.layers.Dense(out_dim))
+        assert second_to_last_features is None, "Not implemented as this creates too many trainable parameters"
+        # regression head
+        regression_head_layers = get_regression_head(
+            out_features=out_features,
+            head_type="dense",
+            second_to_last_features=second_to_last_features,
+            activation=activation,
+            dropout_rate=dropout_rate,
+        )
+        self.layers.extend(regression_head_layers)
 
     def get_layers(self):
         return self.layers
