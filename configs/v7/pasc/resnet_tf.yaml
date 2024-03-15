@@ -5,7 +5,7 @@ training:
   n_steps: 1000
   output_every: Null
   checkpoint_every: Null
-  vali_every: 1000
+  vali_every: Null
   eval_every: Null
 
 optimization:
@@ -54,7 +54,7 @@ network:
     residual_layers: 5
     # misc
     poly_degree: 5
-    dropout_rate: 0.0
+    dropout_rate: Null
 
 dset:
   training:
@@ -62,8 +62,8 @@ dset:
       is_eval: False
       noise_indices: 3
       n_readers: 4
-      n_prefetch: 2
-      n_workers: 96
+      n_prefetch: 1
+      n_workers: 120
     # FiducialPipeline
     delta_loss:
       # because of the derivatives, this is multiplied by 1 + 2 * n_params
