@@ -47,16 +47,27 @@ def get_optimizer(net_conf, loss_function="delta_loss", restore_checkpoint=False
         decay_steps = net_conf["training"]["n_steps"] - warmup_steps
         end_divided_by_init_learning_rate = net_conf["optimization"][loss_function]["decay_alpha"]
 
-        # learning_rate_schedule =  tf.keras.optimizers.schedules.CosineDecay(
-        learning_rate_schedule = LinearWarmupCosineDecaySchedule(
-            # warmup
-            initial_learning_rate=warmup_init_learning_rate,
-            warmup_steps=warmup_steps,
-            warmup_target=learning_rate,
-            # decay
-            decay_steps=decay_steps,
-            alpha=end_divided_by_init_learning_rate,
-        )
+        try:
+            learning_rate_schedule = tf.keras.optimizers.schedules.CosineDecay(
+                # warmup
+                initial_learning_rate=warmup_init_learning_rate,
+                warmup_steps=warmup_steps,
+                warmup_target=learning_rate,
+                # decay
+                decay_steps=decay_steps,
+                alpha=end_divided_by_init_learning_rate,
+            )
+        # for TensorFlow 2.9
+        except TypeError:
+            learning_rate_schedule = LinearWarmupCosineDecaySchedule(
+                # warmup
+                initial_learning_rate=warmup_init_learning_rate,
+                warmup_steps=warmup_steps,
+                warmup_target=learning_rate,
+                # decay
+                decay_steps=decay_steps,
+                alpha=end_divided_by_init_learning_rate,
+            )
         LOGGER.info(f"Using cosine learning rate schedule with warmup")
     else:
         raise NotImplementedError(f"Scheduler {scheduler} not implemented yet")

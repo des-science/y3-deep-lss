@@ -277,6 +277,9 @@ def training():
         wandb_run.config.setdefaults({"msfm": msfm_conf, "dlss": dlss_conf, "net": net_conf})
 
         LOGGER.info(f"Initialized weights & biases to {dir_out}")
+        LOGGER.warning(f"Running with {strategy.num_replicas_in_sync} replicas")
+
+    LOGGER.info(f"TensorFlow version {tf.__version__}")
 
     # set up subdirectories
     checkpoint_dir = os.path.abspath(os.path.join(dir_out, "checkpoint"))
@@ -649,11 +652,11 @@ def training():
                     LOGGER.info(f"Logged the predictions to weights & biases after step {step}")
 
             # profile
-            if args.profile and step == 200:
+            if args.profile and step == 800:
                 print("\n")
                 LOGGER.info(f"Starting to profile")
                 tf.profiler.experimental.start(model.summary_dir)
-            if args.profile and step == 205:
+            if args.profile and step == 805:
                 print("\n")
                 LOGGER.info(f"Stopping to profile")
                 tf.profiler.experimental.stop()
