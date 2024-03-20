@@ -51,6 +51,7 @@ class DeltaLossModel(BaseModel):
         max_checkpoints=3,
         init_step=0,
         strategy=None,
+        xla=False,
     ):
         """Initializes a graph convolutional neural network using the healpy pixelization scheme.
 
@@ -80,7 +81,14 @@ class DeltaLossModel(BaseModel):
             init_step (int, optional): Initial step. Defaults to 0.
             strategy (Union[tf.distribute.Strategy, deep_lss.utils.distribute.HorovodStrategy], optional):
                 The distribution strategy the model was created within. Defaults to None, then training is local.
+            xla (bool, optional): Whether to enable XLA just in time compilation. Note that this is incompatible with
+                the DeepSphere graph convolutional layers, as they contain unsupported
+                SparseDenseMatirxMultiplications. Defaults to False.
         """
+
+        assert (
+            not xla
+        ), "XLA is not supported for the delta loss model as the MatrixDeterminant operation does not have an XLA kernel"
 
         # init the base model
         super(DeltaLossModel, self).__init__(
@@ -94,6 +102,7 @@ class DeltaLossModel(BaseModel):
             max_checkpoints=max_checkpoints,
             init_step=init_step,
             strategy=strategy,
+            xla=xla,
             # DeepSphere
             n_side=n_side,
             indices=indices,

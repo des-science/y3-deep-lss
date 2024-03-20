@@ -43,6 +43,7 @@ class BaseModel(object):
         max_checkpoints=3,
         init_step=0,
         strategy=None,
+        xla=False,
         # DeepSphere
         n_side=None,
         indices=None,
@@ -66,6 +67,9 @@ class BaseModel(object):
             max_checkpoints (int, optional): The maximum number of checkpoints to keep. Older ones are automatically
                 deleted by the CheckpointManager.
             init_step (int, optional): Initial step. Defaults to 0.
+            xla (bool, optional): Whether to enable XLA just in time compilation. Note that this is incompatible with
+                the DeepSphere graph convolutional layers, as they contain unsupported
+                SparseDenseMatirxMultiplications. Defaults to False.
             strategy (Union[tf.distribute.Strategy, deep_lss.utils.distribute.HorovodStrategy], optional):
                 The distribution strategy the model was created within. Defaults to None, then training is local.
             n_side (int): The healpy n_side of the input.
@@ -114,6 +118,7 @@ class BaseModel(object):
         self.max_checkpoints = max_checkpoints
         self.init_step = init_step
         self.strategy = strategy
+        self.xla = xla
 
         # set up the optimizer
         if isinstance(self.optimizer, tf.keras.optimizers.Optimizer):
@@ -286,10 +291,10 @@ class BaseModel(object):
         """
         self.network.summary(**kwargs)
 
-    def write_summary(self, label, value, summary_type="scalar"):
+    def write_summary(self, label, value, summary_type="scalar", skip=False):
         # this is part of the model graph, so has to be executed with every step. An additional condition like
         # step % log_every_n_steps == 0 is therefore not feasible
-        if self.summary_writer is not None:
+        if (self.summary_writer is not None) and (not skip):
             with self.summary_writer.as_default():
                 if summary_type == "scalar":
                     tf.summary.scalar(label, value)
@@ -463,14 +468,18 @@ class BaseModel(object):
                 loss = loss_function(predictions)
             else:
                 loss = loss_function(predictions, input_labels)
-            self.write_summary("loss", loss)
+            self.write_summary("loss", loss, skip=self.xla)
 
             # handle the l2 norm
             if l2_norm_weight is not None:
                 l2_loss = tf.linalg.global_norm(trainable_variables)
-                self.write_summary("l2_loss", l2_loss)
+                self.write_summary("l2_loss", l2_loss, skip=self.xla)
 
                 loss = loss + l2_norm_weight * l2_loss
+
+            # mixed precision
+            if isinstance(self.optimizer, tf.keras.mixed_precision.LossScaleOptimizer):
+                loss = self.optimizer.get_scaled_loss(loss)
 
         # NOTE distributed delta loss, get the global gradients on the level of the tape for Horovod
         if isinstance(self.strategy, HorovodStrategy):
@@ -482,6 +491,9 @@ class BaseModel(object):
         if isinstance(self.strategy, tf.distribute.Strategy):
             gradients = tf.distribute.get_replica_context().all_reduce("MEAN", gradients)
 
+        if isinstance(self.optimizer, tf.keras.mixed_precision.LossScaleOptimizer):
+            gradients = self.optimizer.get_unscaled_gradients(gradients)
+
         # clip the gradients
         if clip_by_value is not None:
             gradients = [tf.clip_by_value(g, clip_by_value[0], clip_by_value[1]) for g in gradients]
@@ -489,8 +501,7 @@ class BaseModel(object):
             gradients = [tf.clip_by_norm(g, clip_by_norm) for g in gradients]
 
         glob_norm = tf.linalg.global_norm(gradients)
-
-        self.write_summary("global_grad_norm", glob_norm)
+        self.write_summary("global_grad_norm", glob_norm, skip=self.xla)
 
         if clip_by_global_norm is not None:
             gradients, _ = tf.clip_by_global_norm(gradients, clip_by_global_norm, use_norm=glob_norm)
@@ -505,7 +516,7 @@ class BaseModel(object):
         current_learning_rate = self.optimizer.learning_rate
         if callable(current_learning_rate):
             current_learning_rate = current_learning_rate(self.train_step)
-        self.write_summary("learning_rate", current_learning_rate)
+        self.write_summary("learning_rate", current_learning_rate, skip=self.xla)
 
         return loss
 
@@ -562,13 +573,12 @@ class BaseModel(object):
 
         # the mean of means is equal to the overall mean if the subgroups all have the same number of samples
         # https://en.wikipedia.org/wiki/Grand_mean
-        global_loss = self.strategy.reduce(tf.distribute.ReduceOp.MEAN, local_losses, axis=None)
         LOGGER.warning(
             f"The distributed_train_step makes the assumption that the global batch size is divisible by the number"
             f" of replicas, ensure that this is the case"
         )
-
-        self.write_summary("global_loss", global_loss)
+        global_loss = self.strategy.reduce(tf.distribute.ReduceOp.MEAN, local_losses, axis=None)
+        self.write_summary("global_loss", global_loss, skip=self.xla)
 
         return global_loss
 

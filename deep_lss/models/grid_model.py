@@ -50,6 +50,7 @@ class GridLossModel(BaseModel):
         max_checkpoints=3,
         init_step=0,
         strategy=None,
+        xla=False,
     ):
         """Initializes a graph convolutional neural network using the healpy pixelization scheme.
 
@@ -79,6 +80,9 @@ class GridLossModel(BaseModel):
             init_step (int, optional): Initial step. Defaults to 0.
             strategy (Union[tf.distribute.Strategy, deep_lss.utils.distribute.HorovodStrategy], optional):
                 The distribution strategy the model was created within. Defaults to None, then training is local.
+            xla (bool, optional): Whether to enable XLA just in time compilation. Note that this is incompatible with
+                the DeepSphere graph convolutional layers, as they contain unsupported
+                SparseDenseMatirxMultiplications. Defaults to False.
         """
 
         # init the base model
@@ -93,6 +97,7 @@ class GridLossModel(BaseModel):
             max_checkpoints=max_checkpoints,
             init_step=init_step,
             strategy=strategy,
+            xla=xla,
             # DeepSphere
             n_side=n_side,
             indices=indices,
@@ -135,6 +140,9 @@ class GridLossModel(BaseModel):
             lambda_tikhonov (float, optional): Regularization parameter for the Tikhonov regularization in the
                 likelihood loss. Defaults to None, then no regularization is applied.
             img_summary (bool, optional): Whether to write image summaries of the covariance matrix. Defaults to False.
+            xla (bool, optional): Whether to enable XLA just in time compilation. Note that this is incompatible with
+                the DeepSphere graph convolutional layers, as they contain unsupported
+                SparseDenseMatirxMultiplications. Defaults to False.
 
         Raises:
             NotImplementedError: If the loss type is "mutual_info".
@@ -145,6 +153,9 @@ class GridLossModel(BaseModel):
             - If the loss type is "likelihood", the number of parameters (n_params) must be passed.
             - If the loss type is "mutual_info", it is not implemented and will raise a NotImplementedError.
         """
+
+        if self.xla:
+            LOGGER.warning(f"Using XLA just in time compilation")
 
         if loss == "mse":
             if isinstance(self.strategy, (tf.distribute.MirroredStrategy, tf.distribute.MultiWorkerMirroredStrategy)):
@@ -171,6 +182,7 @@ class GridLossModel(BaseModel):
                     summary_writer=self.summary_writer,
                     summary_suffix=summary_suffix,
                     img_summary=img_summary,
+                    xla=self.xla,
                 )
 
             LOGGER.warning(f"Using the likelihood loss")
@@ -195,7 +207,7 @@ class GridLossModel(BaseModel):
                     tf.TensorSpec(shape=data_shape, dtype=current_float),
                     tf.TensorSpec(shape=label_shape, dtype=current_float),
                 ],
-                jit_compile=False,
+                jit_compile=self.xla,
             )
             def grid_train_step(input_preds, input_labels):
                 LOGGER.warning(f"Tracing grid_train_step")
@@ -217,7 +229,7 @@ class GridLossModel(BaseModel):
             # passing an input_signature like above for a distributed dset leads the following error:
             # AttributeError: 'PerReplica' object has no attribute 'dtype'
             # Instead do like https://www.tensorflow.org/tutorials/distribute/input#using_the_element_spec_property
-            @tf.function(jit_compile=False)
+            @tf.function(jit_compile=self.xla)
             def grid_train_step(input_preds, input_labels):
                 LOGGER.warning(f"Tracing distributed grid_train_step")
                 global_loss = self.distributed_train_step(

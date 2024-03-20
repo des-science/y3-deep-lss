@@ -27,7 +27,8 @@ def setup_tf_distribute_mirrored_strategy():
     strategy = tf.distribute.MirroredStrategy(cross_device_ops=cross_device_ops)
 
     # correct exit behavior as in https://github.com/tensorflow/tensorflow/issues/50487#issuecomment-997304668
-    # atexit.register(strategy._extended._collective_ops._pool.close)
+    if tf.__version__ == "2.9.0":
+        atexit.register(strategy._extended._collective_ops._pool.close)
 
     n_replicas = strategy.num_replicas_in_sync
     n_gpus = len(tf.config.list_physical_devices("GPU"))

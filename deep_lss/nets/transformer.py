@@ -26,10 +26,11 @@ class ViTLayers:
         transformer_layers=4,
         pos_encoding=True,
         layer_norm=True,
-        # misc
+        # regression head
         second_to_last_features=None,
+        dropout_rate=None,
+        # misc
         activation=tf.nn.relu,
-        dropout_rate=0.0,
         smoothing_kwargs=None,
     ) -> None:
         """
@@ -49,9 +50,12 @@ class ViTLayers:
             transformer_layers (int, optional): The number of standard multi-head transformer blocks. Defaults to 4.
             pos_encoding (bool, optional): Whether to add positional encoding. Defaults to True.
             layer_norm (bool, optional): Whether to use layer normalization. Defaults to True.
+            second_to_last_features (int, optional): Number of features in the second to last layer of the regression.
+                Defaults to None, then no dense second to last layer is included.
+            dropout_rate (float, optional): Dropout rate within the regression head. Defaults to None, then it's not
+                included.
             activation (callable, optional): Non-linear activation function to be used throughout. Defaults to
                 tf.nn.relu.
-            dropout_rate (float, optional): Dropout rate within the regression head. Defaults to 0.0.
             smoothing_kwargs (dict, optional): Keyword arguments to be passed to the smoothing layer. Defaults to None,
                 then no smoothing is performed within the network.
         """
@@ -75,14 +79,16 @@ class ViTLayers:
         )
 
         # regression head
-        self.layers.append(tf.keras.layers.Flatten())
-        self.layers.append(tf.keras.layers.LayerNormalization(axis=-1))
-        # TODO this creates too many trainable parameters
-        if second_to_last_features is not None:
-            raise NotImplementedError
-        # self.layers.append(tf.keras.layers.Dense(n_second_to_last_features, activation=activation))
-        self.layers.append(tf.keras.layers.Dropout(dropout_rate))
-        self.layers.append(tf.keras.layers.Dense(out_features))
+        assert second_to_last_features is None, "Not implemented as this creates too many trainable parameters"
+        # regression head
+        regression_head_layers = get_regression_head(
+            out_features=out_features,
+            head_type="dense",
+            second_to_last_features=second_to_last_features,
+            activation=activation,
+            dropout_rate=dropout_rate,
+        )
+        self.layers.extend(regression_head_layers)
 
     def get_layers(self):
         return self.layers

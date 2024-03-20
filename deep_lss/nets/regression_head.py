@@ -49,14 +49,14 @@ def get_regression_head(
             LOGGER.warning(f"Using dropout with probability {dropout_rate} in the regression head")
             layers.append(tf.keras.layers.Dropout(dropout_rate))
 
-        layers.append(tf.keras.layers.Dense(out_features))
+        layers.append(tf.keras.layers.Dense(out_features, dtype=tf.float32))
 
     elif head_type == "conv":
         LOGGER.info("Using a convolutional + averaging regression head")
 
         layers.append(tf.keras.layers.LayerNormalization(axis=-1, **norm_kwargs))
         layers.append(healpy_layers.HealpyChebyshev(K=poly_degree, Fout=out_features, activation=None))
-        layers.append(MeanLayer(axis=-2))
+        layers.append(MeanLayer(axis=-2, dtype=tf.float32))
 
     else:
         raise ValueError(f"Unknown regression head type: {head_type}")

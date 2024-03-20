@@ -127,9 +127,13 @@ def setup():
         ),
     )
     parser.add_argument("--evaluate_training_set", action="store_true", help="evaluate the training set")
+    parser.add_argument("--slurm_output", type=str, default=None, help="path to the slurm output file")
+
     parser.add_argument("--debug", action="store_true", help="activate debug mode")
     parser.add_argument("--profile", action="store_true", help="run the profiler")
-    parser.add_argument("--slurm_output", type=str, default=None, help="path to the slurm output file")
+    parser.add_argument("--mixed_precision", action="store_true", help="use mixed precision training")
+    parser.add_argument("--xla", action="store_true", help="enable XLA (Accelerated Linear Algebra) JIT compilation")
+
     parser.add_argument("--wandb", action="store_true", help="log to weights & biases, otherwise log to tensorboard")
     parser.add_argument("--wandb_tags", nargs="+", type=str, default=None, help="tags for weights & biases")
     parser.add_argument("--wandb_notes", type=str, default=None, help="notes for weights & biases (longer than tags)")
@@ -158,6 +162,29 @@ def setup():
     logger.set_all_loggers_level(args.verbosity)
     for key, value in vars(args).items():
         LOGGER.info(f"{key} = {value}")
+
+    if args.mixed_precision:
+        LOGGER.warning(f"Using mixed precision")
+        tf.keras.mixed_precision.set_global_policy("mixed_float16")
+
+        if args.loss_function == "delta":
+            LOGGER.warning(
+                f"Using mixed precision with the delta loss is not recommended, as training tends to be unstable"
+            )
+
+    if args.xla:
+        LOGGER.warning(
+            f"Using XLA jit compilation. This doesn't work in most cases, as the SparseDenseMatrixMultiplication "
+            f"(DeepSphere smoothing and graph convolutions) and MatrixDeterminant (delta loss) operators are not "
+            f"supported"
+        )
+
+        if args.dist_strategy == "mirrored":
+            LOGGER.warning(f"XLA + MirroredStrategy freezes for unknown reasons")
+        elif args.dist_strategy == "horovod":
+            LOGGER.warning(
+                f"XLA + HorovodStrategy freezes for unknown reasons, see https://horovod.readthedocs.io/en/latest/xla.html"
+            )
 
     if args.debug:
         tf.config.run_functions_eagerly(True)
@@ -397,6 +424,7 @@ def training():
             summary_dir=summary_dir,
             restore_checkpoint=args.restore_checkpoint,
             strategy=strategy,
+            xla=args.xla,
         )
 
     # training step
@@ -665,7 +693,6 @@ def training():
             t_now = time()
             model.write_summary("step_time", t_now - t_prev)
             model.write_summary("global_step", step)
-            # wandb.log({"global_step": step})
             t_prev = t_now
 
     LOGGER.info(f"Finished training after {n_steps} steps and {LOGGER.timer.elapsed('training')}")

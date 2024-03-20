@@ -87,6 +87,12 @@ def get_optimizer(net_conf, loss_function="delta_loss", restore_checkpoint=False
     else:
         raise ValueError(f"Unknown optimizer {optimizer_name}")
 
+    if tf.keras.mixed_precision.global_policy().name == "mixed_float16":
+        LOGGER.info(f"Rescaling the optimizer for mixed precision")
+        optimizer = tf.keras.mixed_precision.LossScaleOptimizer(optimizer)
+    elif tf.keras.mixed_precision.global_policy().name == "mixed_bfloat16":
+        raise NotImplementedError("bfloat16 mixed precision not implemented yet")
+
     return optimizer
 
 
