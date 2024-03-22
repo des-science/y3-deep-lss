@@ -22,7 +22,7 @@ optimization:
     # for beta_1, beta_2, epsilon, etc.
     optimizer_kwargs:
       beta_1: 0.9
-      beta_2: 0.95
+      beta_2: 0.99
     # None or "cosine"
     scheduler: cosine
     warmup_steps: 5000
@@ -35,7 +35,7 @@ optimization:
     learning_rate: 0.0001
     optimizer_kwargs:
       beta_1: 0.9
-      beta_2: 0.95
+      beta_2: 0.99
     scheduler: cosine
     warmup_steps: 5000
     warmup_init_learning_rate: 0.00001
@@ -47,7 +47,7 @@ network:
   max_checkpoints: 10
   save_second_to_last_layer: True
   kwargs:
-    base_channels: 32
+    base_channels: 64
     # depth
     downsampling_layers: 3
     cheby_layers: 2
@@ -61,19 +61,20 @@ dset:
     common:
       is_eval: False
       noise_indices: 3
-      n_readers: 1
-      n_prefetch: 1
+      n_readers: 2
+      n_prefetch: 2
       n_workers: 30
     # FiducialPipeline
     delta_loss:
       # because of the derivatives, this is multiplied by 1 + 2 * n_params
-      local_batch_size: 8
+      local_batch_size: 4
       file_name_shuffle_buffer: 16
       examples_shuffle_buffer: 16
       is_cached: False
     # GridPipeline
     likelihood_loss:
-      local_batch_size: 32
+      # corresponds to the same batch size as for the delta loss
+      local_batch_size: 60
       file_name_shuffle_buffer: 16
       examples_shuffle_buffer: 16
   eval:
