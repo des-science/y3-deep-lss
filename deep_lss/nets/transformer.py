@@ -19,6 +19,9 @@ class ViTLayers:
     def __init__(
         self,
         out_features=6,
+        # downsampling
+        base_channels=None,
+        downsampling_layers=None,
         # transformer
         hidden_dim=128,
         healpix_patch_fac=4,
@@ -64,6 +67,13 @@ class ViTLayers:
 
         if smoothing_kwargs is not None:
             self.layers.append(healpy_layers.HealpySmoothing(**smoothing_kwargs))
+
+        # downsampling
+        if base_channels is not None and downsampling_layers is not None:
+            n_channels = base_channels
+            for _ in range(downsampling_layers):
+                self.layers.append(healpy_layers.HealpyPseudoConv(p=1, Fout=n_channels, activation=activation))
+                n_channels *= 2
 
         # an 1d convolutional embedding followed by n_layers of off-the-shelf multihead attention
         self.layers.append(

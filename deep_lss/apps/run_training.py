@@ -139,6 +139,8 @@ def setup():
     parser.add_argument("--wandb_notes", type=str, default=None, help="notes for weights & biases (longer than tags)")
     parser.add_argument("--wandb_sweep_id", type=str, default=None, help="id of the sweep. If None, no sweep is used")
 
+    parser.add_argument("--pasc_throughput", action="store_true")
+
     args, _ = parser.parse_known_args()
 
     if args.loss_function == "delta":
@@ -688,6 +690,22 @@ def training():
                 print("\n")
                 LOGGER.info(f"Stopping to profile")
                 tf.profiler.experimental.stop()
+
+            if args.pasc_throughput:
+                step_start = 200
+                step_delta = 1000
+
+                if step == step_start:
+                    LOGGER.info("Starting to measure throughput")
+                    LOGGER.timer.start("pasc_throughput")
+                    t_pasc = time()
+
+                if step == step_start + step_delta:
+                    LOGGER.info(f"{step_delta} steps took {LOGGER.timer.elapsed('pasc_throughput')}")
+                    delta_t_pasc = time() - t_pasc
+                    global_batch_size = local_batch_size * strategy.num_replicas_in_sync
+                    throughput = step_delta * global_batch_size / delta_t_pasc
+                    LOGGER.info(f"throughput: {throughput:.2f} examples/s")
 
             # additional logs
             t_now = time()

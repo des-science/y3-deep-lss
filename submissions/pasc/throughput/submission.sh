@@ -29,7 +29,7 @@ else
 fi
 
 srun --cpu-bind=threads --gpu-bind=single:1 --output="$OUTPUT" \
-    python ../../deep_lss/apps/run_training.py \
+    python ../../../deep_lss/apps/run_training.py \
     --loss_function="$LOSS" \
     --dist_strategy="$STRATEGY" \
     --train_tfr_pattern="/pscratch/sd/a/athomsen/DESY3/$VERSION/$BIAS/tfrecords/$TRAINSET/DESy3_${TRAINSET}_????.tfrecord" \
@@ -40,7 +40,20 @@ srun --cpu-bind=threads --gpu-bind=single:1 --output="$OUTPUT" \
     --net_config="configs/$VERSION/pasc/resnet_hvd.yaml" \
     --msfm_config="/global/homes/a/athomsen/multiprobe-simulation-forward-model/configs/$VERSION/$BIAS.yaml" \
     --slurm_output="$OUTPUT" \
+    --pasc_throughput \
     --wandb \
     --wandb_tags "$VERSION" "$PROBE" "$LOSS" "$STRATEGY" "$BIAS" "pasc" "throughput" \
     --wandb_notes="$WANDB_NOTES"
 
+# srun --nodes=1 --ntasks-per-node=4 --cpus-per-task=32 --cpu-bind=threads --gpus-per-node=4 --gpus-per-task=1 --gpu-bind=single:1 \
+#     python deep_lss/apps/run_training.py \
+#     --loss_function="delta" \
+#     --dist_strategy="$STRATEGY" \
+#     --train_tfr_pattern="/pscratch/sd/a/athomsen/DESY3/$VERSION/$BIAS/tfrecords/fiducial/DESy3_fiducial_????.tfrecord" \
+#     --fidu_vali_tfr_pattern="/pscratch/sd/a/athomsen/DESY3/$VERSION/$BIAS/tfrecords/fiducial/validation/DESy3_fiducial_????.tfrecord" \
+#     --grid_vali_tfr_pattern="/pscratch/sd/a/athomsen/DESY3/$VERSION/$BIAS/tfrecords/grid/DESy3_grid_????.tfrecord" \
+#     --dir_base="/pscratch/sd/a/athomsen/run_files/$VERSION/$PROBE/$LOSS" \
+#     --dlss_config="configs/$VERSION/pasc/$PROBE/dlss_config.yaml" \
+#     --net_config="configs/$VERSION/pasc/resnet_hvd.yaml" \
+#     --msfm_config="/global/homes/a/athomsen/multiprobe-simulation-forward-model/configs/$VERSION/$BIAS.yaml" \
+#     --pasc_throughput 
