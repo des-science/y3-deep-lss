@@ -12,7 +12,7 @@
 #SBATCH --output="./logs/v6/training_%j.log"
 
 STRATEGY="horovod"
-VERSION="v6"
+VERSION="v7"
 # lensing, clustering, combined
 PROBE="combined"
 # linear_bias, quadratic_bias

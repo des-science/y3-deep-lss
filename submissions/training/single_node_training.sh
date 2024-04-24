@@ -12,10 +12,11 @@
 #SBATCH --output="./logs/v6/training_%j.log"
 
 STRATEGY="mirrored"
-VERSION="v6"
+VERSION="v8"
 # lensing, clustering, combined
-# PROBE="combined"
 PROBE="lensing"
+# PROBE="clustering"
+# PROBE="combined"
 # linear_bias, quadratic_bias
 BIAS="linear_bias"
 # delta, likelihood
@@ -30,25 +31,46 @@ else
     TRAINSET="grid"
 fi
 
+# srun --cpu-bind=threads --gpu-bind=none --output="$OUTPUT" \
+#     python ../../deep_lss/apps/run_training.py \
+#     --loss_function="$LOSS" \
+#     --dist_strategy="$STRATEGY" \
+#     --train_tfr_pattern="/pscratch/sd/a/athomsen/DESY3/$VERSION/$BIAS/tfrecords/$TRAINSET/DESy3_${TRAINSET}_????.tfrecord" \
+#     --fidu_vali_tfr_pattern="/pscratch/sd/a/athomsen/DESY3/$VERSION/$BIAS/tfrecords/fiducial/validation/DESy3_fiducial_????.tfrecord" \
+#     --grid_vali_tfr_pattern="/pscratch/sd/a/athomsen/DESY3/$VERSION/$BIAS/tfrecords/grid/DESy3_grid_????.tfrecord" \
+#     --dir_base="/pscratch/sd/a/athomsen/run_files/$VERSION/$PROBE/$LOSS" \
+#     --dlss_config="configs/$VERSION/$PROBE/$BIAS/dlss_config.yaml" \
+#     --net_config="configs/$VERSION/$PROBE/vit/vit_bigger_patches.yaml" \
+#     --msfm_config="/global/homes/a/athomsen/multiprobe-simulation-forward-model/configs/$VERSION/$BIAS.yaml" \
+#     --slurm_output="$OUTPUT" \
+#     --wandb \
+#     --wandb_tags "$VERSION" "$PROBE" "$LOSS" "$STRATEGY" "$BIAS" "ViT" \
+#     --wandb_notes="ViT run with bigger patches, but a larger embedding dimension to compare to convolutions"
+    # --dir_model="/pscratch/sd/a/athomsen/run_files/v6/combined/likelihood/2024-02-01_09-02-59_resnet_vanilla" \
+    # --restore_checkpoint
+
 srun --cpu-bind=threads --gpu-bind=none --output="$OUTPUT" \
     python ../../deep_lss/apps/run_training.py \
     --loss_function="$LOSS" \
     --dist_strategy="$STRATEGY" \
-    --train_tfr_pattern="/pscratch/sd/a/athomsen/DESY3/$VERSION/$BIAS/tfrecords/$TRAINSET/DESy3_${TRAINSET}_*.tfrecord" \
-    --fidu_vali_tfr_pattern="/pscratch/sd/a/athomsen/DESY3/$VERSION/$BIAS/tfrecords/fiducial/validation/DESy3_fiducial_*.tfrecord" \
-    --grid_vali_tfr_pattern="/pscratch/sd/a/athomsen/DESY3/$VERSION/$BIAS/tfrecords/grid/DESy3_grid_*.tfrecord" \
+    --train_tfr_pattern="/pscratch/sd/a/athomsen/DESY3/$VERSION/$BIAS/tfrecords/$TRAINSET/DESy3_${TRAINSET}_dmb_????.tfrecord" \
+    --fidu_vali_tfr_pattern="/pscratch/sd/a/athomsen/DESY3/$VERSION/$BIAS/tfrecords/fiducial/validation/DESy3_fiducial_dmb_????.tfrecord" \
+    --grid_vali_tfr_pattern="/pscratch/sd/a/athomsen/DESY3/v7/$BIAS/tfrecords/grid/DESy3_grid_????.tfrecord" \
     --dir_base="/pscratch/sd/a/athomsen/run_files/$VERSION/$PROBE/$LOSS" \
     --dlss_config="configs/$VERSION/$PROBE/$BIAS/dlss_config.yaml" \
-    --net_config="configs/$VERSION/$PROBE/grapht.yaml" \
+    --net_config="configs/$VERSION/$PROBE/resnet_no_second_to_last.yaml" \
     --msfm_config="/global/homes/a/athomsen/multiprobe-simulation-forward-model/configs/$VERSION/$BIAS.yaml" \
     --slurm_output="$OUTPUT" \
     --wandb \
-    --wandb_tags "$VERSION" "$PROBE" "$LOSS" "$STRATEGY" "$BIAS" "graph_transformer" \
-    # --dir_model="/pscratch/sd/a/athomsen/run_files/v6/lensing/delta/2024-02-13_07-42-20_vit_vanilla" \
-    # --restore_checkpoint
-    # --dir_model="/pscratch/sd/a/athomsen/run_files/v6/combined/delta/2024-02-02_00-28-48_resnet_vanilla" \
-    # --restore_checkpoint
-    # --dir_model="/pscratch/sd/a/athomsen/run_files/v6/lensing_only/delta/2024-01-12_19-35-59_resnet_vanilla" \
+    --wandb_tags "$VERSION" "$PROBE" "$LOSS" "$STRATEGY" "$BIAS" "resnet" "CV1.1" \
+    --wandb_notes="like glad-cloud-1011, but with double the number of channels"
+
+
+# --dir_model="/pscratch/sd/a/athomsen/run_files/v6/lensing/delta/2024-02-13_07-42-20_vit_vanilla" \
+# --restore_checkpoint
+# --dir_model="/pscratch/sd/a/athomsen/run_files/v6/combined/delta/2024-02-02_00-28-48_resnet_vanilla" \
+# --restore_checkpoint
+# --dir_model="/pscratch/sd/a/athomsen/run_files/v6/lensing_only/delta/2024-01-12_19-35-59_resnet_vanilla" \
 # --dlss_config="configs/$VERSION/$PROBE/smaller_scales/dlss_config.yaml" \
 
 # srun --cpu-bind=threads --gpu-bind=none --output="$OUTPUT" \
@@ -122,3 +144,29 @@ srun --cpu-bind=threads --gpu-bind=none --output="$OUTPUT" \
 #     --msfm_config="/global/homes/a/athomsen/multiprobe-simulation-forward-model/configs/$VERSION/$BIAS.yaml" \
 #     --wandb \
 #     --wandb_tags "$VERSION" "$PROBE" "$LOSS" "$STRATEGY" "$BIAS" "graph_transformer" "debug"
+
+# python deep_lss/apps/run_training.py \
+#     --dist_strategy="$STRATEGY" \
+#     --loss_function="$LOSS" \
+#     --train_tfr_pattern="/pscratch/sd/a/athomsen/DESY3/$VERSION/$BIAS/tfrecords/$TRAINSET/DESy3_${TRAINSET}_????.tfrecord" \
+#     --fidu_vali_tfr_pattern="/pscratch/sd/a/athomsen/DESY3/$VERSION/$BIAS/tfrecords/fiducial/validation/DESy3_fiducial_????.tfrecord" \
+#     --grid_vali_tfr_pattern="/pscratch/sd/a/athomsen/DESY3/$VERSION/$BIAS/tfrecords/grid/DESy3_grid_????.tfrecord" \
+#     --dir_base="/pscratch/sd/a/athomsen/run_files/debug/$VERSION/$PROBE/$LOSS" \
+#     --dlss_config="configs/$VERSION/$PROBE/$BIAS/dlss_config.yaml" \
+#     --net_config="configs/$VERSION/$PROBE/resnet.yaml" \
+#     --msfm_config="/global/homes/a/athomsen/multiprobe-simulation-forward-model/configs/$VERSION/$BIAS.yaml"
+#     # --wandb \
+#     # --wandb_tags "$VERSION" "$PROBE" "$LOSS" "$STRATEGY" "$BIAS" "validation" "debug"
+
+
+python ../../deep_lss/apps/run_training.py \
+    --loss_function="$LOSS" \
+    --dist_strategy="$STRATEGY" \
+    --train_tfr_pattern="/pscratch/sd/a/athomsen/DESY3/$VERSION/$BIAS/tfrecords/$TRAINSET/DESy3_${TRAINSET}_dmb_????.tfrecord" \
+    --fidu_vali_tfr_pattern="/pscratch/sd/a/athomsen/DESY3/$VERSION/$BIAS/tfrecords/fiducial/validation/DESy3_fiducial_dmb_????.tfrecord" \
+    --grid_vali_tfr_pattern="/pscratch/sd/a/athomsen/DESY3/v7/$BIAS/tfrecords/grid/DESy3_grid_????.tfrecord" \
+    --dir_base="/pscratch/sd/a/athomsen/run_files/$VERSION/$PROBE/$LOSS" \
+    --dlss_config="configs/$VERSION/$PROBE/$BIAS/dlss_config.yaml" \
+    --net_config="configs/$VERSION/$PROBE/debug/resnet_debug.yaml" \
+    --msfm_config="/global/homes/a/athomsen/multiprobe-simulation-forward-model/configs/$VERSION/$BIAS.yaml" \
+    --slurm_output="$OUTPUT"

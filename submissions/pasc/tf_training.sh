@@ -43,5 +43,6 @@ srun --cpu-bind=threads --gpu-bind=none --output="$OUTPUT" \
     --msfm_config="/global/homes/a/athomsen/multiprobe-simulation-forward-model/configs/$VERSION/$BIAS.yaml" \
     --slurm_output="$OUTPUT" \
     --wandb \
-    --wandb_tags "$VERSION" "$PROBE" "$LOSS" "$STRATEGY" "$BIAS" "pasc"
-    # --wandb_notes="Run with dropout, the new and improved validation tracking and reduced jacobian weight"
+    --profile \
+    --wandb_tags "$VERSION" "$PROBE" "$LOSS" "$STRATEGY" "$BIAS" "pasc" \
+    --wandb_notes="Run with profiling"

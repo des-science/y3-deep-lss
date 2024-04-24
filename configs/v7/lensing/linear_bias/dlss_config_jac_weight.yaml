@@ -27,7 +27,7 @@ delta_loss:
   # regularization
   force_params_value: 0.0
   force_params_weight: 1.0
-  jac_weight: 100.0
+  jac_weight: 10.0
   jac_cond_weight: null
   cov_loss: False
   # numerical stability

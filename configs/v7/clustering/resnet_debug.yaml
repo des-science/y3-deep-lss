@@ -5,7 +5,7 @@ training:
   n_steps: 1000
   output_every: Null
   checkpoint_every: Null
-  vali_every: Null
+  vali_every: 10
   eval_every: Null
 
 optimization:
@@ -43,30 +43,26 @@ network:
   max_checkpoints: 10
   save_second_to_last_layer: True
   kwargs:
-    # convolutions
-    base_channels: 64
+    base_channels: 32
+    # depth
     downsampling_layers: 3
     cheby_layers: 2
     residual_layers: 5
-    # regression head
-    head_type: dense
-    second_to_last_features: Null
-    dropout_rate: Null
     # misc
     poly_degree: 5
 
 dset:
   training:
     common:
-      noise_indices: 3
       is_eval: False
+      n_noise: 3
       n_readers: 8
       n_prefetch: 2
     # FiducialPipeline
     delta_loss:
       n_workers: 96
       # because of the derivatives, this is multiplied by 1 + 2 * n_params
-      local_batch_size: 8
+      local_batch_size: 4
       file_name_shuffle_buffer: 64
       examples_shuffle_buffer: 24
       is_cached: False
@@ -78,20 +74,14 @@ dset:
   eval:
     common:
       is_eval: True
-      local_batch_size: 10
+      local_batch_size: 30
       n_prefetch: 1
-    validation:
-      n_prefetch: 0
-      n_readers: 1
-      n_workers: 8
-      is_cached: False
-      drop_remainder: True
     fiducial:
-      noise_indices: 3
       n_workers: 8
       n_readers: 1
+      n_noise: 3
       is_cached: False
     grid:
-      noise_indices: 3
       # n_workers: 16
       n_readers: 4
+      n_noise: 3

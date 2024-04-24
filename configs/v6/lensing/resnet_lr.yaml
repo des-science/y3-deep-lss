@@ -5,16 +5,16 @@ training:
   n_steps: 50000
   output_every: 5000
   checkpoint_every: 5000
-  eval_every: 50000
+  eval_every: 10000
 
 optimization:
   optimizer: adam
   optimizer_kwargs:
-    learning_rate: 0.0001
+    learning_rate: 0.00001
   gradient_clipping:
     clip_by_value: null
     clip_by_norm: null
-    clip_by_global_norm: 10.0
+    clip_by_global_norm: 1.0
   # only affects the delta loss
   noise_schedule_steps: Null
 
@@ -37,7 +37,7 @@ dset:
     common:
       is_eval: False
       n_noise: 3
-      n_readers: 8
+      n_readers: 4
       n_prefetch: null
     # FiducialPipeline
     delta_loss:

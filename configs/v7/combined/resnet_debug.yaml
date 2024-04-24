@@ -2,11 +2,11 @@
 name: resnet_vanilla
 
 training:
-  n_steps: 1000
-  output_every: Null
-  checkpoint_every: Null
-  vali_every: Null
-  eval_every: Null
+  n_steps: 100000
+  output_every: 5000
+  checkpoint_every: 5000
+  vali_every: 10
+  eval_every: 100000
 
 optimization:
   # adam or sgd
@@ -18,11 +18,13 @@ optimization:
     clip_by_global_norm: 10.0
   delta_loss:
     # at the end of the warmup or from the beginning, if there is no schedule
-    learning_rate: 0.0001
+    learning_rate: 0.0002
     # for beta_1, beta_2, epsilon, etc.
-    optimizer_kwargs: {}
+    optimizer_kwargs:
+      beta_1: 0.9
+      beta_2: 0.95
     # None or "cosine"
-    scheduler: cosine
+    scheduler: Null
     warmup_steps: 5000
     warmup_init_learning_rate: 0.00001
     # alpha = decay_end_learning_rate / learning_rate
@@ -31,8 +33,10 @@ optimization:
     noise_schedule_steps: Null
   likelihood_loss:
     learning_rate: 0.0001
-    optimizer_kwargs: {}
-    scheduler: cosine
+    optimizer_kwargs:
+      beta_1: 0.9
+      beta_2: 0.95
+    scheduler: Null
     warmup_steps: 5000
     warmup_init_learning_rate: 0.00001
     decay_alpha: 0.0
@@ -43,43 +47,39 @@ network:
   max_checkpoints: 10
   save_second_to_last_layer: True
   kwargs:
-    # convolutions
-    base_channels: 64
+    base_channels: 32
+    # depth
     downsampling_layers: 3
     cheby_layers: 2
     residual_layers: 5
-    # regression head
-    head_type: dense
-    second_to_last_features: Null
-    dropout_rate: Null
     # misc
     poly_degree: 5
 
 dset:
   training:
     common:
-      noise_indices: 3
       is_eval: False
-      n_readers: 8
+      n_noise: 3
+      n_readers: 4
       n_prefetch: 2
+      n_workers: 96
     # FiducialPipeline
     delta_loss:
-      n_workers: 96
       # because of the derivatives, this is multiplied by 1 + 2 * n_params
       local_batch_size: 8
       file_name_shuffle_buffer: 64
-      examples_shuffle_buffer: 24
+      examples_shuffle_buffer: 64
       is_cached: False
     # GridPipeline
     likelihood_loss:
       local_batch_size: 32
       file_name_shuffle_buffer: 64
-      examples_shuffle_buffer: 128
+      examples_shuffle_buffer: 64
   eval:
     common:
       is_eval: True
-      local_batch_size: 10
-      n_prefetch: 1
+      n_noise: 3
+      local_batch_size: 30
     validation:
       n_prefetch: 0
       n_readers: 1
@@ -87,11 +87,11 @@ dset:
       is_cached: False
       drop_remainder: True
     fiducial:
-      noise_indices: 3
+      n_prefetch: 1
       n_workers: 8
-      n_readers: 1
+      n_readers: 2
       is_cached: False
     grid:
-      noise_indices: 3
-      # n_workers: 16
-      n_readers: 4
+      n_prefetch: 1
+      n_workers: 16
+      n_readers: 32

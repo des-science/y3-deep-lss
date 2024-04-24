@@ -1,9 +1,8 @@
 #!/bin/bash
 #SBATCH --account=des_g
 #SBATCH --constraint=gpu
-#SBATCH --qos=regular
-#SBATCH --time=01:00:00
-#SBATCH --nodes=1
+#SBATCH --qos=debug
+#SBATCH --time=00:30:00
 #SBATCH --ntasks-per-node=4
 #SBATCH --gpus-per-node=4
 #SBATCH --gpus-per-task=1
@@ -23,6 +22,7 @@ BIAS="linear_bias"
 # delta, likelihood
 LOSS="delta"
 # LOSS="likelihood"
+WANDB_NOTES=$1
 
 OUTPUT="./logs/$VERSION/$PROBE/$LOSS/"$STRATEGY"_"$SLURM_JOB_ID".log"
 
@@ -44,7 +44,8 @@ srun --cpu-bind=threads --gpu-bind=single:1 --output="$OUTPUT" \
     --net_config="configs/$VERSION/pasc/resnet_hvd.yaml" \
     --msfm_config="/global/homes/a/athomsen/multiprobe-simulation-forward-model/configs/$VERSION/$BIAS.yaml" \
     --slurm_output="$OUTPUT" \
+    --profile \
     --wandb \
-    --wandb_tags "$VERSION" "$PROBE" "$LOSS" "$STRATEGY" "$BIAS" "pasc"
-    # --wandb_notes="Run with dropout, the new and improved validation tracking and reduced jacobian weight"
+    --wandb_tags "$VERSION" "$PROBE" "$LOSS" "$STRATEGY" "$BIAS" "pasc" \
+    --wandb_notes="$WANDB_NOTES"
 
