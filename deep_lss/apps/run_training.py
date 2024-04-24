@@ -265,6 +265,15 @@ def training():
     else:
         raise ValueError(f"Can't restore the model from an unspecified dir_model")
 
+    # to be read by the evaluation script
+    job_id = os.environ["SLURM_JOB_ID"]
+    if job_id is not None:
+        temp_file = f"./.env_var/id_{job_id}.txt"
+        os.makedirs(os.path.dirname(temp_file), exist_ok=True)
+        LOGGER.info(f"Writing the model directory to {temp_file}")
+        with open(temp_file, "w") as f:
+            f.write(dir_out)
+
     # weights and biases
     if args.wandb:
         group_name = distribute.get_wandb_group_name(strategy)

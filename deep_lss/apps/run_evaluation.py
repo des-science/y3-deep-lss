@@ -61,7 +61,15 @@ def setup():
         help="input root dir of the grid data vectors (validation)",
     )
     parser.add_argument(
-        "--dir_model", type=str, required=True, help="dir where the model checkpoints to be loaded are saved."
+        "--dir_model",
+        type=str,
+        default=None,
+        help="dir where the model checkpoints to be loaded are saved. If None, read from temp file",
+    )
+    parser.add_argument(
+        "--evaluate_all_checkpoints",
+        action="store_true",
+        help="evaluate all checkpoints (instead of only the latest one)",
     )
     parser.add_argument("--debug", action="store_true", help="activate debug mode")
     parser.add_argument("--file_label", type=str, default=None, help="A suffix that is appended to the files")
@@ -77,6 +85,15 @@ def setup():
     logger.set_all_loggers_level(args.verbosity)
     for key, value in vars(args).items():
         LOGGER.info(f"{key} = {value}")
+
+    job_id = os.environ["SLURM_JOB_ID"]
+    if args.dir_model is None and job_id is not None:
+        temp_file = f"./.env_var/id_{job_id}.txt"
+        with open(temp_file, "r") as f:
+            args.dir_model = f.read().strip()
+        LOGGER.warning(f"Loaded the model directory {args.dir_model} from {temp_file}")
+    elif args.dir_model is None and job_id is None:
+        raise ValueError(f"Please provide the model directory or set the model directory through a temp file")
 
     if args.debug:
         # tf.config.run_functions_eagerly(True)
@@ -172,61 +189,75 @@ if __name__ == "__main__":
             strategy=strategy,
         )
 
-    train_step = model.get_step()
+    def evaluate_current_checkpoint(model):
+        train_step = model.get_step()
 
-    if args.file_label is None:
-        file_label = train_step
+        if args.file_label is None:
+            file_label = train_step
+        else:
+            file_label = f"{train_step}_{args.file_label}"
+
+        out_file = None
+
+        # fiducial training
+        if args.fidu_train_tfr_pattern is not None:
+            out_file = eval.evaluate_fiducial(
+                model=model,
+                tfr_pattern=args.fidu_train_tfr_pattern,
+                msfm_conf=msfm_conf,
+                dlss_conf=dlss_conf,
+                net_conf=net_conf,
+                dir_out=args.dir_model,
+                file_label=file_label,
+                training_set=True,
+            )
+        else:
+            LOGGER.warning(f"Skipping evaluation of the fiducial training set")
+
+        # fiducial validation
+        if args.fidu_vali_tfr_pattern is not None:
+            out_file = eval.evaluate_fiducial(
+                model=model,
+                tfr_pattern=args.fidu_vali_tfr_pattern,
+                msfm_conf=msfm_conf,
+                dlss_conf=dlss_conf,
+                net_conf=net_conf,
+                dir_out=args.dir_model,
+                file_label=file_label,
+                training_set=False,
+            )
+        else:
+            LOGGER.warning(f"Skipping evaluation of the fiducial validation set")
+
+        # grid validation
+        if args.grid_vali_tfr_pattern is not None:
+            out_file = eval.evaluate_grid(
+                model=model,
+                tfr_pattern=args.grid_vali_tfr_pattern,
+                msfm_conf=msfm_conf,
+                dlss_conf=dlss_conf,
+                net_conf=net_conf,
+                dir_out=args.dir_model,
+                file_label=file_label,
+            )
+        else:
+            LOGGER.warning(f"Skipping evaluation of the grid set")
+
+        if args.wandb and out_file is not None:
+            LOGGER.info(f"Logged the predictions to weights & biases")
+            wandb_artifact = wandb.Artifact(name="evaluation-predictions", type="predictions")
+            wandb_artifact.add_file(local_path=out_file)
+            wandb_run.log_artifact(wandb_artifact)
+
+    if args.evaluate_all_checkpoints:
+        LOGGER.warning(f"Evaluating all checkpoints")
+
+        checkpoints = model.checkpoint_manager.checkpoints
+        for checkpoint in checkpoints:
+            # model.checkpoint_manager.checkpoint.restore(checkpoint)
+            model.restore_model_from_checkpoint_dir(checkpoint)
+            evaluate_current_checkpoint(model)
+
     else:
-        file_label = f"{train_step}_{args.file_label}"
-
-    out_file = None
-
-    # fiducial training
-    if args.fidu_train_tfr_pattern is not None:
-        out_file = eval.evaluate_fiducial(
-            model=model,
-            tfr_pattern=args.fidu_train_tfr_pattern,
-            msfm_conf=msfm_conf,
-            dlss_conf=dlss_conf,
-            net_conf=net_conf,
-            dir_out=args.dir_model,
-            file_label=file_label,
-            training_set=True,
-        )
-    else:
-        LOGGER.warning(f"Skipping evaluation of the fiducial training set")
-
-    # fiducial validation
-    if args.fidu_vali_tfr_pattern is not None:
-        out_file = eval.evaluate_fiducial(
-            model=model,
-            tfr_pattern=args.fidu_vali_tfr_pattern,
-            msfm_conf=msfm_conf,
-            dlss_conf=dlss_conf,
-            net_conf=net_conf,
-            dir_out=args.dir_model,
-            file_label=file_label,
-            training_set=False,
-        )
-    else:
-        LOGGER.warning(f"Skipping evaluation of the fiducial validation set")
-
-    # grid validation
-    if args.grid_vali_tfr_pattern is not None:
-        out_file = eval.evaluate_grid(
-            model=model,
-            tfr_pattern=args.grid_vali_tfr_pattern,
-            msfm_conf=msfm_conf,
-            dlss_conf=dlss_conf,
-            net_conf=net_conf,
-            dir_out=args.dir_model,
-            file_label=file_label,
-        )
-    else:
-        LOGGER.warning(f"Skipping evaluation of the grid set")
-
-    if args.wandb and out_file is not None:
-        LOGGER.info(f"Logged the predictions to weights & biases")
-        wandb_artifact = wandb.Artifact(name="evaluation-predictions", type="predictions")
-        wandb_artifact.add_file(local_path=out_file)
-        wandb_run.log_artifact(wandb_artifact)
+        LOGGER.warning(f"Evaluating only the latest checkpoint")
+        evaluate_current_checkpoint(model)

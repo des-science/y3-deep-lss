@@ -275,6 +275,19 @@ class BaseModel(object):
         restore_dir = self.checkpoint_manager.restore_or_initialize()
         LOGGER.info(f"Network successfully restored from checkpoint {restore_dir}.")
 
+    def restore_model_from_checkpoint_dir(self, checkpoint):
+        """Restores the model from a concrete checkpoint passed as a function argument.
+
+        Raises:
+            ValueError: If there's no checkpoint directory or it's empty.
+        """
+
+        if self.checkpoint_dir is None:
+            raise ValueError(f"No checkpoint directory was given, the network can not be restored.")
+
+        self.checkpoint_manager.checkpoint.restore(checkpoint)
+        LOGGER.info(f"Network successfully restored from checkpoint {checkpoint}.")
+
     def build_network(self, input_shape):
         """Builds the internal HealpyGCNN with a given input shape
 
