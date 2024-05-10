@@ -69,6 +69,17 @@ def get_optimizer(net_conf, loss_function="delta_loss", restore_checkpoint=False
                 alpha=end_divided_by_init_learning_rate,
             )
         LOGGER.info(f"Using cosine learning rate schedule with warmup")
+    elif scheduler == "warmup":
+        warmup_init_learning_rate = net_conf["optimization"][loss_function]["warmup_init_learning_rate"]
+        warmup_steps = net_conf["optimization"][loss_function]["warmup_steps"]
+
+        learning_rate_schedule = tf.keras.optimizers.schedules.PolynomialDecay(
+            initial_learning_rate=warmup_init_learning_rate,
+            decay_steps=warmup_steps,
+            end_learning_rate=learning_rate,
+            power=1.0,
+            cycle=False,
+        )
     else:
         raise NotImplementedError(f"Scheduler {scheduler} not implemented yet")
 

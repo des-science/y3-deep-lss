@@ -473,6 +473,7 @@ def training():
     if vali_every is not None:
         vali_pipe_kwargs = dlss_conf["dset"]["common"]
         vali_dset_kwargs = {**net_conf["dset"]["eval"]["common"], **net_conf["dset"]["eval"]["validation"]}
+        # vali_dset_kwargs["drop_remainder"] = True
 
         if args.loss_function == "delta":
             # we need the perturbations
