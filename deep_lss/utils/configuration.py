@@ -76,10 +76,13 @@ def get_smoothing_kwargs(loss_function, msfm_conf, dlss_conf, net_conf, dir_base
 
     try:
         fwhm = []
+        white_noise_sigma = []
         if with_lensing:
             fwhm += dlss_conf["scale_cuts"]["lensing"]["theta_fwhm"]
+            white_noise_sigma += dlss_conf["scale_cuts"]["lensing"]["white_noise_sigma"]
         if with_clustering:
             fwhm += dlss_conf["scale_cuts"]["clustering"]["theta_fwhm"]
+            white_noise_sigma += dlss_conf["scale_cuts"]["clustering"]["white_noise_sigma"]
 
         arcmin = dlss_conf["scale_cuts"]["arcmin"]
         n_sigma_support = dlss_conf["scale_cuts"]["n_sigma_support"]
@@ -104,6 +107,7 @@ def get_smoothing_kwargs(loss_function, msfm_conf, dlss_conf, net_conf, dir_base
             "arcmin": arcmin,
             "n_sigma_support": n_sigma_support,
             "max_batch_size": effective_local_batch_size,
+            "white_noise_sigma": white_noise_sigma,
         }
 
         if dir_base is not None:
