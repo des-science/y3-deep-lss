@@ -101,7 +101,7 @@ class BaseModel(object):
                 )
             else:
                 raise ValueError(f"n_side = {n_side} and indices = {indices} have to be both None or both not None")
-        elif isinstance(network, tf.keras.Sequential):
+        elif isinstance(network, (tf.keras.Sequential, tf.keras.Model)):
             LOGGER.info("Initializing with a normal Sequential model")
         else:
             raise ValueError(f"Invalid network {network} was passed")
