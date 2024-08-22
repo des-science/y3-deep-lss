@@ -15,6 +15,9 @@ summary/
 
 # Arne Misc
 *.dat
+*.npy
+*.png
+*.pt
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

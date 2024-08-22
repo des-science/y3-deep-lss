@@ -471,7 +471,9 @@ class BaseModel(object):
                 (no regularization).
         """
         LOGGER.warning("Performing a base_train_step in python instead of a tf.function")
-        trainable_variables = self.network.trainable_variables
+
+        if not hasattr(self, "trainable_variables"):
+            self.trainable_variables = self.network.trainable_variables
 
         with tf.GradientTape() as tape:
             predictions = self.network(input_tensor, training=True)
@@ -485,7 +487,7 @@ class BaseModel(object):
 
             # handle the l2 norm
             if l2_norm_weight is not None:
-                l2_loss = tf.linalg.global_norm(trainable_variables)
+                l2_loss = tf.linalg.global_norm(self.trainable_variables)
                 self.write_summary("l2_loss", l2_loss, skip=self.xla)
 
                 loss = loss + l2_norm_weight * l2_loss
@@ -498,7 +500,7 @@ class BaseModel(object):
         if isinstance(self.strategy, HorovodStrategy):
             tape = hvd.DistributedGradientTape(tape)
 
-        gradients = tape.gradient(loss, trainable_variables)
+        gradients = tape.gradient(loss, self.trainable_variables)
 
         # NOTE distribute delta loss, get global gradients on the level of the gradients for the builtin strategies
         if isinstance(self.strategy, tf.distribute.Strategy):
@@ -520,7 +522,7 @@ class BaseModel(object):
             gradients, _ = tf.clip_by_global_norm(gradients, clip_by_global_norm, use_norm=glob_norm)
 
         # apply gradients
-        self.optimizer.apply_gradients(zip(gradients, trainable_variables))
+        self.optimizer.apply_gradients(zip(gradients, self.trainable_variables))
 
         # update the step
         self.increment_step()

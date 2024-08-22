@@ -1,4 +1,7 @@
 import tensorflow as tf
+import numpy as np
+
+from msfm.utils import scales
 
 
 class MeanBinningLayer(tf.keras.layers.Layer):
@@ -57,3 +60,25 @@ class MeanBinningLayer(tf.keras.layers.Layer):
 
     def compute_output_shape(self, input_shape):
         return (input_shape[0], self.num_bins, input_shape[2])
+
+
+class PowerSpectrumSmoothingLayer(tf.keras.layers.Layer):
+
+    def __init__(self, n_cls, l_min=None, l_max=None, theta_fwhm=None, arcmin=None):
+        super(PowerSpectrumSmoothingLayer, self).__init__()
+        l = np.arange(n_cls)
+        band_pass_fac = (
+            scales.gaussian_high_pass_factor_alm(l, l_min) ** 2
+            * scales.gaussian_low_pass_factor_alm(l, l_max, theta_fwhm, arcmin) ** 2
+        )
+        self.band_pass_fac = tf.constant(band_pass_fac, dtype=tf.float32)
+
+    def call(self, inputs):
+        if inputs.ndim == 1:
+            smoothed_inputs = inputs * self.band_pass_fac
+        elif inputs.ndim in [2, 3]:
+            smoothed_inputs = inputs * tf.expand_dims(self.band_pass_fac, axis=0)
+        else:
+            raise ValueError("Invalid input shape. Expected 1D, 2D, or 3D tensor.")
+
+        return smoothed_inputs

@@ -13,8 +13,10 @@ To train over the grid part of the CosmoGrid with the
 import warnings
 import tensorflow as tf
 
+from deepsphere import HealpyGCNN
+
 from msfm.utils import logger
-from deep_lss.utils import likelihood_loss
+from deep_lss.utils import likelihood_loss, mutual_info_loss
 from deep_lss.utils.distribute import HorovodStrategy
 from deep_lss.models.base_model import BaseModel
 from deep_lss.utils.configuration import get_backend_floatx
@@ -35,8 +37,8 @@ class GridLossModel(BaseModel):
         self,
         network,
         # DeepSphere
-        n_side,
-        indices,
+        n_side=None,
+        indices=None,
         n_neighbors=20,
         max_batch_size=None,
         initial_Fin=None,
@@ -109,74 +111,85 @@ class GridLossModel(BaseModel):
 
     def setup_grid_loss_step(
         self,
-        # input shape
-        batch_size,
-        n_channels,
-        n_params,
-        loss="likelihood",
+        dim_theta=None,
+        batch_size=None,
+        dim_x=None,
+        dim_channels=None,
+        loss="mutual_info",
+        # mutual information loss
+        dim_summary=None,
+        mutual_info_estimator="variational",
+        mutual_info_kwargs={},
+        # likelihood loss
+        lambda_tikhonov=None,
         # gradient clipping + regularization
         clip_by_value=None,
         clip_by_norm=None,
         clip_by_global_norm=10.0,
         l2_norm_weight=None,
-        # likelihood loss
-        lambda_tikhonov=None,
         # misc
         img_summary=False,
+        xla=False,
     ):
         """Set up the training step for the grid model.
 
         Args:
-            batch_size (int): The batch size.
-            n_channels (int): The number of channels.
-            n_params (int): The number of cosmological parameters making up the label.
-            loss (str, optional): The type of loss function to use. Defaults to "likelihood".
+            dim_theta (int, optional): The number of cosmological parameters making up the label. Defaults to None.
+            batch_size (int, optional): The batch size. Defaults to None.
+            dim_x (int, optional): Input dimension of the network, must be provided if the network is not a
+                HealpyGCNN. Defaults to None.
+            dim_channels (int, optional): The number of channels. Defaults to None.
+            loss (str, optional): The type of loss function to use. Defaults to "mutual_info".
+            dim_summary (int, optional): The dimensionality of the summary. This is only a free parameter for the
+                mutual information loss. Defaults to None.
+            mutual_info_estimator (str, optional): The estimator to use for mutual information loss. Defaults to
+                "variational", which produced the best results on tests on the Cls.
+            mutual_info_kwargs (dict, optional): Additional keyword arguments for the mutual information estimator like
+                makeup of the Gaussian Mixture Model. Defaults to {}.
+            lambda_tikhonov (float, optional): Regularization parameter for the Tikhonov regularization in the
+                likelihood loss. Defaults to None, then no regularization is applied.
             clip_by_value (tf.tensor, optional): Clip the gradients by given 1d array of values into the interval
                 [value[0], value[1]]. Defaults to None (no clipping).
             clip_by_norm (tf.tensor, optional): Clip the gradients by norm. Defaults to None (no clipping).
-            clip_by_global_norm (tf.tensor, optional): Clip the gradients by global norm. Defaults to None (no clipping).
+            clip_by_global_norm (tf.tensor, optional): Clip the gradients by global norm. Defaults to 10.0.
             l2_norm_weight (float, optional): Weight for the L2 norm of the trainable weights. Defaults to None
                 (no regularization).
-            lambda_tikhonov (float, optional): Regularization parameter for the Tikhonov regularization in the
-                likelihood loss. Defaults to None, then no regularization is applied.
             img_summary (bool, optional): Whether to write image summaries of the covariance matrix. Defaults to False.
-            xla (bool, optional): Whether to enable XLA just in time compilation. Note that this is incompatible with
-                the DeepSphere graph convolutional layers, as they contain unsupported
-                SparseDenseMatirxMultiplications. Defaults to False.
+            xla (bool, optional): Whether to enable XLA just in time compilation. Defaults to False.
 
         Raises:
-            NotImplementedError: If the loss type is "mutual_info".
             ValueError: If an invalid strategy is passed.
 
         Note:
             - If the loss type is "mse", the labels should be normalized.
-            - If the loss type is "likelihood", the number of parameters (n_params) must be passed.
-            - If the loss type is "mutual_info", it is not implemented and will raise a NotImplementedError.
+            - If the loss type is "likelihood", the number of parameters (dim_theta) must be passed.
         """
 
         if self.xla:
             LOGGER.warning(f"Using XLA just in time compilation")
 
+        vali_loss_kwargs = {}
         if loss == "mse":
             if isinstance(self.strategy, (tf.distribute.MirroredStrategy, tf.distribute.MultiWorkerMirroredStrategy)):
                 # to be compatible with the delta loss, the loss is averaged per replica
-                loss_fn = lambda preds, labels: (1.0 / batch_size) * tf.keras.losses.MeanSquaredError(
+                loss_fn = lambda preds, theta: (1.0 / batch_size) * tf.keras.losses.MeanSquaredError(
                     reduction=tf.keras.losses.Reduction.SUM
-                )(preds, labels)
+                )(preds, theta)
             else:
                 loss_fn = tf.keras.losses.MeanSquaredError(reduction=tf.keras.losses.Reduction.AUTO)
+
             LOGGER.warning(f"Using the Mean Squared Error. Note that the labels should be normalized!")
 
         elif loss == "likelihood":
-            assert n_params is not None, f"n_theta must be passed for the likelihood loss"
+            assert dim_theta is not None, f"n_theta must be passed for the likelihood loss"
 
             # analogously to the delta loss, the per replica averaging of the likelihood loss is done in
             # likelihood_loss.py, so no distinction between distributed and non-distributed training is necessary here
-            def loss_fn(preds, labels, summary_suffix=""):
+            def loss_fn(preds, theta, summary_suffix=""):
                 return likelihood_loss.neg_likelihood_loss(
                     preds,
-                    labels,
-                    n_params,
+                    theta,
+                    dim_theta,
                     lambda_tikhonov,
                     training=True,
                     summary_writer=self.summary_writer,
@@ -185,35 +198,82 @@ class GridLossModel(BaseModel):
                     xla=self.xla,
                 )
 
+            vali_loss_kwargs = {"summary_suffix": "_vali"}
+
             LOGGER.warning(f"Using the likelihood loss")
 
         elif loss == "mutual_info":
+            assert dim_theta is not None, f"n_theta must be passed for the mutual information loss"
+
+            if dim_summary is None:
+                dim_summary = 2 * dim_theta
+                LOGGER.warning(f"The dimensionality of the summary is set to {dim_summary}")
+
             # see Section 7.3 in https://arxiv.org/pdf/2009.08459
-            raise NotImplementedError
+            if mutual_info_estimator == "variational":
+                variational_net = mutual_info_loss.get_variational_model_from_summary(
+                    dim_summary, dim_theta, **mutual_info_kwargs
+                )
+                self.trainable_variables = variational_net.trainable_variables + self.network.trainable_variables
+                loss_fn = lambda preds, theta: tf.reduce_mean(variational_net([preds, theta], training=True))
+
+            # see https://arxiv.org/pdf/2010.10079
+            elif mutual_info_estimator == "distance_correlation":
+                loss_fn = lambda preds, theta: mutual_info_loss.distance_correlation(preds, theta, training=True)
+
+            # see https://arxiv.org/pdf/2010.10079
+            elif mutual_info_estimator == "jensen_shannon":
+                # critic_net = mutual_info_loss.get_jensen_shannon_critic(self, dim_x, dim_theta, **mutual_info_kwargs)
+                # loss_fn = lambda x, theta: mutual_info_loss.jensen_shannon_divergence(
+                #     critic_net, x, theta, training=True
+                # )
+                raise NotImplementedError(
+                    f"Mutual information loss type {mutual_info_estimator} is not implemented. this loss function is "
+                    f"fundamentally different since one needs to pass the network itself as well, not just its "
+                    f"predictions well, not just its predictions. This is not compatible with the current setup."
+                    f"In any case, this loss is much slower than the others because of the inner loop."
+                )
+
+            else:
+                raise ValueError(f"Invalid mutual_info_estimator {mutual_info_estimator} was passed")
+
+            LOGGER.warning(f"Using the mutual information loss with the {mutual_info_estimator} estimator")
 
         # to use the same loss function sepearately, without the need to perform the training step
-        self.vali_loss_fn = lambda preds, labels: loss_fn(preds, labels, summary_suffix="_vali")
+        self.vali_loss_fn = lambda preds, theta: loss_fn(preds, theta, **vali_loss_kwargs)
 
         # this isn't strictly necessary and could be removed
-        current_float = get_backend_floatx()
-        data_shape = (batch_size, len(self.network.indices_in), n_channels)
-        label_shape = (batch_size, n_params)
+        if isinstance(self.network, HealpyGCNN):
+            input_shape = (batch_size, len(self.network.indices_in), dim_channels)
+        elif dim_x is not None:
+            if dim_channels is not None:
+                input_shape = (batch_size, dim_x, dim_channels)
+            else:
+                input_shape = (batch_size, dim_x)
+        else:
+            input_shape = None
+
+        if input_shape is not None:
+            current_float = get_backend_floatx()
+            label_shape = (batch_size, dim_theta)
+            tf_kwargs = {
+                "input_signature": [
+                    tf.TensorSpec(shape=input_shape, dtype=current_float),
+                    tf.TensorSpec(shape=label_shape, dtype=current_float),
+                ]
+            }
+        else:
+            tf_kwargs = {}
 
         # not distributed via tensorflow builtin
         if (self.strategy is None) or isinstance(self.strategy, HorovodStrategy):
 
-            @tf.function(
-                input_signature=[
-                    tf.TensorSpec(shape=data_shape, dtype=current_float),
-                    tf.TensorSpec(shape=label_shape, dtype=current_float),
-                ],
-                jit_compile=self.xla,
-            )
-            def grid_train_step(input_preds, input_labels):
+            @tf.function(jit_compile=self.xla, **tf_kwargs)
+            def grid_train_step(x, theta):
                 LOGGER.warning(f"Tracing grid_train_step")
                 loss = self.base_train_step(
-                    input_tensor=input_preds,
-                    input_labels=input_labels,
+                    input_tensor=x,
+                    input_labels=theta,
                     loss_function=loss_fn,
                     # gradient clipping + regularization
                     clip_by_value=clip_by_value,
@@ -230,11 +290,11 @@ class GridLossModel(BaseModel):
             # AttributeError: 'PerReplica' object has no attribute 'dtype'
             # Instead do like https://www.tensorflow.org/tutorials/distribute/input#using_the_element_spec_property
             @tf.function(jit_compile=self.xla)
-            def grid_train_step(input_preds, input_labels):
+            def grid_train_step(x, theta):
                 LOGGER.warning(f"Tracing distributed grid_train_step")
                 global_loss = self.distributed_train_step(
-                    input_tensor=input_preds,
-                    input_labels=input_labels,
+                    input_tensor=x,
+                    input_labels=theta,
                     loss_function=loss_fn,
                     # gradient clipping + regularization
                     clip_by_value=clip_by_value,
