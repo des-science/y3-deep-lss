@@ -32,7 +32,7 @@ def get_optimizer(net_conf, loss_function="delta_loss", restore_checkpoint=False
     """
 
     assert not restore_checkpoint, "Handling of models restored from checkpoints is not implemented yet."
-    assert loss_function in ["delta", "likelihood"]
+    assert loss_function in ["delta", "likelihood", "mutual_info"]
     loss_function = loss_function + "_loss"
 
     # set up learning rate scheduler

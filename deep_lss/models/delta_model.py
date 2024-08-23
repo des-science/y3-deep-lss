@@ -119,8 +119,8 @@ class DeltaLossModel(BaseModel):
         off_sets,
         # shapes
         n_points=1,
-        n_input=None,
-        n_channels=1,
+        dim_x=None,
+        dim_channels=1,
         # regularization
         force_params_value=0.0,
         force_params_weight=1.0,
@@ -128,7 +128,7 @@ class DeltaLossModel(BaseModel):
         jac_cond_weight=None,
         cov_loss=False,
         # summary statistic
-        n_output=None,
+        dim_summary=None,
         n_partial=None,
         weights=None,
         no_correlations=False,
@@ -146,7 +146,7 @@ class DeltaLossModel(BaseModel):
     ):
         """This sets up a function that performs one training step with the delta loss, which tries to maximize the
         information of the summary statistics. Note  it needs the maps need to be ordered in a specific way:
-        * The shape of the predictions is (n_points * n_same * (2 * n_params + 1), n_output)
+        * The shape of the predictions is (n_points * n_same * (2 * n_params + 1), dim_summary)
         * If one splits the predictions into (2 * n_params + 1) parts among the first axis one has the following scheme:
             * The first part was generated with the unperturbed parameters
             * The second part was generated with parameters where off_sets[0] was subtracted from the first param
@@ -168,11 +168,11 @@ class DeltaLossModel(BaseModel):
             off_sets (np.ndarray): The off-sets used to perturb the original (fiducial) parameters. These are used as
                 the finite differences in the computation of the Jacobian.
             n_points (int, optional): Number of different "fiducial" parameters. Defaults to 1.
-            n_input (int, optional): Input dimension of the network, must be provided if the network is not a
+            dim_x (int, optional): Input dimension of the network, must be provided if the network is not a
                 HealpyGCNN. Defaults to None.
-            n_channels (int, optional): Number of channels. Defaults to 1.
+            dim_channels (int, optional): Number of channels. Defaults to 1.
             force_params_value (float, np.ndarray, optional): Either None or a set of parameters with shape
-                (n_points, 1, n_output) which is used to compute a square loss of the unperturbed summaries. It is
+                (n_points, 1, dim_summary) which is used to compute a square loss of the unperturbed summaries. It is
                 useful to set this for example to zeros such that the network does not produces arbitrary high summary
                 values. Defaults to None, float inputs are broadcast to the appropriate shape.
             force_params_weight (float, optional): The weight of the square loss of force_params_value. Defaults to 1.0.
@@ -184,7 +184,7 @@ class DeltaLossModel(BaseModel):
                 forced to be close to the identity matrix. Note that there will be an additional term forcing the
                 inverse of the covariance to be close to the identity as well since the cov is guaranteed to be square.
                 This is the same as Luca's regularization term, but without the adaptive weight. Defaults to False.
-            n_output (int, optional): Dimensionality of the summary statistic. Defaults to None, which corresponds to
+            dim_summary (int, optional): Dimensionality of the summary statistic. Defaults to None, which corresponds to
                 predictions.shape[-1].
             n_partial (np.ndarray, optional): To train only on a subset of parameters and not all underlying model
                 parameter. Defaults to None which means the information inequality is minimized in a normal fashion.
@@ -194,7 +194,7 @@ class DeltaLossModel(BaseModel):
                 points. Defaults to None.
             no_correlations (bool, optional): Do not consider correlations between the parameter, this means that one
                 tries to find an optimal summary (single value) for each underlying model parameter, only possible if
-                n_output == n_params. Defaults to False.
+                dim_summary == n_params. Defaults to False.
             clip_by_value (tf.tensor, optional): Clip the gradients by given 1d array of values into the interval
                 [value[0], value[1]]. Defaults to None (no clipping).
             clip_by_norm (tf.tensor, optional): Clip the gradients by norm. Defaults to None (no clipping).
@@ -230,7 +230,7 @@ class DeltaLossModel(BaseModel):
                 jac_cond_weight=jac_cond_weight,
                 cov_loss=cov_loss,
                 # summary statistic
-                n_output=n_output,
+                n_output=dim_summary,
                 n_partial=n_partial,
                 weights=weights,
                 no_correlations=no_correlations,
@@ -256,12 +256,12 @@ class DeltaLossModel(BaseModel):
 
         n_batch = n_points * n_same * (2 * n_params + 1)
         if isinstance(self.network, HealpyGCNN):
-            in_shape = (n_batch, len(self.network.indices_in), n_channels)
+            in_shape = (n_batch, len(self.network.indices_in), dim_channels)
         else:
-            if n_channels is None:
-                in_shape = (n_batch, n_input)
+            if dim_channels is None:
+                in_shape = (n_batch, dim_x)
             else:
-                in_shape = (n_batch, n_input, n_channels)
+                in_shape = (n_batch, dim_x, dim_channels)
 
         # non distributed
         if (self.strategy is None) or isinstance(self.strategy, HorovodStrategy):

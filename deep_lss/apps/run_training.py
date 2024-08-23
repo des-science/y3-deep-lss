@@ -356,7 +356,7 @@ def training():
         Pipeline = FiducialPipeline
         Model = DeltaLossModel
         n_output = n_params
-        dset_kwargs.update(net_conf["dset"]["training"]["delta_loss"])
+        dset_kwargs.update(net_conf["dset"]["training"]["fiducial"])
         local_batch_size = dset_kwargs["local_batch_size"]
         effective_local_batch_size = local_batch_size * (2 * n_params + 1)
 
@@ -377,11 +377,13 @@ def training():
     else:
         if args.loss_function == "likelihood":
             n_output = n_params + n_params * (n_params + 1) // 2
-        else:
+        elif args.loss_function == "mse":
             n_output = n_params
+        elif args.loss_function == "mutual_info":
+            n_output = dlss_conf["mutual_info_loss"]["dim_summary_fac"] * n_params
         Pipeline = GridPipeline
         Model = GridLossModel
-        dset_kwargs.update(net_conf["dset"]["training"]["likelihood_loss"])
+        dset_kwargs.update(net_conf["dset"]["training"]["grid"])
         local_batch_size = dset_kwargs["local_batch_size"]
         effective_local_batch_size = local_batch_size
 
@@ -438,36 +440,54 @@ def training():
             xla=args.xla,
         )
 
-    # training step
-    if args.loss_function == "delta":
-        model.setup_delta_loss_step(
-            n_params,
-            local_batch_size,
-            perts,
-            n_channels=n_z_bins,
-            **dlss_conf["delta_loss"],
-            **net_conf["optimization"]["gradient_clipping"],
-        )
-    else:
-        if not args.restore_checkpoint:
-            lambda_tikhonov_schedule = tf.keras.optimizers.schedules.CosineDecay(
-                dlss_conf["likelihood_loss"]["lambda_tikhonov_init"],
-                dlss_conf["likelihood_loss"]["lambda_tikhonov_decay_steps"],
-                alpha=0.0,
+        # training step, fiducial pipeline
+        if args.loss_function == "delta":
+            model.setup_delta_loss_step(
+                n_params,
+                local_batch_size,
+                perts,
+                dim_channels=n_z_bins,
+                **dlss_conf["delta_loss"],
+                **net_conf["optimization"]["gradient_clipping"],
             )
-            lambda_tikhonov = tf.Variable(lambda_tikhonov_schedule(0), trainable=False, dtype=tf.float32)
+        # grid pipeline
         else:
-            lambda_tikhonov = tf.Variable(0.0, trainable=False, dtype=tf.float32)
+            if args.loss_function == "likelihood":
+                if not args.restore_checkpoint:
+                    lambda_tikhonov_schedule = tf.keras.optimizers.schedules.CosineDecay(
+                        dlss_conf["likelihood_loss"]["lambda_tikhonov_init"],
+                        dlss_conf["likelihood_loss"]["lambda_tikhonov_decay_steps"],
+                        alpha=0.0,
+                    )
+                    lambda_tikhonov = tf.Variable(lambda_tikhonov_schedule(0), trainable=False, dtype=tf.float32)
+                else:
+                    lambda_tikhonov = tf.Variable(0.0, trainable=False, dtype=tf.float32)
+                likelihood_kwargs = {
+                    "lambda_tikhonov": lambda_tikhonov,
+                    "img_summary": dlss_conf["likelihood_loss"]["img_summary"],
+                }
+            else:
+                likelihood_kwargs = {}
 
-        model.setup_grid_loss_step(
-            loss=args.loss_function,
-            batch_size=local_batch_size,
-            n_channels=n_z_bins,
-            n_params=n_params,
-            lambda_tikhonov=lambda_tikhonov,
-            img_summary=dlss_conf["likelihood_loss"]["img_summary"],
-            **net_conf["optimization"]["gradient_clipping"],
-        )
+            if args.loss_function == "mutual_info":
+                mutual_info_kwargs = {
+                    "dim_summary": n_output,
+                    "mutual_info_estimator": dlss_conf["mutual_info_loss"]["estimator"],
+                    "mutual_info_kwargs": dlss_conf["mutual_info_loss"]["kwargs"],
+                }
+            else:
+                mutual_info_kwargs = {}
+
+            model.setup_grid_loss_step(
+                loss=args.loss_function,
+                batch_size=local_batch_size,
+                dim_theta=n_params,
+                dim_x=len(data_vec_pix),
+                dim_channels=n_z_bins,
+                **mutual_info_kwargs,
+                **likelihood_kwargs,
+                **net_conf["optimization"]["gradient_clipping"],
+            )
 
     # validation loss (always with respect to the fiducial cosmology)
     if vali_every is not None:
@@ -487,8 +507,8 @@ def training():
                 batch,
                 n_params=n_params,
                 n_same=local_batch_size,
-                n_output=n_params,
                 off_sets=perts,
+                dim_summary=n_params,
                 force_params_value=None,
                 jac_weight=None,
                 jac_cond_weight=None,
@@ -512,20 +532,33 @@ def training():
             # we don't need the perturbations
             vali_pipe_kwargs["params"] = []
 
-            # ignore the covariance term and rescaling
-            mse = tf.keras.metrics.MeanSquaredError()
+            if args.loss_function == "likelihood" or args.loss_function == "mse":
+                # ignore the covariance term and rescaling
+                mse = tf.keras.metrics.MeanSquaredError()
 
-            # as this loss is supervised
-            labels = parameters.get_fiducials(params)
+                # as this loss is supervised
+                labels = parameters.get_fiducials(params)
 
-            @tf.function
-            def vali_loss_fn(batch):
-                preds = model(batch, training=False)
-                loss = model.vali_loss_fn(preds, labels)
-                loss_non_regu = mse(tf.slice(preds, begin=[0, 0], size=[-1, n_params]), labels)
+                @tf.function
+                def vali_loss_fn(batch):
+                    preds = model(batch, training=False)
+                    loss = model.vali_loss_fn(preds, labels)
+                    loss_non_regu = mse(tf.slice(preds, begin=[0, 0], size=[-1, n_params]), labels)
 
-                model.increment_step()
-                return loss, loss_non_regu
+                    model.increment_step()
+                    return loss, loss_non_regu
+
+            elif args.loss_function == "mutual_info":
+                labels = parameters.get_fiducials(params)
+
+                @tf.function
+                def vali_loss_fn(batch):
+                    preds = model(batch, training=False)
+                    loss = model.vali_loss_fn(preds, labels)
+                    loss_non_regu = loss
+
+                    model.increment_step()
+                    return loss, loss_non_regu
 
         @tf.function
         def vali_merge_mean(losses):
@@ -588,10 +621,10 @@ def training():
         with tf.profiler.experimental.Trace("step", step_num=step, _r=1) if args.profile else nullcontext():
             # train step
             if args.loss_function == "delta":
-                dv_batch, index_batch = next(dist_iter)
+                dv_batch, _, index_batch = next(dist_iter)
                 loss = model.delta_train_step(dv_batch)
             else:
-                dv_batch, cosmo_batch, index_batch = next(dist_iter)
+                dv_batch, _, cosmo_batch, index_batch = next(dist_iter)
                 loss = model.grid_train_step(dv_batch, cosmo_batch)
 
             # horovod

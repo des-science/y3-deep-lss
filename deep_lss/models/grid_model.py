@@ -111,11 +111,12 @@ class GridLossModel(BaseModel):
 
     def setup_grid_loss_step(
         self,
-        dim_theta=None,
+        loss="mutual_info",
+        # shapes
         batch_size=None,
+        dim_theta=None,
         dim_x=None,
         dim_channels=None,
-        loss="mutual_info",
         # mutual information loss
         dim_summary=None,
         mutual_info_estimator="variational",
@@ -172,11 +173,13 @@ class GridLossModel(BaseModel):
         if loss == "mse":
             if isinstance(self.strategy, (tf.distribute.MirroredStrategy, tf.distribute.MultiWorkerMirroredStrategy)):
                 # to be compatible with the delta loss, the loss is averaged per replica
-                loss_fn = lambda preds, theta: (1.0 / batch_size) * tf.keras.losses.MeanSquaredError(
+                loss_fn = lambda preds, theta, training=True: (1.0 / batch_size) * tf.keras.losses.MeanSquaredError(
                     reduction=tf.keras.losses.Reduction.SUM
                 )(preds, theta)
             else:
-                loss_fn = tf.keras.losses.MeanSquaredError(reduction=tf.keras.losses.Reduction.AUTO)
+                loss_fn = lambda preds, theta, training=True: tf.keras.losses.MeanSquaredError(
+                    reduction=tf.keras.losses.Reduction.AUTO
+                )(preds, theta)
 
             LOGGER.warning(f"Using the Mean Squared Error. Note that the labels should be normalized!")
 
@@ -185,20 +188,20 @@ class GridLossModel(BaseModel):
 
             # analogously to the delta loss, the per replica averaging of the likelihood loss is done in
             # likelihood_loss.py, so no distinction between distributed and non-distributed training is necessary here
-            def loss_fn(preds, theta, summary_suffix=""):
+            def loss_fn(preds, theta, training=True, summary_suffix=""):
                 return likelihood_loss.neg_likelihood_loss(
                     preds,
                     theta,
                     dim_theta,
                     lambda_tikhonov,
-                    training=True,
+                    training=training,
                     summary_writer=self.summary_writer,
                     summary_suffix=summary_suffix,
                     img_summary=img_summary,
                     xla=self.xla,
                 )
 
-            vali_loss_kwargs = {"summary_suffix": "_vali"}
+            vali_loss_kwargs["summary_suffix"] = "_vali"
 
             LOGGER.warning(f"Using the likelihood loss")
 
@@ -215,11 +218,16 @@ class GridLossModel(BaseModel):
                     dim_summary, dim_theta, **mutual_info_kwargs
                 )
                 self.trainable_variables = variational_net.trainable_variables + self.network.trainable_variables
-                loss_fn = lambda preds, theta: tf.reduce_mean(variational_net([preds, theta], training=True))
+
+                loss_fn = lambda preds, theta, training=True: tf.reduce_mean(
+                    variational_net([preds, theta], training=training)
+                )
 
             # see https://arxiv.org/pdf/2010.10079
             elif mutual_info_estimator == "distance_correlation":
-                loss_fn = lambda preds, theta: mutual_info_loss.distance_correlation(preds, theta, training=True)
+                loss_fn = lambda preds, theta, training=True: mutual_info_loss.distance_correlation(
+                    preds, theta, training=training
+                )
 
             # see https://arxiv.org/pdf/2010.10079
             elif mutual_info_estimator == "jensen_shannon":
@@ -240,7 +248,7 @@ class GridLossModel(BaseModel):
             LOGGER.warning(f"Using the mutual information loss with the {mutual_info_estimator} estimator")
 
         # to use the same loss function sepearately, without the need to perform the training step
-        self.vali_loss_fn = lambda preds, theta: loss_fn(preds, theta, **vali_loss_kwargs)
+        self.vali_loss_fn = lambda preds, theta: loss_fn(preds, theta, training=False, **vali_loss_kwargs)
 
         # this isn't strictly necessary and could be removed
         if isinstance(self.network, HealpyGCNN):

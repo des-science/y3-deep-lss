@@ -1,0 +1,99 @@
+# contains the model specific configuration parameters for training and hyperparameter optimization
+name: resnet_vanilla
+
+training:
+  n_steps: 100000
+  output_every: 5000
+  checkpoint_every: 5000
+  vali_every: 1000
+  eval_every: 100000
+
+optimization:
+  # adam or sgd
+  optimizer: adam
+  # this could also be handled in the optimizer instead of the training step
+  gradient_clipping:
+    clip_by_value: null
+    clip_by_norm: null
+    clip_by_global_norm: 10.0
+  delta_loss:
+    # at the end of the warmup or from the beginning, if there is no schedule
+    learning_rate: 0.0001
+    # for beta_1, beta_2, epsilon, etc.
+    optimizer_kwargs:
+      beta_1: 0.9
+      beta_2: 0.99
+    # None or "cosine"
+    scheduler: cosine
+    warmup_steps: 5000
+    warmup_init_learning_rate: 0.00001
+    # alpha = decay_end_learning_rate / learning_rate
+    decay_alpha: 0.0
+    # linearly increase the noise amplitude from 0 to 1
+    noise_schedule_steps: Null
+  likelihood_loss:
+    learning_rate: 0.0001
+    optimizer_kwargs:
+      beta_1: 0.9
+      beta_2: 0.99
+    scheduler: cosine
+    warmup_steps: 5000
+    warmup_init_learning_rate: 0.00001
+    decay_alpha: 0.0
+
+network:
+  name: vision_transformer
+  # this doesn't affect the model
+  n_neighbors: 20
+  max_checkpoints: 10
+  save_second_to_last_layer: False
+  kwargs:
+    hidden_dim: 128
+    healpix_patch_fac: 4
+    attention_heads: 4
+    transformer_layers: 6
+    pos_encoding: True
+    layer_norm: True
+    # regression head
+    second_to_last_features: Null
+    dropout_rate: Null
+
+dset:
+  training:
+    common:
+      is_eval: False
+      noise_indices: 3
+      n_readers: 8
+      n_prefetch: 2
+      n_workers: 96
+    # FiducialPipeline
+    delta_loss:
+      # because of the derivatives, this is multiplied by 1 + 2 * n_params
+      local_batch_size: 4
+      file_name_shuffle_buffer: 64
+      examples_shuffle_buffer: 128
+      is_cached: False
+    # GridPipeline
+    likelihood_loss:
+      local_batch_size: 32
+      file_name_shuffle_buffer: 64
+      examples_shuffle_buffer: 128
+  eval:
+    common:
+      is_eval: True
+      noise_indices: 3
+      local_batch_size: 30
+    validation:
+      n_prefetch: 0
+      n_readers: 1
+      n_workers: 8
+      is_cached: False
+    fiducial:
+      n_prefetch: 1
+      n_workers: 8
+      n_readers: 2
+      is_cached: False
+    grid:
+      n_prefetch: 1
+      n_workers: 16
+      n_readers: 32

@@ -12,15 +12,17 @@
 #SBATCH --output="./logs/v8/training_%j.log"
 
 STRATEGY="mirrored"
-VERSION="v8"
-# lensing, clustering, combined
+VERSION="v10"
+
 PROBE="lensing"
 # PROBE="clustering"
 # PROBE="combined"
-# linear_bias, quadratic_bias
+
 BIAS="linear_bias"
-# delta, likelihood
-LOSS="delta"
+# BIAS="quadratic_bias"
+
+# LOSS="delta"
+LOSS="mutual_info"
 # LOSS="likelihood"
 
 OUTPUT="./logs/$VERSION/$PROBE/$LOSS/"$STRATEGY"_"$SLURM_JOB_ID".log"
@@ -31,31 +33,41 @@ else
     TRAINSET="grid"
 fi
 
-TRAIN_TFR="/pscratch/sd/a/athomsen/DESY3/$VERSION/$BIAS/tfrecords/$TRAINSET/DESy3_${TRAINSET}_dmb_????.tfrecord"
-FIDU_VALI_TFR="/pscratch/sd/a/athomsen/DESY3/$VERSION/$BIAS/tfrecords/fiducial/validation/DESy3_fiducial_dmb_????.tfrecord"
-GRID_VALI_TFR="/pscratch/sd/a/athomsen/DESY3/v7/$BIAS/tfrecords/grid/DESy3_grid_????.tfrecord"
+TRAIN_TFR="/pscratch/sd/a/athomsen/v11desy3/$VERSION/$BIAS/tfrecords/$TRAINSET/DESy3_${TRAINSET}_dmb_????.tfrecord"
+FIDU_VALI_TFR="/pscratch/sd/a/athomsen/v11desy3/$VERSION/$BIAS/tfrecords/fiducial/validation/DESy3_fiducial_dmb_????.tfrecord"
+GRID_VALI_TFR="/pscratch/sd/a/athomsen/v11desy3/$VERSION/$BIAS/tfrecords/grid/DESy3_grid_dmb_????.tfrecord"
 
 srun --cpu-bind=threads --gpu-bind=none --output="$OUTPUT" \
-    python ../../../deep_lss/apps/run_training.py \
+    python ../../deep_lss/apps/run_training.py \
     --loss_function="$LOSS" \
     --dist_strategy="$STRATEGY" \
     --train_tfr_pattern=$TRAIN_TFR \
     --fidu_vali_tfr_pattern=$FIDU_VALI_TFR \
-    --grid_vali_tfr_pattern=$GRID_VALI_TFR \
     --dir_base="/pscratch/sd/a/athomsen/run_files/$VERSION/$PROBE/$LOSS" \
     --dlss_config="configs/$VERSION/$PROBE/$BIAS/dlss_config.yaml" \
-    --net_config="configs/$VERSION/$PROBE/resnet.yaml" \
+    --net_config="configs/$VERSION/$PROBE/deepsphere_default.yaml" \
     --msfm_config="/global/homes/a/athomsen/multiprobe-simulation-forward-model/configs/$VERSION/$BIAS.yaml" \
     --slurm_output="$OUTPUT" \
     --wandb \
-    --wandb_tags "$VERSION" "$PROBE" "$LOSS" "$STRATEGY" "$BIAS" "resnet" "CV1.1" \
-    --wandb_notes="like glad-cloud-1011, but with double the number of channels"
+    --wandb_tags "$VERSION" "$PROBE" "$LOSS" "$STRATEGY" "$BIAS" "resnet" "CosmoGridV1.1" \
+    --wandb_notes="New default run"
 
 # evaluate all the network checkpoints in a separate script after training has completed to avoid CPU OOM errors
 srun --cpu-bind=threads --gpu-bind=none \
-    python ../../../deep_lss/apps/run_evaluation.py \
-    --evaluate_all_checkpoints \
+    python ../../deep_lss/apps/run_evaluation.py \
     --dist_strategy="$STRATEGY" \
     --fidu_vali_tfr_pattern=$FIDU_VALI_TFR \
     --grid_vali_tfr_pattern=$GRID_VALI_TFR
 
+TRAIN_TFR="/pscratch/sd/a/athomsen/v11desy3/debug/$BIAS/tfrecords/$TRAINSET/DESy3_${TRAINSET}_dmb_????.tfrecord"
+
+TRAIN_TFR="/pscratch/sd/a/athomsen/v11desy3/$VERSION/$BIAS/tfrecords/$TRAINSET/DESy3_${TRAINSET}_dmb_????.tfrecord"
+
+python deep_lss/apps/run_training.py \
+    --loss_function="$LOSS" \
+    --train_tfr_pattern=$TRAIN_TFR \
+    --dir_base="/pscratch/sd/a/athomsen/run_files/debug/$VERSION/$PROBE/$LOSS" \
+    --dlss_config="configs/$VERSION/$PROBE/dlss_config.yaml" \
+    --net_config="configs/$VERSION/$PROBE/deepsphere_default.yaml" \
+    --msfm_config="/global/homes/a/athomsen/multiprobe-simulation-forward-model/configs/$VERSION/$BIAS.yaml" \
+    --dist_strategy="$STRATEGY"

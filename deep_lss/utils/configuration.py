@@ -92,10 +92,10 @@ def get_smoothing_kwargs(loss_function, msfm_conf, dlss_conf, net_conf, dir_base
 
         # net
         if loss_function == "delta":
-            local_batch_size = net_conf["dset"]["training"]["delta_loss"]["local_batch_size"]
+            local_batch_size = net_conf["dset"]["training"]["fiducial"]["local_batch_size"]
             effective_local_batch_size = local_batch_size * (2 * n_params + 1)
         else:
-            local_batch_size = net_conf["dset"]["training"]["likelihood_loss"]["local_batch_size"]
+            local_batch_size = net_conf["dset"]["training"]["grid"]["local_batch_size"]
             effective_local_batch_size = local_batch_size
 
         smoothing_kwargs = {
