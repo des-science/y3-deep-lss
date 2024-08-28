@@ -108,7 +108,13 @@ def evaluate_grid(model, tfr_pattern, msfm_conf, dlss_conf, net_conf, dir_out, f
     n_examples_per_cosmo = n_patches * n_perms_per_cosmo
 
     # multiple shape and poisson noise realizations
-    n_examples_per_cosmo *= dset_kwargs["noise_indices"]
+    if isinstance(dset_kwargs["noise_indices"], int):
+        n_noise = dset_kwargs["noise_indices"]
+    elif isinstance(dset_kwargs["noise_indices"], list):
+        n_noise = len(dset_kwargs["noise_indices"])
+    else:
+        raise ValueError(f"Unknown type of noise indices {dset_kwargs['noise_indices']}")
+    n_examples_per_cosmo *= n_noise
 
     n_examples = n_cosmos * n_examples_per_cosmo
     LOGGER.info(f"There's a total of {n_examples} data vectors to be evaluated ({n_examples_per_cosmo} per cosmology)")
@@ -116,6 +122,7 @@ def evaluate_grid(model, tfr_pattern, msfm_conf, dlss_conf, net_conf, dir_out, f
     # network constants
     strategy = model.strategy
     global_batch_size = distribute.get_global_batch_size(strategy, dset_kwargs["local_batch_size"])
+
     n_batches = math.ceil(n_examples / global_batch_size)
     save_second_to_last_layer = net_conf["network"]["save_second_to_last_layer"]
 
@@ -150,7 +157,7 @@ def evaluate_grid(model, tfr_pattern, msfm_conf, dlss_conf, net_conf, dir_out, f
     i_sobols = []
     i_noises = []
     i_examples = []
-    for dv_batch, cosmo_batch, index_batch in LOGGER.progressbar(
+    for dv_batch, _, cosmo_batch, index_batch in LOGGER.progressbar(
         dist_dset, at_level="info", total=n_batches, desc="evaluating the grid"
     ):
         # DistributedValues of shape (local_batch_size, n_output)
@@ -292,7 +299,7 @@ def evaluate_fiducial(
     second_to_last_layer = []
     i_examples = []
     i_noises = []
-    for dv_batch, index_batch in LOGGER.progressbar(
+    for dv_batch, _, index_batch in LOGGER.progressbar(
         dist_dset, at_level="info", total=n_batches, desc="evaluating at the fiducial"
     ):
         # DistributedValues of shape (local_batch_size, n_output)

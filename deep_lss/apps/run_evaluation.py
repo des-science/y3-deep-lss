@@ -162,7 +162,9 @@ if __name__ == "__main__":
 
     if loss_func == "likelihood":
         n_output = n_params + n_params * (n_params + 1) // 2
-    else:
+    elif loss_func == "mutual_info":
+        n_output = dlss_conf["mutual_info_loss"]["dim_summary_fac"] * n_params
+    elif loss_func == "delta" or loss_func == "mse":
         n_output = n_params
 
     # set up directories

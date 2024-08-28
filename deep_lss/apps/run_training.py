@@ -493,7 +493,7 @@ def training():
     if vali_every is not None:
         vali_pipe_kwargs = dlss_conf["dset"]["common"]
         vali_dset_kwargs = {**net_conf["dset"]["eval"]["common"], **net_conf["dset"]["eval"]["validation"]}
-        # vali_dset_kwargs["drop_remainder"] = True
+        vali_dset_kwargs["drop_remainder"] = True
 
         if args.loss_function == "delta":
             # we need the perturbations
@@ -508,7 +508,7 @@ def training():
                 n_params=n_params,
                 n_same=local_batch_size,
                 off_sets=perts,
-                dim_summary=n_params,
+                n_output=n_params,
                 force_params_value=None,
                 jac_weight=None,
                 jac_cond_weight=None,
@@ -549,7 +549,8 @@ def training():
                     return loss, loss_non_regu
 
             elif args.loss_function == "mutual_info":
-                labels = parameters.get_fiducials(params)
+                labels = tf.constant(parameters.get_fiducials(params), dtype=tf.float32)
+                labels = tf.reshape(labels, shape=[-1, n_params])
 
                 @tf.function
                 def vali_loss_fn(batch):
@@ -585,7 +586,7 @@ def training():
             loss_list = []
             loss_non_regu_list = []
             n_steps = 0
-            for vali_batch, _ in LOGGER.progressbar(dist_vali_dset, at_level="debug", desc="validation"):
+            for vali_batch, _, _ in LOGGER.progressbar(dist_vali_dset, at_level="debug", desc="validation"):
                 loss, loss_non_regu = strategy.run(vali_loss_fn, args=(vali_batch,))
 
                 loss_list.append(loss)
