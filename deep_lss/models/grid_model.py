@@ -214,13 +214,33 @@ class GridLossModel(BaseModel):
 
             # see Section 7.3 in https://arxiv.org/pdf/2009.08459
             if mutual_info_estimator == "variational":
-                variational_net = mutual_info_loss.get_variational_model_from_summary(
+                self.variational_head = mutual_info_loss.get_variational_model_from_summary(
                     dim_summary, dim_theta, **mutual_info_kwargs
                 )
-                self.trainable_variables = variational_net.trainable_variables + self.network.trainable_variables
+
+                if self.checkpoint_manager is not None:
+                    LOGGER.warning(f"Mutual info loss, overwriting the checkpoint manager")
+                    self.checkpoint = tf.train.Checkpoint(
+                        network=self.network,
+                        optimizer=self.optimizer,
+                        variational_head=self.variational_head,
+                        train_step=self.train_step,
+                    )
+                    self.checkpoint_manager = tf.train.CheckpointManager(
+                        self.checkpoint,
+                        self.checkpoint_dir,
+                        max_to_keep=self.max_checkpoints,
+                        checkpoint_name="ckpt",
+                        step_counter=self.train_step,
+                    )
+                if self.restore_from_checkpoint:
+                    LOGGER.warning(f"Mutual info loss, restoring the model again from within setup_grid_loss_step")
+                    self.restore_model()
+
+                self.trainable_variables = self.variational_head.trainable_variables + self.network.trainable_variables
 
                 loss_fn = lambda preds, theta, training=True: tf.reduce_mean(
-                    variational_net([preds, theta], training=training)
+                    self.variational_head([preds, theta], training=training)
                 )
 
             # see https://arxiv.org/pdf/2010.10079
