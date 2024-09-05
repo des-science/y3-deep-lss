@@ -10,6 +10,10 @@ Meant for the GPU nodes of the Perlmutter cluster at NERSC.
 """
 
 import tensorflow as tf
+
+for gpu in tf.config.list_physical_devices("GPU"):
+    tf.config.experimental.set_memory_growth(gpu, True)
+
 import os, argparse, warnings, yaml, wandb
 
 from msfm.utils import logger, files
@@ -157,7 +161,7 @@ if __name__ == "__main__":
         )
 
     smoothing_kwargs = configuration.get_smoothing_kwargs(
-        loss_func, msfm_conf, dlss_conf, net_conf, dir_base=args.dir_model
+        loss_func, msfm_conf, dlss_conf, net_conf, dir_base=args.dir_model, mode="eval"
     )
 
     if loss_func == "likelihood":
@@ -185,6 +189,7 @@ if __name__ == "__main__":
             indices=data_vec_pix,
             n_neighbors=net_conf["network"]["n_neighbors"],
             input_shape=(None, len(data_vec_pix), n_z_bins),
+            max_batch_size=net_conf["dset"]["eval"]["common"]["local_batch_size"],
             checkpoint_dir=checkpoint_dir,
             # always load from a checkpoint
             restore_checkpoint=True,

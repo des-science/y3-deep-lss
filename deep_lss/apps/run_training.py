@@ -658,11 +658,11 @@ def training():
                     LOGGER.info(f"Validating the model every {vali_every}")
                     LOGGER.timer.start("vali")
 
-                vali_loss, vali_loss_non_regu, n_steps = validation_loop()
+                vali_loss, vali_loss_non_regu, n_vali_steps = validation_loop()
 
                 if second_vali:
                     LOGGER.info(
-                        f"Finished validating the model after {LOGGER.timer.elapsed('vali')} and {n_steps} steps/batches"
+                        f"Finished validating the model after {LOGGER.timer.elapsed('vali')} and {n_vali_steps} steps/batches"
                     )
 
             # evaluate
