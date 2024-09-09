@@ -1,4 +1,5 @@
 import os
+import numpy as np
 import tensorflow as tf
 
 from msfm.utils import input_output, logger, files
@@ -89,6 +90,13 @@ def get_smoothing_kwargs(loss_function, msfm_conf, dlss_conf, net_conf, dir_base
 
         params = dlss_conf["dset"]["training"]["params"]
         n_params = len(params)
+
+        if dlss_conf["dset"]["common"]["apply_norm"]:
+            map_normalization = np.array(
+                msfm_conf["analysis"]["normalization"]["lensing"]
+                + msfm_conf["analysis"]["normalization"]["clustering"]
+            )
+            white_noise_sigma /= map_normalization
 
         # net
         if loss_function == "delta":
