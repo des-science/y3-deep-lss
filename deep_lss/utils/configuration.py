@@ -78,12 +78,15 @@ def get_smoothing_kwargs(loss_function, msfm_conf, dlss_conf, net_conf, dir_base
     try:
         fwhm = []
         white_noise_sigma = []
+        map_normalization = []
         if with_lensing:
             fwhm += dlss_conf["scale_cuts"]["lensing"]["theta_fwhm"]
             white_noise_sigma += dlss_conf["scale_cuts"]["lensing"]["white_noise_sigma"]
+            map_normalization += msfm_conf["analysis"]["normalization"]["lensing"]
         if with_clustering:
             fwhm += dlss_conf["scale_cuts"]["clustering"]["theta_fwhm"]
             white_noise_sigma += dlss_conf["scale_cuts"]["clustering"]["white_noise_sigma"]
+            map_normalization += msfm_conf["analysis"]["normalization"]["clustering"]
 
         arcmin = dlss_conf["scale_cuts"]["arcmin"]
         n_sigma_support = dlss_conf["scale_cuts"]["n_sigma_support"]
@@ -92,10 +95,6 @@ def get_smoothing_kwargs(loss_function, msfm_conf, dlss_conf, net_conf, dir_base
         n_params = len(params)
 
         if dlss_conf["dset"]["common"]["apply_norm"]:
-            map_normalization = np.array(
-                msfm_conf["analysis"]["normalization"]["lensing"]
-                + msfm_conf["analysis"]["normalization"]["clustering"]
-            )
             white_noise_sigma /= map_normalization
 
         # net
