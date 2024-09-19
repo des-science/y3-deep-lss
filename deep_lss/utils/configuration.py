@@ -1,6 +1,5 @@
 import os
 import numpy as np
-import tensorflow as tf
 
 from msfm.utils import input_output, logger, files
 
@@ -27,6 +26,7 @@ def load_deep_lss_config(conf=None):
         file_dir = os.path.dirname(__file__)
         repo_dir = os.path.abspath(os.path.join(file_dir, "../.."))
         conf = os.path.join(repo_dir, "configs/dlss_config.yaml")
+        LOGGER.warning(f"Loading the default config from {conf}")
         conf = input_output.read_yaml(conf)
 
     # load a config specified by a path
@@ -67,7 +67,7 @@ def get_smoothing_kwargs(loss_function, msfm_conf, dlss_conf, net_conf, dir_base
     with_clustering = dlss_conf["dset"]["common"]["with_clustering"]
 
     if with_lensing and with_clustering:
-        mask = tf.concat([mask_dict["metacal"], mask_dict["maglim"]], axis=1)
+        mask = np.concatenate([mask_dict["metacal"], mask_dict["maglim"]], axis=1)
     elif with_lensing and not with_clustering:
         mask = mask_dict["metacal"]
     elif not with_lensing and with_clustering:
@@ -95,7 +95,7 @@ def get_smoothing_kwargs(loss_function, msfm_conf, dlss_conf, net_conf, dir_base
         n_params = len(params)
 
         if dlss_conf["dset"]["common"]["apply_norm"]:
-            white_noise_sigma /= map_normalization
+            white_noise_sigma = np.array(white_noise_sigma) / np.array(map_normalization)
 
         # net
         if loss_function == "delta":
@@ -136,6 +136,8 @@ def get_backend_floatx():
     Returns:
         tf.floatx: either tf.float32 or tf.float64 depending on the current backend setting
     """
+    import tensorflow as tf
+
     if tf.keras.backend.floatx() == "float32":
         return tf.float32
     elif tf.keras.backend.floatx() == "float64":
