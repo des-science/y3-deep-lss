@@ -2,7 +2,7 @@
 name: deepsphere_default
 
 training:
-  n_steps: 100000
+  n_steps: 150000
   output_every: 5000
   checkpoint_every: 10000
   vali_every: 5000
@@ -11,10 +11,15 @@ training:
 optimization:
   # adam or sgd
   optimizer: adam
-  # this could also be handled in the optimizer instead of the training step
+  # this is shared for the different loss functions as the gradient is always bigger than the global norm, such that
+  # modifications to the learning rate are equivalent
+  gradient_clipping:
+    clip_by_value: null
+    clip_by_norm: null
+    clip_by_global_norm: 1.0
   delta_loss:
     # at the end of the warmup or from the beginning, if there is no schedule
-    learning_rate: 1.0e-4
+    learning_rate: 1.0e-3
     # for beta_1, beta_2, epsilon, etc.
     optimizer_kwargs:
       beta_1: 0.9
@@ -22,15 +27,11 @@ optimization:
     # Null, "warmup" or "cosine" (which includes a warmup)
     scheduler: warmup
     warmup_steps: 5000
-    warmup_init_learning_rate: 1.0e-5
+    warmup_init_learning_rate: 1.0e-4
     # for cosine schedule: alpha = decay_end_learning_rate / learning_rate
     decay_alpha: 0.0
     # linearly increase the noise amplitude from 0 to 1
     noise_schedule_steps: Null
-    gradient_clipping:
-      clip_by_value: null
-      clip_by_norm: null
-      clip_by_global_norm: 10.0
   likelihood_loss:
     learning_rate: 1.0e-4
     optimizer_kwargs:
@@ -40,10 +41,6 @@ optimization:
     warmup_steps: 5000
     warmup_init_learning_rate: 1.0e-5
     decay_alpha: 0.0
-    gradient_clipping:
-      clip_by_value: null
-      clip_by_norm: null
-      clip_by_global_norm: 10.0
   mutual_info_loss:
     learning_rate: 1.0e-4
     optimizer_kwargs:
@@ -53,10 +50,6 @@ optimization:
     warmup_steps: 5000
     warmup_init_learning_rate: 1.0e-5
     decay_alpha: 0.0
-    gradient_clipping:
-      clip_by_value: null
-      clip_by_norm: null
-      clip_by_global_norm: 1.0
 
 network:
   name: resnet
@@ -68,7 +61,7 @@ network:
     # depth
     downsampling_layers: 3
     cheby_layers: 2
-    residual_layers: 6
+    residual_layers: 5
     # misc
     poly_degree: 5
     head_type: "dense"
@@ -79,7 +72,7 @@ dset:
   training:
     common:
       is_eval: False
-      n_readers: 8
+      n_readers: 16
       n_prefetch: 2
       n_workers: 96
     # delta loss
@@ -87,15 +80,15 @@ dset:
       noise_indices: 10
       # because of the derivatives, this is multiplied by 1 + 2 * n_params
       local_batch_size: 4
-      file_name_shuffle_buffer: 128
+      file_name_shuffle_buffer: 64
       examples_shuffle_buffer: 128
       is_cached: False
     # mutual info, likelihood, mse loss
     grid:
       noise_indices: 4
-      local_batch_size: 64
-      file_name_shuffle_buffer: 128
-      examples_shuffle_buffer: 512
+      local_batch_size: 16
+      file_name_shuffle_buffer: 64
+      examples_shuffle_buffer: 128
   eval:
     common:
       is_eval: True
@@ -111,7 +104,7 @@ dset:
       noise_indices: 10
       n_prefetch: 2
       n_workers: 96
-      n_readers: 2
+      n_readers: 16
       is_cached: False
     grid:
       noise_indices: [4]
