@@ -120,11 +120,18 @@ def evaluate_grid(model, tfr_pattern, msfm_conf, dlss_conf, net_conf, dir_out, f
     LOGGER.info(f"There's a total of {n_examples} data vectors to be evaluated ({n_examples_per_cosmo} per cosmology)")
 
     # network constants
-    strategy = model.strategy
-    global_batch_size = distribute.get_global_batch_size(strategy, dset_kwargs["local_batch_size"])
-
-    n_batches = math.ceil(n_examples / global_batch_size)
     save_second_to_last_layer = net_conf["network"]["save_second_to_last_layer"]
+
+    strategy = model.strategy
+    local_batch_size = dset_kwargs["local_batch_size"]
+    global_batch_size = distribute.get_global_batch_size(strategy, local_batch_size)
+    n_batches = math.ceil(n_examples / global_batch_size)
+
+    if n_examples % (strategy.num_replicas_in_sync * local_batch_size) != 0:
+        LOGGER.warning(
+            f"Number of examples {n_examples} is not divisible by the number of replicas "
+            f"{strategy.num_replicas_in_sync} times the local batch size {local_batch_size}"
+        )
 
     grid_pipeline = GridPipeline(
         conf=msfm_conf, **{**dlss_conf["dset"]["common"], **dlss_conf["dset"]["eval"]["grid"]}
@@ -197,10 +204,6 @@ def evaluate_grid(model, tfr_pattern, msfm_conf, dlss_conf, net_conf, dir_out, f
         second_to_last_layer = _stack_grid_cosmos(second_to_last_layer_batch, sorted_indices, n_examples_per_cosmo)
     LOGGER.info(f"Reshaped the results")
 
-    # double check that the cosmologies are sorted correctly and remove the redundant axis
-    cosmos = _remove_example_axis(cosmos)
-    i_sobols = _remove_example_axis(i_sobols)
-
     out_file = _get_out_file(dir_out, file_label)
 
     def write_out_file():
@@ -265,10 +268,18 @@ def evaluate_fiducial(
     LOGGER.info(f"There's a total of {n_examples} data vectors to be evaluated")
 
     # network constants
-    strategy = model.strategy
-    global_batch_size = distribute.get_global_batch_size(strategy, dset_kwargs["local_batch_size"])
-    n_batches = math.ceil(n_examples / global_batch_size)
     save_second_to_last_layer = net_conf["network"]["save_second_to_last_layer"]
+
+    strategy = model.strategy
+    local_batch_size = dset_kwargs["local_batch_size"]
+    global_batch_size = distribute.get_global_batch_size(strategy, local_batch_size)
+    n_batches = math.ceil(n_examples / global_batch_size)
+
+    if n_examples % (strategy.num_replicas_in_sync * local_batch_size) != 0:
+        LOGGER.warning(
+            f"Number of examples {n_examples} is not divisible by the number of replicas "
+            f"{strategy.num_replicas_in_sync} times the local batch size {local_batch_size}"
+        )
 
     fiducial_pipeline = FiducialPipeline(
         conf=msfm_conf, **{**dlss_conf["dset"]["common"], **dlss_conf["dset"]["eval"]["fiducial"]}

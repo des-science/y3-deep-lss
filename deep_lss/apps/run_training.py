@@ -332,8 +332,7 @@ def training():
     # constants: deep_lss
     params = dlss_conf["dset"]["training"]["params"]
     n_params = len(params)
-    perts = parameters.get_fiducial_perturbations(params)
-    LOGGER.info(f"Training with respect to the {n_params} parameters {params} with off sets {perts}")
+    LOGGER.info(f"Training with respect to the {n_params} parameters {params}")
 
     with_lensing = dlss_conf["dset"]["common"]["with_lensing"]
     with_clustering = dlss_conf["dset"]["common"]["with_clustering"]
@@ -442,6 +441,9 @@ def training():
 
         # training step, fiducial pipeline
         if args.loss_function == "delta":
+            perts = parameters.get_fiducial_perturbations(params)
+            LOGGER.info(f"Training with respect to the {n_params} parameters {params} with off sets {perts}")
+
             model.setup_delta_loss_step(
                 n_params,
                 local_batch_size,
@@ -549,7 +551,7 @@ def training():
                     return loss, loss_non_regu
 
             elif args.loss_function == "mutual_info":
-                labels = tf.constant(parameters.get_fiducials(params), dtype=tf.float32)
+                labels = tf.constant(parameters.get_fiducials(params, conf=msfm_conf), dtype=tf.float32)
                 labels = tf.reshape(labels, shape=[-1, n_params])
 
                 @tf.function
