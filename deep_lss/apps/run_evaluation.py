@@ -90,14 +90,12 @@ def setup():
     for key, value in vars(args).items():
         LOGGER.info(f"{key} = {value}")
 
-    job_id = os.environ["SLURM_JOB_ID"]
-    if args.dir_model is None and job_id is not None:
+    if args.dir_model is None:
+        job_id = os.environ["SLURM_JOB_ID"]
         temp_file = f"./.env_var/id_{job_id}.txt"
         with open(temp_file, "r") as f:
             args.dir_model = f.read().strip()
         LOGGER.warning(f"Loaded the model directory {args.dir_model} from {temp_file}")
-    elif args.dir_model is None and job_id is None:
-        raise ValueError(f"Please provide the model directory or set the model directory through a temp file")
 
     if args.debug:
         # tf.config.run_functions_eagerly(True)
