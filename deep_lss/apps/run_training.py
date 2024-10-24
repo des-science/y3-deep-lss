@@ -510,6 +510,10 @@ def training():
 
     # validation loss
     if vali_every is not None:
+        vali_pipe_kwargs = dlss_conf["dset"]["common"]
+        vali_dset_kwargs = {**net_conf["dset"]["eval"]["common"]}
+        vali_dset_kwargs["drop_remainder"] = True
+        n_vali_batches = net_conf["dset"]["eval"]["validation"]["n_batches"]
 
         @tf.function
         def vali_merge_mean(losses):
@@ -519,9 +523,7 @@ def training():
             return losses
 
         if args.fidu_vali_tfr_pattern is not None:
-            vali_pipe_kwargs = dlss_conf["dset"]["common"]
-            vali_dset_kwargs = {**net_conf["dset"]["eval"]["common"], **net_conf["dset"]["eval"]["validation"]}
-            vali_dset_kwargs["drop_remainder"] = True
+            vali_dset_kwargs.update(net_conf["dset"]["eval"]["validation"]["fiducial"])
 
             if args.loss_function == "delta":
                 # we need the perturbations
@@ -598,6 +600,8 @@ def training():
                     **vali_dset_kwargs,
                     input_context=input_context,
                 )
+                if n_vali_batches is not None:
+                    dset = dset.take(n_vali_batches * strategy.num_replicas_in_sync)
 
                 return dset
 
@@ -634,16 +638,9 @@ def training():
                 return n_steps
 
         elif args.grid_vali_tfr_pattern is not None:
-            try:
-                n_vali_batches = dlss_conf["dset"]["eval"]["grid"]["n_vali_batches"]
-            except KeyError:
-                n_vali_batches = 1000
-
-            vali_pipe_kwargs = dlss_conf["dset"]["common"]
             vali_pipe_kwargs["params"] = dlss_conf["dset"]["eval"]["grid"]["params"]
 
-            vali_dset_kwargs = {**net_conf["dset"]["eval"]["common"], **net_conf["dset"]["eval"]["grid"]}
-            vali_dset_kwargs["drop_remainder"] = True
+            vali_dset_kwargs.update(net_conf["dset"]["eval"]["grid"])
             vali_dset_kwargs["is_eval"] = False
 
             LOGGER.warning(f"Grid validation set")
@@ -654,7 +651,9 @@ def training():
                     tfr_pattern=args.grid_vali_tfr_pattern,
                     **vali_dset_kwargs,
                     input_context=input_context,
-                ).take(n_vali_batches * strategy.num_replicas_in_sync)
+                )
+                if n_vali_batches is not None:
+                    dset = dset.take(n_vali_batches * strategy.num_replicas_in_sync)
 
                 return dset
 
