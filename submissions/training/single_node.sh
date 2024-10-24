@@ -37,30 +37,30 @@ else
 fi
 
 TRAIN_TFR="/pscratch/sd/a/athomsen/v11desy3/$VERSION/$SUBVERSION/tfrecords/$TRAINSET/DESy3_${TRAINSET}_dmb_????.tfrecord"
-FIDU_VALI_TFR="/pscratch/sd/a/athomsen/v11desy3/$VERSION/$SUBVERSION/tfrecords/fiducial/validation/DESy3_fiducial_dmb_????.tfrecord"
-GRID_VALI_TFR="/pscratch/sd/a/athomsen/v11desy3/$VERSION/$SUBVERSION/tfrecords/grid/DESy3_grid_dmb_????.tfrecord"
+FIDU_EVAL_TFR="/pscratch/sd/a/athomsen/v11desy3/$VERSION/$SUBVERSION/tfrecords/fiducial/validation/DESy3_fiducial_dmb_????.tfrecord"
+GRID_EVAL_TFR="/pscratch/sd/a/athomsen/v11desy3/$VERSION/$SUBVERSION/tfrecords/grid/DESy3_grid_dmb_????.tfrecord"
 
 srun --cpu-bind=threads --gpu-bind=none --output=""$OUTPUT"_training.log" \
     python ../../deep_lss/apps/run_training.py \
     --loss_function="$LOSS" \
     --train_tfr_pattern=$TRAIN_TFR \
-    --fidu_vali_tfr_pattern=$FIDU_VALI_TFR \
+    --grid_vali_tfr_pattern=$TRAIN_TFR \
     --dir_base="/pscratch/sd/a/athomsen/run_files/$VERSION/$SUBVERSION/$PROBE/$LOSS" \
-    --dlss_config="configs/$VERSION/$PROBE/soft_vs_hard_cut/dlss_soft.yaml" \
+    --dlss_config="configs/$VERSION/$PROBE/dlss_[108,158,206,246].yaml" \
     --net_config="configs/$VERSION/$PROBE/deepsphere_default.yaml" \
     --msfm_config="/global/homes/a/athomsen/multiprobe-simulation-forward-model/configs/$VERSION/$SUBVERSION.yaml" \
     --dist_strategy="$STRATEGY" \
     --slurm_output=""$OUTPUT"_training" \
     --wandb \
     --wandb_tags "$VERSION" "$PROBE" "$LOSS" "$STRATEGY" "$BIAS" "$SUBVERSION" "resnet" "CosmoGridV1.1" \
-    --wandb_notes="map-level 24mpc/h soft-cut run to check the mocks and compare to a hard cut"
+    --wandb_notes="map-level 28mpc/h smoothing with 10% noise run for l_max = [108, 158, 206, 246]"
 
 # evaluate all the network checkpoints in a separate script after training has completed to avoid CPU OOM errors
 srun --cpu-bind=threads --gpu-bind=none --output=""$OUTPUT"_inference.log" \
     python ../../deep_lss/apps/run_evaluation.py \
     --dist_strategy="$STRATEGY" \
-    --fidu_vali_tfr_pattern=$FIDU_VALI_TFR \
-    --grid_vali_tfr_pattern=$GRID_VALI_TFR
+    --fidu_vali_tfr_pattern=$FIDU_EVAL_TFR \
+    --grid_vali_tfr_pattern=$GRID_EVAL_TFR
 
 # srun --cpu-bind=threads --gpu-bind=none --output="{$OUTPUT}_training" \
 #     python ../../deep_lss/apps/run_training.py \
@@ -86,27 +86,30 @@ srun --cpu-bind=threads --gpu-bind=none --output=""$OUTPUT"_inference.log" \
 #     --dist_strategy="$STRATEGY" \
 #     --fidu_vali_tfr_pattern=$FIDU_VALI_TFR \
 #     --grid_vali_tfr_pattern=$GRID_VALI_TFR \
-#     --dir_model="/pscratch/sd/a/athomsen/run_files/v11/extended_hard_cut/clustering/mutual_info/2024-10-12_04-01-53_deepsphere_default"
-# --dir_model="/pscratch/sd/a/athomsen/run_files/v11/extended/clustering/mutual_info/2024-10-12_04-01-53_deepsphere_default"
-
-# python ../../deep_lss/apps/run_evaluation.py \
-#     --dist_strategy="$STRATEGY" \
-#     --fidu_vali_tfr_pattern=$FIDU_VALI_TFR \
-#     --grid_vali_tfr_pattern=$GRID_VALI_TFR \
-#     --dir_model="/pscratch/sd/a/athomsen/run_files/v10/linear_bias/clustering/mutual_info/2024-10-04_08-12-55_deepsphere_default"
+#     --dir_model="/pscratch/sd/a/athomsen/run_files/v11/extended/clustering/mutual_info/2024-10-20_01-03-44_deepsphere_default"
 
 # python ../../deep_lss/apps/run_evaluation.py \
 #     --fidu_vali_tfr_pattern=$FIDU_VALI_TFR \
-#     --grid_vali_tfr_pattern=$GRID_VALI_TFR \
-#     --dir_model="/pscratch/sd/a/athomsen/run_files/v10/linear_bias/clustering/mutual_info/2024-10-04_08-12-55_deepsphere_default"
+#     --dir_model="/pscratch/sd/a/athomsen/run_files/v11/extended/clustering/mutual_info/2024-10-12_04-01-53_deepsphere_default"
 
 # python ../../deep_lss/apps/run_training.py \
 #     --loss_function="$LOSS" \
 #     --train_tfr_pattern=$TRAIN_TFR \
-#     --fidu_vali_tfr_pattern=$FIDU_VALI_TFR \
-#     --dir_base="/pscratch/sd/a/athomsen/run_files/$VERSION/$SUBVERSION/$PROBE/$LOSS" \
-#     --dlss_config="configs/$VERSION/$PROBE/l_max_comparison/dlss_smoothing<noise.yaml" \
-#     --net_config="configs/$VERSION/$PROBE/deepsphere_default.yaml" \
+#     --grid_vali_tfr_pattern=$TRAIN_TFR \
+#     --dir_base="/pscratch/sd/a/athomsen/run_files/$VERSION/$SUBVERSION/$PROBE/$LOSS/debug" \
+#     --dlss_config="configs/$VERSION/$PROBE/dlss_[108,158,206,246].yaml" \
+#     --net_config="configs/$VERSION/$PROBE/deepsphere_debug.yaml" \
 #     --msfm_config="/global/homes/a/athomsen/multiprobe-simulation-forward-model/configs/$VERSION/$SUBVERSION.yaml" \
 #     --dist_strategy="$STRATEGY" \
-#     --slurm_output=""$OUTPUT"_training"
+#     --verbosity="debug"
+
+# python ../../deep_lss/apps/run_training.py \
+#     --loss_function="$LOSS" \
+#     --train_tfr_pattern=$TRAIN_TFR \
+#     --fidu_vali_tfr_pattern=$FIDU_EVAL_TFR \
+#     --dir_base="/pscratch/sd/a/athomsen/run_files/$VERSION/$SUBVERSION/$PROBE/$LOSS/debug" \
+#     --dlss_config="configs/$VERSION/$PROBE/dlss_[108,158,206,246].yaml" \
+#     --net_config="configs/$VERSION/$PROBE/deepsphere_debug.yaml" \
+#     --msfm_config="/global/homes/a/athomsen/multiprobe-simulation-forward-model/configs/$VERSION/$SUBVERSION.yaml" \
+#     --dist_strategy="$STRATEGY" \
+#     --verbosity="debug"

@@ -63,7 +63,7 @@ def setup():
         "--train_tfr_pattern",
         type=str,
         required=True,
-        help="input root dir of the fiducial data vectors (training)",
+        help="input root dir of the fiducial or grid data vectors (training)",
     )
     parser.add_argument(
         "--fidu_vali_tfr_pattern",
@@ -76,6 +76,18 @@ def setup():
         type=str,
         default=None,
         help="input root dir of the grid data vectors (validation)",
+    )
+    parser.add_argument(
+        "--fidu_eval_tfr_pattern",
+        type=str,
+        default=None,
+        help="input root dir of the fiducial data vectors (evaluation)",
+    )
+    parser.add_argument(
+        "--grid_eval_tfr_pattern",
+        type=str,
+        default=None,
+        help="input root dir of the grid data vectors (evaluation)",
     )
     parser.add_argument(
         "--dir_base",
@@ -147,6 +159,10 @@ def setup():
         assert "fiducial" in args.train_tfr_pattern, f"The delta loss can only be used for the fiducial dataset"
     else:
         assert "grid" in args.train_tfr_pattern, f"The {args.loss_function} loss can only be used for the grid dataset"
+
+    assert not (
+        (args.fidu_vali_tfr_pattern is not None) and (args.grid_vali_tfr_pattern is not None)
+    ), "Only one of the validation sets can be provided"
 
     # set up directories
     file_dir = os.path.dirname(__file__)
@@ -345,6 +361,7 @@ def training():
     eval_every = net_conf["training"]["eval_every"]
 
     # constants: miscellaneous
+    training_type = "fiducial" if args.loss_function == "delta" else "grid"
     smoothing_kwargs = configuration.get_smoothing_kwargs(
         args.loss_function, msfm_conf, dlss_conf, net_conf, dir_base=args.dir_base
     )
@@ -491,77 +508,8 @@ def training():
                 **net_conf["optimization"]["gradient_clipping"],
             )
 
-    # validation loss (always with respect to the fiducial cosmology)
+    # validation loss
     if vali_every is not None:
-        vali_pipe_kwargs = dlss_conf["dset"]["common"]
-        vali_dset_kwargs = {**net_conf["dset"]["eval"]["common"], **net_conf["dset"]["eval"]["validation"]}
-        vali_dset_kwargs["drop_remainder"] = True
-
-        if args.loss_function == "delta":
-            # we need the perturbations
-            vali_pipe_kwargs["params"] = dlss_conf["dset"]["training"]["params"]
-
-            # to use the correct effective batch size with respect to the perturbations
-            vali_dset_kwargs["local_batch_size"] = local_batch_size
-
-            # this is equal to the cov_det_loss term in the delta loss
-            non_regularized_loss_fn = lambda batch: delta_loss.delta_loss(
-                batch,
-                n_params=n_params,
-                n_same=local_batch_size,
-                off_sets=perts,
-                n_output=n_params,
-                force_params_value=None,
-                jac_weight=None,
-                jac_cond_weight=None,
-                tikhonov_regu=False,
-                training=False,
-                strategy=strategy,
-            )
-
-            # we only want tf.functions in strategy.run
-            @tf.function
-            def vali_loss_fn(batch):
-                preds = model(batch, training=False)
-                loss = model.vali_loss_fn(preds)
-                loss_non_regu = non_regularized_loss_fn(preds)
-
-                # without this, the loss overwrites itself within the summary writer
-                model.increment_step()
-                return loss, loss_non_regu
-
-        else:
-            # we don't need the perturbations
-            vali_pipe_kwargs["params"] = []
-
-            if args.loss_function == "likelihood" or args.loss_function == "mse":
-                # ignore the covariance term and rescaling
-                mse = tf.keras.metrics.MeanSquaredError()
-
-                # as this loss is supervised
-                labels = parameters.get_fiducials(params)
-
-                @tf.function
-                def vali_loss_fn(batch):
-                    preds = model(batch, training=False)
-                    loss = model.vali_loss_fn(preds, labels)
-                    loss_non_regu = mse(tf.slice(preds, begin=[0, 0], size=[-1, n_params]), labels)
-
-                    model.increment_step()
-                    return loss, loss_non_regu
-
-            elif args.loss_function == "mutual_info":
-                labels = tf.constant(parameters.get_fiducials(params, conf=msfm_conf), dtype=tf.float32)
-                labels = tf.reshape(labels, shape=[-1, n_params])
-
-                @tf.function
-                def vali_loss_fn(batch):
-                    preds = model(batch, training=False)
-                    loss = model.vali_loss_fn(preds, labels)
-                    loss_non_regu = loss
-
-                    model.increment_step()
-                    return loss, loss_non_regu
 
         @tf.function
         def vali_merge_mean(losses):
@@ -570,49 +518,186 @@ def training():
             losses = tf.reduce_mean(tf.boolean_mask(losses, not tf.math.is_nan(losses)))
             return losses
 
-        LOGGER.warning(f"Validation set")
-        vali_fidu_pipe = FiducialPipeline(conf=msfm_conf, **vali_pipe_kwargs)
+        if args.fidu_vali_tfr_pattern is not None:
+            vali_pipe_kwargs = dlss_conf["dset"]["common"]
+            vali_dset_kwargs = {**net_conf["dset"]["eval"]["common"], **net_conf["dset"]["eval"]["validation"]}
+            vali_dset_kwargs["drop_remainder"] = True
 
-        def vali_dset_fn(input_context):
-            dset = vali_fidu_pipe.get_dset(
-                tfr_pattern=args.fidu_vali_tfr_pattern,
-                **vali_dset_kwargs,
-                input_context=input_context,
-            )
+            if args.loss_function == "delta":
+                # we need the perturbations
+                vali_pipe_kwargs["params"] = dlss_conf["dset"]["training"]["params"]
 
-            return dset
+                # to use the correct effective batch size with respect to the perturbations
+                vali_dset_kwargs["local_batch_size"] = local_batch_size
 
-        dist_vali_dset = strategy.distribute_datasets_from_function(vali_dset_fn)
+                # this is equal to the cov_det_loss term in the delta loss
+                non_regularized_loss_fn = lambda batch: delta_loss.delta_loss(
+                    batch,
+                    n_params=n_params,
+                    n_same=local_batch_size,
+                    off_sets=perts,
+                    n_output=n_params,
+                    force_params_value=None,
+                    jac_weight=None,
+                    jac_cond_weight=None,
+                    tikhonov_regu=False,
+                    training=False,
+                    strategy=strategy,
+                )
 
-        def validation_loop():
-            loss_list = []
-            loss_non_regu_list = []
-            n_steps = 0
-            for vali_batch, _, _ in LOGGER.progressbar(dist_vali_dset, at_level="debug", desc="validation"):
-                loss, loss_non_regu = strategy.run(vali_loss_fn, args=(vali_batch,))
+                # we only want tf.functions in strategy.run
+                @tf.function
+                def vali_loss_fn(batch):
+                    preds = model(batch, training=False)
+                    loss = model.vali_loss_fn(preds)
+                    loss_non_regu = non_regularized_loss_fn(preds)
 
-                loss_list.append(loss)
-                loss_non_regu_list.append(loss_non_regu)
-                n_steps += 1
+                    # without this, the loss overwrites itself within the summary writer
+                    model.increment_step()
+                    return loss, loss_non_regu
 
-            vali_loss = strategy.run(vali_merge_mean, args=(loss_list,))
-            vali_loss_non_regu = strategy.run(vali_merge_mean, args=(loss_non_regu_list,))
+            else:
+                # we don't need the perturbations
+                vali_pipe_kwargs["params"] = []
 
-            # only reduce over the replicas
-            vali_loss = strategy.reduce(tf.distribute.ReduceOp.MEAN, vali_loss, axis=None)
-            vali_loss_non_regu = strategy.reduce(tf.distribute.ReduceOp.MEAN, vali_loss_non_regu, axis=None)
+                if args.loss_function == "likelihood" or args.loss_function == "mse":
+                    # ignore the covariance term and rescaling
+                    mse = tf.keras.metrics.MeanSquaredError()
 
-            assert not tf.math.is_nan(
-                vali_loss
-            ), f"Validation loss is NaN, check the validation batch size as this is likely due to partially empty batches"
+                    # as this loss is supervised
+                    labels = parameters.get_fiducials(params)
 
-            # reset the summary writer step to what it was before the validation
-            model.change_step(-n_steps)
+                    @tf.function
+                    def vali_loss_fn(batch):
+                        preds = model(batch, training=False)
+                        loss = model.vali_loss_fn(preds, labels)
+                        loss_non_regu = mse(tf.slice(preds, begin=[0, 0], size=[-1, n_params]), labels)
 
-            model.write_summary("loss_vali", vali_loss)
-            model.write_summary("loss_vali_non_regu", vali_loss_non_regu)
+                        model.increment_step()
+                        return loss, loss_non_regu
 
-            return vali_loss, vali_loss_non_regu, n_steps
+                elif args.loss_function == "mutual_info":
+                    labels = tf.constant(parameters.get_fiducials(params, conf=msfm_conf), dtype=tf.float32)
+                    labels = tf.reshape(labels, shape=[-1, n_params])
+
+                    @tf.function
+                    def vali_loss_fn(batch):
+                        preds = model(batch, training=False)
+                        loss = model.vali_loss_fn(preds, labels)
+                        loss_non_regu = loss
+
+                        model.increment_step()
+                        return loss, loss_non_regu
+
+            LOGGER.warning(f"Fiducial validation set")
+            vali_fidu_pipe = FiducialPipeline(conf=msfm_conf, **vali_pipe_kwargs)
+
+            def vali_dset_fn(input_context):
+                dset = vali_fidu_pipe.get_dset(
+                    tfr_pattern=args.fidu_vali_tfr_pattern,
+                    **vali_dset_kwargs,
+                    input_context=input_context,
+                )
+
+                return dset
+
+            dist_vali_dset = strategy.distribute_datasets_from_function(vali_dset_fn)
+
+            def validation_loop():
+                loss_list = []
+                loss_non_regu_list = []
+                n_steps = 0
+                for vali_batch, _, _ in LOGGER.progressbar(dist_vali_dset, at_level="debug", desc="validation"):
+                    loss, loss_non_regu = strategy.run(vali_loss_fn, args=(vali_batch,))
+
+                    loss_list.append(loss)
+                    loss_non_regu_list.append(loss_non_regu)
+                    n_steps += 1
+
+                vali_loss = strategy.run(vali_merge_mean, args=(loss_list,))
+                vali_loss_non_regu = strategy.run(vali_merge_mean, args=(loss_non_regu_list,))
+
+                # only reduce over the replicas
+                vali_loss = strategy.reduce(tf.distribute.ReduceOp.MEAN, vali_loss, axis=None)
+                vali_loss_non_regu = strategy.reduce(tf.distribute.ReduceOp.MEAN, vali_loss_non_regu, axis=None)
+
+                assert not tf.math.is_nan(
+                    vali_loss
+                ), f"Validation loss is NaN, check the validation batch size as this is likely due to partially empty batches"
+
+                # reset the summary writer step to what it was before the validation
+                model.change_step(-n_steps)
+
+                model.write_summary("loss_vali", vali_loss)
+                model.write_summary("loss_vali_non_regu", vali_loss_non_regu)
+
+                return n_steps
+
+        elif args.grid_vali_tfr_pattern is not None:
+            try:
+                n_vali_batches = dlss_conf["dset"]["eval"]["grid"]["n_vali_batches"]
+            except KeyError:
+                n_vali_batches = 1000
+
+            vali_pipe_kwargs = dlss_conf["dset"]["common"]
+            vali_pipe_kwargs["params"] = dlss_conf["dset"]["eval"]["grid"]["params"]
+
+            vali_dset_kwargs = {**net_conf["dset"]["eval"]["common"], **net_conf["dset"]["eval"]["grid"]}
+            vali_dset_kwargs["drop_remainder"] = True
+            vali_dset_kwargs["is_eval"] = False
+
+            LOGGER.warning(f"Grid validation set")
+            vali_grid_pipe = GridPipeline(conf=msfm_conf, **vali_pipe_kwargs)
+
+            def vali_dset_fn(input_context):
+                dset = vali_grid_pipe.get_dset(
+                    tfr_pattern=args.grid_vali_tfr_pattern,
+                    **vali_dset_kwargs,
+                    input_context=input_context,
+                ).take(n_vali_batches * strategy.num_replicas_in_sync)
+
+                return dset
+
+            if args.loss_function == "mutual_info":
+
+                @tf.function
+                def vali_loss_fn(dv, cosmo):
+                    preds = model(dv, training=False)
+                    loss = model.vali_loss_fn(preds, cosmo)
+
+                    model.increment_step()
+                    return loss
+
+            else:
+                raise NotImplementedError(f"Validation for the grid dataset is not implemented yet for other losses")
+
+            dist_vali_dset = strategy.distribute_datasets_from_function(vali_dset_fn)
+
+            def validation_loop():
+                loss_list = []
+                n_steps = 0
+                for dv_batch, _, cosmo_batch, index_batch in LOGGER.progressbar(
+                    dist_vali_dset, at_level="debug", desc="validation", total=n_vali_batches
+                ):
+                    loss = strategy.run(vali_loss_fn, args=(dv_batch, cosmo_batch))
+
+                    loss_list.append(loss)
+                    n_steps += 1
+
+                vali_loss = strategy.run(vali_merge_mean, args=(loss_list,))
+
+                # only reduce over the replicas
+                vali_loss = strategy.reduce(tf.distribute.ReduceOp.MEAN, vali_loss, axis=None)
+
+                assert not tf.math.is_nan(
+                    vali_loss
+                ), f"Validation loss is NaN, check the validation batch size as this is likely due to partially empty batches"
+
+                # reset the summary writer step to what it was before the validation
+                model.change_step(-n_steps)
+                model.write_summary("loss_vali", vali_loss)
+
+                return n_steps
 
     LOGGER.info(f"Starting training")
     LOGGER.timer.start("training")
@@ -657,10 +742,10 @@ def training():
                 # since at that step, everything should be already traced
                 second_vali = step == 2 * vali_every
                 if second_vali:
-                    LOGGER.info(f"Validating the model every {vali_every}")
+                    LOGGER.info(f"Validating the model every {vali_every} steps")
                     LOGGER.timer.start("vali")
 
-                vali_loss, vali_loss_non_regu, n_vali_steps = validation_loop()
+                n_vali_steps = validation_loop()
 
                 if second_vali:
                     LOGGER.info(
@@ -676,24 +761,35 @@ def training():
 
                 # fiducial training
                 if args.evaluate_training_set:
-                    out_file = eval.evaluate_fiducial(
-                        model=model,
-                        tfr_pattern=args.train_tfr_pattern,
-                        msfm_conf=msfm_conf,
-                        dlss_conf=dlss_conf,
-                        net_conf=net_conf,
-                        dir_out=dir_out,
-                        file_label=train_step,
-                        training_set=True,
-                    )
+                    if training_type == "fiducial":
+                        out_file = eval.evaluate_fiducial(
+                            model=model,
+                            tfr_pattern=args.train_tfr_pattern,
+                            msfm_conf=msfm_conf,
+                            dlss_conf=dlss_conf,
+                            net_conf=net_conf,
+                            dir_out=dir_out,
+                            file_label=train_step,
+                            training_set=True,
+                        )
+                    elif training_type == "grid":
+                        out_file = eval.evaluate_grid(
+                            model=model,
+                            tfr_pattern=args.train_tfr_pattern,
+                            msfm_conf=msfm_conf,
+                            dlss_conf=dlss_conf,
+                            net_conf=net_conf,
+                            dir_out=dir_out,
+                            file_label=train_step,
+                        )
                 else:
                     LOGGER.warning(f"Skipping evaluation of the fiducial training set")
 
-                # fiducial validation
-                if args.fidu_vali_tfr_pattern is not None:
+                # fiducial evaluation
+                if args.fidu_eval_tfr_pattern is not None:
                     out_file = eval.evaluate_fiducial(
                         model=model,
-                        tfr_pattern=args.fidu_vali_tfr_pattern,
+                        tfr_pattern=args.fidu_eval_tfr_pattern,
                         msfm_conf=msfm_conf,
                         dlss_conf=dlss_conf,
                         net_conf=net_conf,
@@ -702,13 +798,13 @@ def training():
                         training_set=False,
                     )
                 else:
-                    LOGGER.warning(f"Skipping evaluation of the fiducial validation set")
+                    LOGGER.warning(f"Skipping evaluation of the fiducial evaluation set")
 
-                # grid validation
-                if args.grid_vali_tfr_pattern is not None:
+                # grid evaluation
+                if args.grid_eval_tfr_pattern is not None:
                     out_file = eval.evaluate_grid(
                         model=model,
-                        tfr_pattern=args.grid_vali_tfr_pattern,
+                        tfr_pattern=args.grid_eval_tfr_pattern,
                         msfm_conf=msfm_conf,
                         dlss_conf=dlss_conf,
                         net_conf=net_conf,
@@ -716,7 +812,7 @@ def training():
                         file_label=train_step,
                     )
                 else:
-                    LOGGER.warning(f"Skipping evaluation of the grid validation set")
+                    LOGGER.warning(f"Skipping evaluation of the grid evaluation set")
 
                 # log here instead of inside eval to avoid partial duplicate .h5 files
                 if args.wandb and (out_file is not None):
