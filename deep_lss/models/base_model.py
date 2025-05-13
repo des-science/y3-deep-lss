@@ -6,7 +6,7 @@ Author: Arne Thomsen
 
 Adapted from
 https://cosmo-gitlab.phys.ethz.ch/jafluri/cosmogrid_kids1000/-/blob/master/kids1000_analysis/base_model.py
-by Janis Fluri, 
+by Janis Fluri,
 the main difference is that here, the distribution happens via tf.distribute.Strategy instead of horovod. Furthermore,
 checkpointing is handled differently.
 """
@@ -275,8 +275,9 @@ class BaseModel(object):
         restore_dir = self.checkpoint_manager.restore_or_initialize()
         LOGGER.info(f"Network successfully restored from checkpoint {restore_dir}.")
 
-    def restore_model_from_checkpoint_dir(self, checkpoint):
+    def restore_model_from_checkpoint_path(self, checkpoint_path):
         """Restores the model from a concrete checkpoint passed as a function argument.
+        This should have a format like checkpoint_dir/ckpt-10 for the 10th checkpoint.
 
         Raises:
             ValueError: If there's no checkpoint directory or it's empty.
@@ -285,8 +286,8 @@ class BaseModel(object):
         if self.checkpoint_dir is None:
             raise ValueError(f"No checkpoint directory was given, the network can not be restored.")
 
-        self.checkpoint_manager.checkpoint.restore(checkpoint)
-        LOGGER.info(f"Network successfully restored from checkpoint {checkpoint}.")
+        self.checkpoint.restore(checkpoint_path)
+        LOGGER.info(f"Network successfully restored from checkpoint {checkpoint_path}.")
 
     def build_network(self, input_shape):
         """Builds the internal HealpyGCNN with a given input shape

@@ -100,6 +100,7 @@ def evaluate_grid(model, tfr_pattern, msfm_conf, dlss_conf, net_conf, dir_out, f
     LOGGER.info(f"Starting evaluation of the grid")
 
     dset_kwargs = {**net_conf["dset"]["eval"]["common"], **net_conf["dset"]["eval"]["grid"]}
+    dset_kwargs["drop_remainder"] = True
 
     # pipeline constants
     n_cosmos = msfm_conf["analysis"]["grid"]["n_cosmos"]
