@@ -1,0 +1,61 @@
+# contains the general, non model specific configuration parameters of the analysis
+dset:
+  common:
+    with_lensing: False
+    with_clustering: True
+    apply_norm: True
+    return_maps: True
+    return_cls: False
+  training:
+    params: [Om, s8, w0, bg1, bg2, bg3, bg4]
+  eval:
+    fiducial:
+      params: []
+    grid:
+      params: [Om, s8, w0, bg1, bg2, bg3, bg4]
+
+scale_cuts:
+  n_sigma_support: 3
+  arcmin: True
+  lensing:
+    # 6 Mpc/h transverse comoving scale -> arcmin
+    theta_fwhm: [22.1, 15.1, 11.2, 9.4]
+    # 10 % noise threshold, l_maxs = [556, 814, 1097, 1307]
+    white_noise_sigma: [1.0012e-03, 1.3444e-03, 1.6358e-03, 1.7096e-03]
+  clustering:
+    # 32 Mpc/h transverse comoving scale -> arcmin
+    theta_fwhm: [130.2, 88.9, 68.1, 57.0]
+    # 1 % noise threshold, l_maxs = [133, 195, 255, 305]
+    white_noise_sigma: [8.5135e-01, 3.4375e-01, 2.5989e-01, 2.4127e-01]
+
+delta_loss:
+  # regularization
+  force_params_value: 0.0
+  force_params_weight: 1.0
+  jac_weight: 100.0
+  jac_cond_weight: null
+  cov_loss: False
+  # numerical stability
+  use_log_det: True
+  tikhonov_regu: False
+  eps: 1.0e-32
+  # misc
+  img_summary: False
+
+likelihood_loss:
+  # regularization
+  lambda_tikhonov_init: 20.0
+  lambda_tikhonov_decay_steps: 3000
+  # misc
+  img_summary: False
+
+mutual_info_loss:
+  estimator: "variational"
+  dim_summary_fac: 2
+  # Gaussian mixture model
+  kwargs:
+    num_components: 4
+    num_hidden_layers: 2
+    num_hidden_units: 128
+    activation: "relu"
+    full_covariance: True
