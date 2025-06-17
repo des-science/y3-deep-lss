@@ -5,7 +5,7 @@ Created November 2023
 Author: Arne Thomsen
 """
 
-import horovod.tensorflow as hvd
+# import horovod.tensorflow as hvd
 import os
 
 from msfm.utils import logger

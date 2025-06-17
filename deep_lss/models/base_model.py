@@ -12,10 +12,10 @@ checkpointing is handled differently.
 """
 
 import tensorflow as tf
-import horovod.tensorflow as hvd
+# import horovod.tensorflow as hvd
 import os, warnings
 
-from deepsphere import HealpyGCNN
+# from deepsphere import HealpyGCNN
 
 from deep_lss.utils.distribute import HorovodStrategy
 from msfm.utils import logger

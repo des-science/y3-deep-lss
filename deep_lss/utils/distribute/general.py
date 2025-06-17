@@ -10,7 +10,7 @@ Utils for distributed training with tf.distribute and horovod.
 import tensorflow as tf
 import os, wandb
 
-from deep_lss.utils.distribute import tensorflow, horovod
+# from deep_lss.utils.distribute import tensorflow, horovod
 
 from msfm.utils import logger
 

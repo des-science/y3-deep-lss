@@ -13,11 +13,11 @@ To train over the grid part of the CosmoGrid with the
 import warnings
 import tensorflow as tf
 
-from deepsphere import HealpyGCNN
+# from deepsphere import HealpyGCNN
 
 from msfm.utils import logger
 from deep_lss.utils import likelihood_loss, mutual_info_loss
-from deep_lss.utils.distribute import HorovodStrategy
+# from deep_lss.utils.distribute import HorovodStrategy
 from deep_lss.models.base_model import BaseModel
 from deep_lss.utils.configuration import get_backend_floatx
 
