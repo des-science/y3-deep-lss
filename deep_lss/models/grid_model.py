@@ -271,27 +271,28 @@ class GridLossModel(BaseModel):
         self.vali_loss_fn = lambda preds, theta: loss_fn(preds, theta, training=False, **vali_loss_kwargs)
 
         # this isn't strictly necessary and could be removed
-        if isinstance(self.network, HealpyGCNN):
-            input_shape = (batch_size, len(self.network.indices_in), dim_channels)
-        elif dim_x is not None:
-            if dim_channels is not None:
-                input_shape = (batch_size, dim_x, dim_channels)
-            else:
-                input_shape = (batch_size, dim_x)
-        else:
-            input_shape = None
+        # if isinstance(self.network, HealpyGCNN):
+        #     input_shape = (batch_size, len(self.network.indices_in), dim_channels)
+        # elif dim_x is not None:
+        #     if dim_channels is not None:
+        #         input_shape = (batch_size, dim_x, dim_channels)
+        #     else:
+        #         input_shape = (batch_size, dim_x)
+        # else:
+        #     input_shape = None
 
-        if input_shape is not None:
-            current_float = get_backend_floatx()
-            label_shape = (batch_size, dim_theta)
-            tf_kwargs = {
-                "input_signature": [
-                    tf.TensorSpec(shape=input_shape, dtype=current_float),
-                    tf.TensorSpec(shape=label_shape, dtype=current_float),
-                ]
-            }
-        else:
-            tf_kwargs = {}
+        # if input_shape is not None:
+        #     current_float = get_backend_floatx()
+        #     label_shape = (batch_size, dim_theta)
+        #     tf_kwargs = {
+        #         "input_signature": [
+        #             tf.TensorSpec(shape=input_shape, dtype=current_float),
+        #             tf.TensorSpec(shape=label_shape, dtype=current_float),
+        #         ]
+        #     }
+        # else:
+        #     tf_kwargs = {}
+        tf_kwargs = {}
 
         # not distributed via tensorflow builtin
         if (self.strategy is None) or isinstance(self.strategy, HorovodStrategy):
