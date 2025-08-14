@@ -1,15 +1,15 @@
 #!/bin/bash
 #SBATCH --account=m5030_g
 #SBATCH --constraint=gpu
-#SBATCH --qos=regular
-#SBATCH --time=24:00:00
-#SBATCH --nodes=4
+#SBATCH --qos=debug
+#SBATCH --time=00:10:00
+#SBATCH --nodes=1
 #SBATCH --ntasks-per-node=4
 #SBATCH --gpus-per-node=4
 #SBATCH --gpus-per-task=1
 #SBATCH --cpus-per-task=32
-#SBATCH --job-name=hvd_training
-#SBATCH --output="./logs/v15/training_%j.log"
+#SBATCH --job-name=hvd_training_debug
+#SBATCH --output="./logs/v15/training_debug_%j.log"
 
 STRATEGY="horovod"
 VERSION="v15"
@@ -50,8 +50,5 @@ srun --cpu-bind=threads --gpu-bind=single:1 --output="$OUTPUT" \
     --dir_base="/pscratch/sd/a/athomsen/run_files/$VERSION/$SUBVERSION/$PROBE/$LOSS" \
     --slurm_output=""$OUTPUT"_training" \
     --dlss_config="configs/$VERSION/$PROBE/smoothing_fwhm/dlss_8mpc.yaml" \
-    --net_config="configs/$VERSION/deepsphere_default.yaml" \
-    --msfm_config="/global/homes/a/athomsen/multiprobe-simulation-forward-model/configs/$VERSION/$SUBVERSION.yaml" \
-    --wandb \
-    --wandb_tags "$VERSION" "$PROBE" "$LOSS" "$STRATEGY" "$BIAS" "$SUBVERSION" "resnet" "CosmoGridV1.1" \
-    --wandb_notes="multi-node lensing start"
+    --net_config="configs/$VERSION/deepsphere_debug.yaml" \
+    --msfm_config="/global/homes/a/athomsen/multiprobe-simulation-forward-model/configs/$VERSION/$SUBVERSION.yaml" 
