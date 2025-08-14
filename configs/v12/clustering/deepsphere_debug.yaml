@@ -1,11 +1,11 @@
 # contains the model specific configuration parameters for training and hyperparameter optimization
-name: deepsphere_default
+name: deepsphere_debug
 
 training:
-  n_steps: 200000
+  n_steps: 100
   output_every: Null
-  checkpoint_every: 10000
-  vali_every: Null
+  checkpoint_every: Null
+  vali_every: 90
   eval_every: Null
 
 optimization:
@@ -91,14 +91,7 @@ dset:
   eval:
     common:
       is_eval: True
-      local_batch_size: 20
-    validation:
-      noise_indices: 10
-      n_prefetch: 0
-      n_readers: 1
-      n_workers: 8
-      is_cached: False
-      drop_remainder: True
+      local_batch_size: 10
     fiducial:
       noise_indices: 10
       n_prefetch: 2
@@ -110,3 +103,16 @@ dset:
       n_prefetch: 2
       n_workers: 96
       n_readers: 16
+    validation:
+      n_batches: 10
+      grid:
+        noise_indices: [4]
+        n_prefetch: 1
+        n_workers: 16
+        n_readers: 8
+      fiducial:
+        noise_indices: 10
+        n_prefetch: 1
+        n_readers: 1
+        n_workers: 8
+        is_cached: False

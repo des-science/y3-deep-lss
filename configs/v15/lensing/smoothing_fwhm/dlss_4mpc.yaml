@@ -1,33 +1,32 @@
 # contains the general, non model specific configuration parameters of the analysis
 dset:
   common:
-    with_lensing: False
-    with_clustering: True
+    with_lensing: True
+    with_clustering: False
     apply_norm: True
     return_maps: True
     return_cls: False
   training:
-    params: [Om, s8, w0, bg1, bg2, bg3, bg4]
+    params: [Om, s8, w0, Aia, n_Aia, bta]
   eval:
     fiducial:
       params: []
     grid:
-      params: [Om, s8, w0, bg1, bg2, bg3, bg4]
+      params: [Om, s8, w0, Aia, n_Aia, bta]
 
-# hard scale cuts included in the .tfrecords
 scale_cuts:
   n_sigma_support: 3
   arcmin: True
   lensing:
-    # 8 Mpc/h transverse comoving scale -> arcmin
-    theta_fwhm: Null
-    # 1 % noise threshold, l_maxs = [589, 863, 1159, 1382]
-    white_noise_sigma: Null
+    # 4 Mpc/h transverse comoving scale -> arcmin
+    theta_fwhm: [14.8, 10.1, 7.4, 6.3]
+    # 1 % noise threshold, l_maxs = [1177, 1535, 1535, 1535]
+    white_noise_sigma: [1.5321e-04, 3.8765e-04, 1.4363e-03, 2.3846e-03]
   clustering:
-    # 24 Mpc/h transverse comoving scale -> arcmin
-    theta_fwhm: Null
-    # 1 % noise threshold, l_maxs = [178, 261, 340, 406]
-    white_noise_sigma: Null
+    # 28 Mpc/h transverse comoving scale -> arcmin
+    theta_fwhm: [113.9, 77.8, 59.6, 49.9]
+    # 1 % noise threshold, l_maxs = [152, 223, 291, 348]
+    white_noise_sigma: [7.8257e-01, 3.1326e-01, 2.3333e-01, 2.1634e-01]
 
 delta_loss:
   # regularization

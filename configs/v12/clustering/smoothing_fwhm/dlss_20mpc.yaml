@@ -7,27 +7,26 @@ dset:
     return_maps: True
     return_cls: False
   training:
-    params: [Om, s8, w0, bg1, bg2, bg3, bg4]
+    params: [Om, s8, w0, bg, n_bg]
   eval:
     fiducial:
       params: []
     grid:
-      params: [Om, s8, w0, bg1, bg2, bg3, bg4]
+      params: [Om, s8, w0, bg, n_bg]
 
-# hard scale cuts included in the .tfrecords
 scale_cuts:
   n_sigma_support: 3
   arcmin: True
   lensing:
-    # 8 Mpc/h transverse comoving scale -> arcmin
-    theta_fwhm: Null
-    # 1 % noise threshold, l_maxs = [589, 863, 1159, 1382]
-    white_noise_sigma: Null
+    # 6 Mpc/h transverse comoving scale -> arcmin
+    theta_fwhm: [22.1, 15.1, 11.2, 9.4]
+    # 10 % noise threshold, l_maxs = [556, 814, 1097, 1307]
+    white_noise_sigma: [1.0012e-03, 1.3444e-03, 1.6358e-03, 1.7096e-03]
   clustering:
-    # 24 Mpc/h transverse comoving scale -> arcmin
-    theta_fwhm: Null
-    # 1 % noise threshold, l_maxs = [178, 261, 340, 406]
-    white_noise_sigma: Null
+    # 20 Mpc/h transverse comoving scale -> arcmin
+    theta_fwhm: [81.4, 55.6, 42.6, 35.7]
+    # 1 % noise threshold, l_maxs = [213, 313, 408, 487]
+    white_noise_sigma: [6.1874e-01, 2.4366e-01, 1.7824e-01, 1.6407e-01]
 
 delta_loss:
   # regularization
