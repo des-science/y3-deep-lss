@@ -1,6 +1,6 @@
 # setup
 ```
-module load python/3.11
+module load python/3.9
 module show tensorflow/2.15.0
 conda create --prefix /global/common/software/des/athomsen/dlss15 --clone /global/common/software/nersc9/tensorflow/2.15.0
 
@@ -10,12 +10,13 @@ pip install --force-reinstall --no-cache-dir healpy
 pip install --force-reinstall --no-cache-dir tensorflow_probability==0.23 
 pip install --force-reinstall --no-cache-dir icecream
 pip install --force-reinstall --no-cache-dir scipy==1.8
+# install the local repos msfm, deep_lss, etc.
 ```
 
 # .bash_profile
 ```
-module load cpe/23.12
-module load python/3.11
+module load cpe/24.07
+module load python/3.9
 module load cudatoolkit/12.2
 module load cudnn/8.9.3_cuda12
 module load nccl/2.18.3-cu12
