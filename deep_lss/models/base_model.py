@@ -121,10 +121,10 @@ class BaseModel(object):
         self.xla = xla
 
         # set up the optimizer
-        if isinstance(self.optimizer, tf.keras.optimizers.Optimizer):
+        if isinstance(self.optimizer, (tf.keras.optimizers.Optimizer, tf.keras.optimizers.legacy.Optimizer)):
             pass
         elif self.optimizer is None:
-            self.optimizer = tf.keras.optimizers.Adam(**optimizer_kwargs)
+            self.optimizer = tf.keras.optimizers.legacy.Adam(**optimizer_kwargs)
         elif self.optimizer == "adam":
             self.optimizer = tf.keras.optimizers.Adam(**optimizer_kwargs)
         elif self.optimizer == "sgd":
@@ -223,7 +223,11 @@ class BaseModel(object):
             int: A regular integer.
         """
         if isinstance(self.strategy, tf.distribute.MirroredStrategy):
-            step = self.strategy.gather(self.train_step, axis=0)[0].numpy()
+            if self.strategy.num_replicas_in_sync == 1:
+                step = self.strategy.gather(self.train_step, axis=0).numpy()
+            else:
+                # step = self.strategy.gather(self.train_step, axis=0)[0].numpy()
+                step = int(self.strategy.experimental_local_results(self.train_step)[0].numpy())
         elif isinstance(self.strategy, tf.distribute.MultiWorkerMirroredStrategy):
             step = self.train_step.numpy()
         else:

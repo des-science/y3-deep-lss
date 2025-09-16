@@ -31,7 +31,7 @@ def get_optimizer(net_conf, loss_function="delta_loss", restore_checkpoint=False
         tf.keras.optimizers.Optimizer: The optimizer for the neural network.
     """
 
-    assert not restore_checkpoint, "Handling of models restored from checkpoints is not implemented yet."
+    # assert not restore_checkpoint, "Handling of models restored from checkpoints is not implemented yet."
     assert loss_function in ["delta", "likelihood", "mutual_info"]
     loss_function = loss_function + "_loss"
 
@@ -86,7 +86,7 @@ def get_optimizer(net_conf, loss_function="delta_loss", restore_checkpoint=False
     # set up optimizer
     optimizer_name = net_conf["optimization"]["optimizer"]
     if optimizer_name == "adam":
-        optimizer = tf.keras.optimizers.Adam(
+        optimizer = tf.keras.optimizers.legacy.Adam(
             learning_rate=learning_rate_schedule, **net_conf["optimization"][loss_function]["optimizer_kwargs"]
         )
         LOGGER.info(f"Using Adam optimizer")

@@ -294,20 +294,50 @@ def training():
     if args.wandb:
         group_name = distribute.get_wandb_group_name(strategy)
 
-        wandb_run = wandb.init(
-            project="y3-deep-lss",
-            dir=dir_out,
-            group=group_name,
-            job_type="training",
-            # make sure that wandb logs to the cloud
-            mode="online",
-            force=True,
-            # to be able to log within graph mode
-            sync_tensorboard=True,
-            # additional metadata
-            tags=args.wandb_tags,
-            notes=args.wandb_notes,
-        )
+        # check if there's an existing run ID to resume
+        wandb_id_file = os.path.join(dir_out, "wandb_run_id.txt")
+        existing_run_id = None
+
+        if os.path.exists(wandb_id_file) and args.restore_checkpoint:
+            with open(wandb_id_file, "r") as f:
+                existing_run_id = f.read().strip()
+            LOGGER.info(f"Found existing wandb run ID: {existing_run_id}")
+
+        if existing_run_id:
+            wandb_run = wandb.init(
+                id=existing_run_id,
+                resume="allow",
+                project="y3-deep-lss",
+                dir=dir_out,
+                group=group_name,
+                job_type="training",
+                # make sure that wandb logs to the cloud
+                mode="online",
+                force=True,
+                # to be able to log within graph mode
+                sync_tensorboard=True,
+                # additional metadata
+                tags=args.wandb_tags,
+                notes=args.wandb_notes,
+            )
+            LOGGER.info(f"Resumed wandb run: {existing_run_id}")
+        else:
+            wandb_run = wandb.init(
+                project="y3-deep-lss",
+                dir=dir_out,
+                group=group_name,
+                job_type="training",
+                mode="online",
+                force=True,
+                sync_tensorboard=True,
+                tags=args.wandb_tags,
+                notes=args.wandb_notes,
+            )
+            LOGGER.info(f"Created new wandb run: {wandb_run.id}")
+
+            # Save the run ID for future resumption
+            with open(wandb_id_file, "w") as f:
+                f.write(wandb_run.id)
 
         if args.wandb_sweep_id is not None:
             if isinstance(strategy, HorovodStrategy):

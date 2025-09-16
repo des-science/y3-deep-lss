@@ -7,6 +7,7 @@ Author: Arne Thomsen
 
 import horovod.tensorflow as hvd
 import os
+import tensorflow as tf
 
 from msfm.utils import logger
 
@@ -123,6 +124,45 @@ class HorovodStrategy:
         """
 
         return hvd.broadcast_object(object, root_rank)
+
+    def reduce(self, reduce_op, value, axis=None):
+        """Mimic tf.distribute.Strategy.reduce.
+
+        In this code base the reduction is only ever called with a scalar (or small tensor) produced
+        independently on every worker (i.e. the result of strategy.run). We therefore map the requested
+        ReduceOp to the corresponding Horovod allreduce operation.
+
+        Args:
+            reduce_op (tf.distribute.ReduceOp): Supported: MEAN, SUM.
+            value (tf.Tensor | Number): The local value to reduce across workers.
+            axis (int | tuple | None): Ignored here (Horovod reduces across workers only). Present for API
+                compatibility.
+
+        Returns:
+            tf.Tensor: The reduced value (averaged or summed over all Horovod ranks).
+        """
+
+        # Ensure tensor
+        if not isinstance(value, tf.Tensor):
+            value = tf.convert_to_tensor(value)
+
+        if reduce_op == tf.distribute.ReduceOp.SUM:
+            return hvd.allreduce(value, op=hvd.Sum)
+        elif reduce_op == tf.distribute.ReduceOp.MEAN:
+            # Horovod Average already divides by size
+            return hvd.allreduce(value, op=hvd.Average)
+        else:
+            raise NotImplementedError(f"HorovodStrategy.reduce only implements SUM and MEAN, got {reduce_op}")
+
+    def barrier(self):
+        """Synchronize all ranks so that non-chief workers wait until rank 0 has finished preceding work."""
+        try:
+            hvd.barrier()
+        except AttributeError:
+            # Fallback for old Horovod versions: dummy allreduce acts as a barrier.
+            import tensorflow as tf
+
+            _ = hvd.allreduce(tf.constant(0), name="barrier")
 
 
 def setup_horovod():
