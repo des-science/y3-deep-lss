@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --account=m5030_g
-#SBATCH --constraint=gpu
+#SBATCH --constraint=gpu&hbm40g
 #SBATCH --qos=regular
 #SBATCH --time=24:00:00
 #SBATCH --nodes=4
@@ -14,8 +14,8 @@
 STRATEGY="horovod"
 VERSION="v15"
 
-PROBE="lensing"
-# PROBE="clustering"
+# PROBE="lensing"
+PROBE="clustering"
 # PROBE="combined"
 
 # BIAS="nonlinear"
@@ -41,17 +41,29 @@ TRAIN_TFR="/pscratch/sd/a/athomsen/v11desy3/$VERSION/$SUBVERSION/tfrecords/$TRAI
 FIDU_EVAL_TFR="/pscratch/sd/a/athomsen/v11desy3/$VERSION/$SUBVERSION/tfrecords/fiducial/DESy3_fiducial_dmb_????.tfrecord"
 GRID_EVAL_TFR="/pscratch/sd/a/athomsen/v11desy3/$VERSION/$SUBVERSION/tfrecords/grid/DESy3_grid_dmb_????.tfrecord"
 
-srun --cpu-bind=threads --gpu-bind=single:1 --output="$OUTPUT" \
+srun --cpu-bind=threads --gpu-bind=single:1 --output=""$OUTPUT"_training.log" \
     python ../../deep_lss/apps/run_training.py \
     --dist_strategy="$STRATEGY" \
+    --dir_base="/pscratch/sd/a/athomsen/run_files/$VERSION/$SUBVERSION/$PROBE/$LOSS" \
+    --dir_model="multi/v1" \
     --loss_function="$LOSS" \
     --train_tfr_pattern=$TRAIN_TFR \
     --grid_vali_tfr_pattern=$TRAIN_TFR \
-    --dir_base="/pscratch/sd/a/athomsen/run_files/$VERSION/$SUBVERSION/$PROBE/$LOSS" \
-    --slurm_output=""$OUTPUT"_training" \
-    --dlss_config="configs/$VERSION/$PROBE/smoothing_fwhm/dlss_8mpc.yaml" \
-    --net_config="configs/$VERSION/deepsphere_default.yaml" \
+    --dlss_config="configs/$VERSION/fiducial/$PROBE/dlss.yaml" \
+    --net_config="configs/$VERSION/deepsphere_multi.yaml" \
     --msfm_config="/global/homes/a/athomsen/multiprobe-simulation-forward-model/configs/$VERSION/$SUBVERSION.yaml" \
+    --slurm_output=""$OUTPUT"_training" \
     --wandb \
-    --wandb_tags "$VERSION" "$PROBE" "$LOSS" "$STRATEGY" "$BIAS" "$SUBVERSION" "resnet" "CosmoGridV1.1" \
-    --wandb_notes="multi-node lensing start"
+    --wandb_tags "$VERSION" "$PROBE" "$LOSS" "$STRATEGY" "$BIAS" "$SUBVERSION" "resnet" \
+    --wandb_notes="multi-node start"
+
+
+python ../../deep_lss/apps/run_training.py \
+    --dir_base="/pscratch/sd/a/athomsen/run_files/$VERSION/$SUBVERSION/$PROBE/$LOSS" \
+    --dir_model="debug/v1" \
+    --loss_function="$LOSS" \
+    --train_tfr_pattern=$TRAIN_TFR \
+    --grid_vali_tfr_pattern=$TRAIN_TFR \
+    --dlss_config="configs/$VERSION/fiducial/$PROBE/dlss.yaml" \
+    --net_config="configs/$VERSION/deepsphere_multi.yaml" \
+    --msfm_config="/global/homes/a/athomsen/multiprobe-simulation-forward-model/configs/$VERSION/$SUBVERSION.yaml"

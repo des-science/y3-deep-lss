@@ -41,7 +41,7 @@ optimization:
     warmup_init_learning_rate: 1.0e-5
     decay_alpha: 0.0
   mutual_info_loss:
-    learning_rate: 1.0e-4
+    learning_rate: 4.0e-4
     optimizer_kwargs:
       beta_1: 0.9
       beta_2: 0.999
