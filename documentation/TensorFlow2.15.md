@@ -10,7 +10,7 @@ pip install --force-reinstall --no-cache-dir healpy
 pip install --force-reinstall --no-cache-dir tensorflow_probability==0.23 
 pip install --force-reinstall --no-cache-dir icecream
 pip install --force-reinstall --no-cache-dir scipy==1.8
-# install the local repos msfm, deep_lss, etc.
+# install the local repos msfm, deep_lss, etc. via `pip install -e .`
 ```
 
 # .bash_profile
@@ -22,4 +22,37 @@ module load cudnn/8.9.3_cuda12
 module load nccl/2.18.3-cu12
 conda activate dlss15
 export XLA_FLAGS=--xla_gpu_cuda_data_dir=/opt/nvidia/hpc_sdk/Linux_x86_64/23.9/cuda/12.2
+```
+
+# jupyter kernel
+- `~/.local/share/jupyter/kernels/dlss15`
+
+### `kernel-helper.sh`
+```
+#! /bin/bash
+module load cpe/24.07
+module load python/3.9
+module load cudatoolkit/12.2
+module load cudnn/8.9.3_cuda12
+module load nccl/2.18.3-cu12
+export XLA_FLAGS=--xla_gpu_cuda_data_dir=/opt/nvidia/hpc_sdk/Linux_x86_64/23.9/cuda/12.2
+exec "$@"
+```
+
+### `kernel.json`
+```
+ "argv": [
+  "{resource_dir}/kernel-helper.sh",
+  "/global/common/software/des/athomsen/dlss15/bin/python",
+  "-m",
+  "ipykernel_launcher",
+  "-f",
+  "{connection_file}"
+ ],
+ "display_name": "dlss15",
+ "language": "python",
+ "metadata": {
+  "debugger": true
+ }
+}
 ```
