@@ -257,7 +257,9 @@ if __name__ == "__main__":
     if args.evaluate_all_checkpoints:
         LOGGER.warning(f"Evaluating all checkpoints")
 
-        checkpoints = model.checkpoint_manager.checkpoints
+        # checkpoints = model.checkpoint_manager.checkpoints
+        # TODO
+        checkpoints = model.checkpoint_manager.checkpoints[10:]
         for checkpoint in checkpoints:
             # model.checkpoint_manager.checkpoint.restore(checkpoint)
             model.restore_model_from_checkpoint_dir(checkpoint)
