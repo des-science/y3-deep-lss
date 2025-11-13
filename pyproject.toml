@@ -1,0 +1,74 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "deep_lss"
+version = "0.1.0"
+description = "Neural networks for informative summary statistics from DES Y3-like weak lensing and galaxy clustering maps"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+authors = [
+    {name = "Arne Thomsen", email = "athomsen@phys.ethz.ch"}
+]
+keywords = ["cosmology", "deep-learning", "neural-networks", "weak-lensing", "galaxy-clustering", "summary-statistics", "mutual-information"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Astronomy",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+]
+
+dependencies = [
+    "numpy",
+    "scipy",
+    "healpy",
+    "scikit-learn",
+    "h5py",
+    "pyyaml",
+    "wandb",
+]
+
+[project.optional-dependencies]
+# Only for environments where TensorFlow is not pre-installed
+tf = [
+    "tensorflow>=2.0",
+    "tensorflow-probability",
+]
+
+# Development tools
+dev = [
+    "pytest",
+    "pytest-cov",
+    "black",
+    "flake8",
+    "ipython",
+    "jupyter",
+    "matplotlib",
+]
+
+[project.urls]
+Repository = "https://github.com/des-science/y3-deep-lss"
+Documentation = "https://arxiv.org/abs/2511.04681"
+
+[tool.setuptools]
+packages = ["deep_lss"]
+
+[tool.setuptools.package-data]
+deep_lss = ["*.yaml", "*.yml"]
+
+[tool.black]
+line-length = 119
+target-version = ['py38', 'py39', 'py310', 'py311']
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
+python_classes = "Test*"
+python_functions = "test_*"
