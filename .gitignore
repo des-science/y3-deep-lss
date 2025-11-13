@@ -19,6 +19,7 @@ logs/
 *.npy
 *.png
 *.pt
+!dev/figures/*.png
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
