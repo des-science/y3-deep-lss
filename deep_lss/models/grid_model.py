@@ -4,9 +4,9 @@
 Created January 2024
 Author: Arne Thomsen
 
-To train over the grid part of the CosmoGrid with the 
+To train over the grid part of the CosmoGrid with the
     - Mean Squared Error (MSE)
-    - Likelihood loss (see https://arxiv.org/abs/1906.03156) 
+    - Likelihood loss (see https://arxiv.org/abs/1906.03156)
     - mutual information loss (see Section 7.3 in https://arxiv.org/pdf/2009.08459).
 """
 
@@ -128,6 +128,8 @@ class GridLossModel(BaseModel):
         clip_by_norm=None,
         clip_by_global_norm=10.0,
         l2_norm_weight=None,
+        z_weight=None,
+        z_type=None,
         # misc
         img_summary=False,
         xla=False,
@@ -155,6 +157,10 @@ class GridLossModel(BaseModel):
             clip_by_global_norm (tf.tensor, optional): Clip the gradients by global norm. Defaults to 10.0.
             l2_norm_weight (float, optional): Weight for the L2 norm of the trainable weights. Defaults to None
                 (no regularization).
+            z_weight (float, optional): Weight for the regularization of features z in the penultimate layer.
+                Defaults to None (no regularization).
+            z_type (str, optional): Type of regularization for z features, either "covariance" (VICReg variance and
+                covariance terms) or "mmd" (Maximum Mean Discrepancy penalty for standard Gaussian). Defaults to None.
             img_summary (bool, optional): Whether to write image summaries of the covariance matrix. Defaults to False.
             xla (bool, optional): Whether to enable XLA just in time compilation. Defaults to False.
 
@@ -308,6 +314,8 @@ class GridLossModel(BaseModel):
                     clip_by_norm=clip_by_norm,
                     clip_by_global_norm=clip_by_global_norm,
                     l2_norm_weight=l2_norm_weight,
+                    z_weight=z_weight,
+                    z_type=z_type,
                 )
 
                 return loss
@@ -329,6 +337,8 @@ class GridLossModel(BaseModel):
                     clip_by_norm=clip_by_norm,
                     clip_by_global_norm=clip_by_global_norm,
                     l2_norm_weight=l2_norm_weight,
+                    z_weight=z_weight,
+                    z_type=z_type,
                 )
 
                 return global_loss

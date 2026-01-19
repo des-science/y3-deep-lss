@@ -13,7 +13,14 @@ LOGGER = logger.get_logger(__file__)
 
 class MultiLayerPerceptron(tf.keras.Model):
     def __init__(
-        self, output_size, num_hidden_units, num_layers, dropout_rate=0.0, normalization="layer", activation="relu"
+        self,
+        output_size,
+        num_hidden_units,
+        num_layers,
+        num_penultimate=None,
+        dropout_rate=0.0,
+        normalization="layer",
+        activation="relu",
     ):
         super(MultiLayerPerceptron, self).__init__()
         if normalization == "layer":
@@ -28,6 +35,12 @@ class MultiLayerPerceptron(tf.keras.Model):
             self.hidden_layers.append(tf.keras.layers.Dense(num_hidden_units, activation=activation))
             if dropout_rate > 0:
                 self.hidden_layers.append(tf.keras.layers.Dropout(dropout_rate))
+
+        if num_penultimate is not None:
+            LOGGER.info("Including a penultimate layer in the MLP")
+            # self.hidden_layers.append(tf.keras.layers.Dense(num_penultimate, activation=activation))
+            self.hidden_layers.append(tf.keras.layers.Dense(num_penultimate))
+
         self.output_layer = tf.keras.layers.Dense(output_size)
 
     def call(self, inputs):

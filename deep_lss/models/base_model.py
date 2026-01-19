@@ -408,6 +408,94 @@ class BaseModel(object):
         hvd.broadcast_variables(self.network.weights, root_rank=0)
         hvd.broadcast_variables(self.optimizer.variables(), root_rank=0)
 
+    def _compute_vicreg_loss(self, z):
+        """Compute VICReg variance and covariance loss terms for standardizing features.
+
+        This implements the variance and covariance terms from VICReg https://arxiv.org/abs/2105.04906 to encourage
+        the features to have unit variance and zero covariance between dimensions.
+        In the paper, they penalize a hinge loss to make sure tha variance is greater than one. Here, penalize any
+        deviations from one to standardize the features.
+
+        Args:
+            z (tf.tensor): Features from the penultimate layer, shape (batch_size, feature_dim)
+
+        Returns:
+            tf.tensor: Scalar loss combining variance and covariance regularization
+        """
+        batch_size = tf.cast(tf.shape(z)[0], tf.float32)
+        feature_dim = tf.cast(tf.shape(z)[1], tf.float32)
+
+        z_centered = z - tf.reduce_mean(z, axis=0, keepdims=True)
+
+        # variance loss: penalizes deviations from std = 1 (standardization)
+        std = tf.sqrt(tf.reduce_mean(tf.square(z_centered), axis=0) + 1e-4)
+        var_loss = tf.reduce_mean(tf.square(std - 1.0))
+
+        # covariance loss: encourages off-diagonal elements to be 0
+        cov_matrix = tf.matmul(z_centered, z_centered, transpose_a=True) / (batch_size - 1)
+        cov_loss = tf.reduce_sum(tf.square(cov_matrix)) - tf.reduce_sum(tf.square(tf.linalg.diag_part(cov_matrix)))
+        # normalize by number of off-diagonal elements to keep scale consistent with var_loss
+        cov_loss = cov_loss / (feature_dim**2 - feature_dim)
+
+        return var_loss + cov_loss
+
+    def _compute_mmd_loss(self, z, interpretable=False):
+        """Compute Maximum Mean Discrepancy loss between features and standard Gaussian.
+
+        This penalizes deviations from a standard Gaussian distribution N(0, I) using the MMD with RBF kernel.
+        Uses dimension-aware bandwidths that scale with sqrt(feature_dim) to account for the typical distances
+        in high-dimensional Gaussian distributions.
+
+        Args:
+            z (tf.tensor): Features from the penultimate layer, shape (batch_size, feature_dim)
+
+        Returns:
+            tf.tensor: Scalar MMD loss
+        """
+        batch_size = tf.shape(z)[0]
+        feature_dim = tf.shape(z)[1]
+
+        # sample from standard Gaussian with the same shape
+        z_gaussian = tf.random.normal(shape=tf.shape(z))
+
+        # dimension-aware bandwidth scaling: typical distances in d-dimensional Gaussian scale as sqrt(d)
+        dim_scale = tf.sqrt(tf.cast(feature_dim, tf.float32))
+
+        def rbf_kernel(x, y):
+            """Compute RBF kernel matrix with dimension-aware bandwidths."""
+            xx = tf.reduce_sum(tf.square(x), axis=1, keepdims=True)
+            yy = tf.reduce_sum(tf.square(y), axis=1, keepdims=True)
+            xy = tf.matmul(x, y, transpose_b=True)
+            distances = xx - 2 * xy + tf.transpose(yy)
+            # for numerical stability
+            distances = tf.nn.relu(distances)
+
+            # scale bandwidths by sqrt(feature_dim)
+            bandwidths = [0.1 * dim_scale, 1.0 * dim_scale, 10.0 * dim_scale]
+
+            kernel_matrix = tf.zeros_like(distances)
+            for bandwidth in bandwidths:
+                kernel_matrix += tf.exp(-distances / (2 * bandwidth**2))
+            return kernel_matrix / len(bandwidths)
+
+        # compute kernel matrices
+        k_zz = rbf_kernel(z, z)
+        k_zg = rbf_kernel(z, z_gaussian)
+        if interpretable:
+            k_gg = rbf_kernel(z_gaussian, z_gaussian)
+
+        # compute MMD^2
+        batch_size_f = tf.cast(batch_size, tf.float32)
+        mmd_loss = tf.reduce_sum(k_zz) / (batch_size_f * batch_size_f) - 2 * tf.reduce_sum(k_zg) / (
+            batch_size_f * batch_size_f
+        )
+
+        # with this term, the minimum loss is zero. Otherwise, it can become negative
+        if interpretable:
+            mmd_loss = mmd_loss + tf.reduce_sum(k_gg) / (batch_size_f * batch_size_f)
+
+        return mmd_loss
+
     def train_step(
         self,
         input_tensor,
@@ -417,6 +505,8 @@ class BaseModel(object):
         clip_by_norm=None,
         clip_by_global_norm=None,
         l2_norm_weight=None,
+        z_weight=None,
+        z_type=None,
     ):
         # non distributed
         if self.strategy is None:
@@ -428,6 +518,8 @@ class BaseModel(object):
                 clip_by_norm=clip_by_norm,
                 clip_by_global_norm=clip_by_global_norm,
                 l2_norm_weight=l2_norm_weight,
+                z_weight=z_weight,
+                z_type=z_type,
             )
 
         # distributed
@@ -440,6 +532,8 @@ class BaseModel(object):
                 clip_by_norm=clip_by_norm,
                 clip_by_global_norm=clip_by_global_norm,
                 l2_norm_weight=l2_norm_weight,
+                z_weight=z_weight,
+                z_type=z_type,
             )
 
         else:
@@ -454,6 +548,8 @@ class BaseModel(object):
         clip_by_norm=None,
         clip_by_global_norm=None,
         l2_norm_weight=None,
+        z_weight=None,
+        z_type=None,
     ):
         """A base train step given a loss funtion and an input tensor. The method evaluates the network and performs a
         single gradient decent step. Note that it should be wrapped in a tf.function. If multiple clippings are
@@ -474,6 +570,10 @@ class BaseModel(object):
                 clipping).
             l2_norm_weight (float, optional): Weight for the L2 norm of the trainable weights. Defaults to None
                 (no regularization).
+            z_weight (float, optional): Weight for the regularization of features z in the penultimate layer.
+                Defaults to None (no regularization).
+            z_type (str, optional): Type of regularization for z features, either "cov" (VICReg variance and
+                covariance terms) or "mmd" (Maximum Mean Discrepancy penalty for standard Gaussian). Defaults to None.
         """
         LOGGER.warning("Performing a base_train_step in python instead of a tf.function")
 
@@ -496,6 +596,23 @@ class BaseModel(object):
                 self.write_summary("l2_loss", l2_loss, skip=self.xla)
 
                 loss = loss + l2_norm_weight * l2_loss
+
+            # handle the z regularization
+            if z_weight is not None:
+                z_features = input_tensor
+                for layer in self.network.layers[:-1]:
+                    z_features = layer(z_features, training=True)
+
+                if z_type == "cov":
+                    z_loss = self._compute_vicreg_loss(z_features)
+                    self.write_summary("z_cov_loss", z_loss, skip=self.xla)
+                elif z_type == "mmd":
+                    z_loss = self._compute_mmd_loss(z_features)
+                    self.write_summary("z_mmd_loss", z_loss, skip=self.xla)
+                else:
+                    raise ValueError(f"Invalid z_type {z_type}. Must be 'cov' or 'mmd'.")
+
+                loss = loss + z_weight * z_loss
 
             # mixed precision
             if isinstance(self.optimizer, tf.keras.mixed_precision.LossScaleOptimizer):
@@ -549,6 +666,8 @@ class BaseModel(object):
         clip_by_norm=None,
         clip_by_global_norm=None,
         l2_norm_weight=None,
+        z_weight=None,
+        z_type=None,
     ):
         """A distributed train step to be used in conjunction with a tf.distribute.Strategy like in
         https://www.tensorflow.org/tutorials/distribute/custom_training.
@@ -576,6 +695,10 @@ class BaseModel(object):
                 clipping).
             l2_norm_weight (float, optional): Weight for the L2 norm of the trainable weights. Defaults to None
                 (no regularization).
+            z_weight (float, optional): Weight for the regularization of features z in the penultimate layer.
+                Defaults to None (no regularization).
+            z_type (str, optional): Type of regularization for z features, either "cov" (VICReg variance and
+                covariance terms) or "mmd" (Maximum Mean Discrepancy penalty for standard Gaussian). Defaults to None.
         """
         # the means here are taken over the local batches
         local_losses = self.strategy.run(
@@ -588,6 +711,8 @@ class BaseModel(object):
                 clip_by_norm,
                 clip_by_global_norm,
                 l2_norm_weight,
+                z_weight,
+                z_type,
             ),
         )
 
