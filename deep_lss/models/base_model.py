@@ -442,12 +442,16 @@ class BaseModel(object):
     def _compute_mmd_loss(self, z, interpretable=False):
         """Compute Maximum Mean Discrepancy loss between features and standard Gaussian.
 
-        This penalizes deviations from a standard Gaussian distribution N(0, I) using the MMD with RBF kernel.
+        This penalizes deviations from a standard Gaussian distribution N(0, I) using the biased MMD estimator
+        with RBF kernel. The biased estimator includes diagonal terms and is preferred for numerical stability
+        (always non-negative) while being asymptotically equivalent to the unbiased version.
+
         Uses dimension-aware bandwidths that scale with sqrt(feature_dim) to account for the typical distances
         in high-dimensional Gaussian distributions.
 
         Args:
             z (tf.tensor): Features from the penultimate layer, shape (batch_size, feature_dim)
+            interpretable (bool): If True, includes the k_gg term so minimum loss is exactly zero
 
         Returns:
             tf.tensor: Scalar MMD loss
@@ -507,6 +511,7 @@ class BaseModel(object):
         l2_norm_weight=None,
         z_weight=None,
         z_type=None,
+        z_layer="last",
     ):
         # non distributed
         if self.strategy is None:
@@ -520,6 +525,7 @@ class BaseModel(object):
                 l2_norm_weight=l2_norm_weight,
                 z_weight=z_weight,
                 z_type=z_type,
+                z_layer=z_layer,
             )
 
         # distributed
@@ -534,6 +540,7 @@ class BaseModel(object):
                 l2_norm_weight=l2_norm_weight,
                 z_weight=z_weight,
                 z_type=z_type,
+                z_layer=z_layer,
             )
 
         else:
@@ -550,6 +557,7 @@ class BaseModel(object):
         l2_norm_weight=None,
         z_weight=None,
         z_type=None,
+        z_layer="last",
     ):
         """A base train step given a loss funtion and an input tensor. The method evaluates the network and performs a
         single gradient decent step. Note that it should be wrapped in a tf.function. If multiple clippings are
@@ -574,6 +582,8 @@ class BaseModel(object):
                 Defaults to None (no regularization).
             z_type (str, optional): Type of regularization for z features, either "cov" (VICReg variance and
                 covariance terms) or "mmd" (Maximum Mean Discrepancy penalty for standard Gaussian). Defaults to None.
+            z_layer (str, optional): Layer to compute z features for regularization. "penultimate" or "last".
+                Defaults to "last".
         """
         LOGGER.warning("Performing a base_train_step in python instead of a tf.function")
 
@@ -599,9 +609,14 @@ class BaseModel(object):
 
             # handle the z regularization
             if z_weight is not None:
-                z_features = input_tensor
-                for layer in self.network.layers[:-1]:
-                    z_features = layer(z_features, training=True)
+                if z_layer == "penultimate":
+                    z_features = input_tensor
+                    for layer in self.network.layers[:-1]:
+                        z_features = layer(z_features, training=True)
+                elif z_layer == "last":
+                    z_features = predictions
+                else:
+                    raise ValueError(f"Invalid z_layer '{z_layer}', must be 'penultimate' or 'last'")
 
                 if z_type == "cov":
                     z_loss = self._compute_vicreg_loss(z_features)
@@ -668,6 +683,7 @@ class BaseModel(object):
         l2_norm_weight=None,
         z_weight=None,
         z_type=None,
+        z_layer="last",
     ):
         """A distributed train step to be used in conjunction with a tf.distribute.Strategy like in
         https://www.tensorflow.org/tutorials/distribute/custom_training.
@@ -699,6 +715,8 @@ class BaseModel(object):
                 Defaults to None (no regularization).
             z_type (str, optional): Type of regularization for z features, either "cov" (VICReg variance and
                 covariance terms) or "mmd" (Maximum Mean Discrepancy penalty for standard Gaussian). Defaults to None.
+            z_layer (str, optional): Layer to compute z features for regularization. "penultimate" or "last".
+                Defaults to "last".
         """
         # the means here are taken over the local batches
         local_losses = self.strategy.run(
@@ -713,6 +731,7 @@ class BaseModel(object):
                 l2_norm_weight,
                 z_weight,
                 z_type,
+                z_layer,
             ),
         )
 

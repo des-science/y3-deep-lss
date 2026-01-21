@@ -130,6 +130,7 @@ class GridLossModel(BaseModel):
         l2_norm_weight=None,
         z_weight=None,
         z_type=None,
+        z_layer="last",
         # misc
         img_summary=False,
         xla=False,
@@ -161,6 +162,8 @@ class GridLossModel(BaseModel):
                 Defaults to None (no regularization).
             z_type (str, optional): Type of regularization for z features, either "covariance" (VICReg variance and
                 covariance terms) or "mmd" (Maximum Mean Discrepancy penalty for standard Gaussian). Defaults to None.
+            z_layer (str, optional): Layer to compute z features for regularization. "penultimate" or "last".
+                Defaults to "last".
             img_summary (bool, optional): Whether to write image summaries of the covariance matrix. Defaults to False.
             xla (bool, optional): Whether to enable XLA just in time compilation. Defaults to False.
 
@@ -316,6 +319,7 @@ class GridLossModel(BaseModel):
                     l2_norm_weight=l2_norm_weight,
                     z_weight=z_weight,
                     z_type=z_type,
+                    z_layer=z_layer,
                 )
 
                 return loss
@@ -339,6 +343,7 @@ class GridLossModel(BaseModel):
                     l2_norm_weight=l2_norm_weight,
                     z_weight=z_weight,
                     z_type=z_type,
+                    z_layer=z_layer,
                 )
 
                 return global_loss
