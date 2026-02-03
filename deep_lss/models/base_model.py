@@ -44,6 +44,7 @@ class BaseModel(object):
         init_step=0,
         strategy=None,
         xla=False,
+        z_bank_size=None,
         # DeepSphere
         n_side=None,
         indices=None,
@@ -70,6 +71,8 @@ class BaseModel(object):
             xla (bool, optional): Whether to enable XLA just in time compilation. Note that this is incompatible with
                 the DeepSphere graph convolutional layers, as they contain unsupported
                 SparseDenseMatirxMultiplications. Defaults to False.
+            z_bank_size (int, optional): Size of the memory bank for the z regularization. Defaults to None, then no
+                memory bank is used.
             strategy (Union[tf.distribute.Strategy, deep_lss.utils.distribute.HorovodStrategy], optional):
                 The distribution strategy the model was created within. Defaults to None, then training is local.
             n_side (int): The healpy n_side of the input.
@@ -119,6 +122,9 @@ class BaseModel(object):
         self.init_step = init_step
         self.strategy = strategy
         self.xla = xla
+        self.z_bank_size = z_bank_size
+        self.z_bank = None
+        self.z_bank_index = None
 
         # set up the optimizer
         if isinstance(self.optimizer, (tf.keras.optimizers.Optimizer, tf.keras.optimizers.legacy.Optimizer)):
@@ -500,6 +506,81 @@ class BaseModel(object):
 
         return mmd_loss
 
+    def _compute_sw_loss(self, z, num_projections=None):
+        """Compute Sliced Wasserstein distance between features and standard Gaussian.
+
+        Projects the distribution onto random 1D lines where Wasserstein distance has a closed-form
+        solution via sorting.
+
+        Args:
+            z (tf.tensor): Features from the penultimate layer, shape (batch_size, feature_dim)
+            num_projections (int): Number of random projection lines. If None, defaults to max(512, feature_dim).
+
+        Returns:
+            tf.tensor: Scalar SW loss (squared)
+        """
+        feature_dim = tf.shape(z)[1]
+
+        if num_projections is None:
+            num_projections = tf.maximum(512, feature_dim)
+
+        z_gaussian = tf.random.normal(shape=tf.shape(z))
+
+        # generate random projection vectors on the unit sphere
+        projections = tf.random.normal(shape=(feature_dim, num_projections))
+        projections = tf.math.l2_normalize(projections, axis=0)
+
+        # project both distributions
+        projected_z = tf.matmul(z, projections)
+        projected_gaussian = tf.matmul(z_gaussian, projections)
+
+        # sort and compute quantile matching loss
+        sorted_z = tf.sort(projected_z, axis=0)
+        sorted_gaussian = tf.sort(projected_gaussian, axis=0)
+
+        sw_loss = tf.reduce_mean(tf.square(sorted_z - sorted_gaussian))
+
+        return sw_loss
+
+    def _update_and_get_z_bank(self, z):
+        """Updates the memory bank with the current batch features and returns the concatenated features.
+
+        Args:
+            z (tf.tensor): Features from the current batch, shape (batch_size, feature_dim)
+        Returns:
+            tuple: (z_loss_input, z_scale) where z_loss_input is the concatenation of z_features and z_bank,
+                   and z_scale is the scaling factor for the loss.
+        """
+        if self.z_bank_size is None:
+            return z, 1.0
+
+        if self.z_bank is None:
+            LOGGER.info(f"Initializing z memory bank with size {self.z_bank_size}")
+            feature_dim = z.shape[-1]
+            self.z_bank = tf.Variable(
+                tf.random.normal((self.z_bank_size, feature_dim), dtype=z.dtype),
+                trainable=False,
+                name="z_bank",
+            )
+            self.z_bank_index = tf.Variable(0, trainable=False, name="z_bank_index", dtype=tf.int64)
+
+        # update the bank
+        batch_size = tf.shape(z)[0]
+        indices = (self.z_bank_index + tf.range(batch_size, dtype=tf.int64)) % self.z_bank_size
+        update_indices = tf.expand_dims(indices, 1)
+        self.z_bank.scatter_nd_update(update_indices, z)
+        self.z_bank_index.assign((self.z_bank_index + tf.cast(batch_size, tf.int64)) % self.z_bank_size)
+
+        # concatenate the bank to the features
+        z_loss_input = tf.concat([z, self.z_bank.value()], axis=0)
+
+        # scaling factor to compensate for diluted gradients
+        z_scale = (tf.cast(batch_size, tf.float32) + tf.cast(self.z_bank_size, tf.float32)) / tf.cast(
+            batch_size, tf.float32
+        )
+
+        return z_loss_input, z_scale
+
     def train_step(
         self,
         input_tensor,
@@ -618,16 +699,24 @@ class BaseModel(object):
                 else:
                     raise ValueError(f"Invalid z_layer '{z_layer}', must be 'penultimate' or 'last'")
 
-                if z_type == "cov":
-                    z_loss = self._compute_vicreg_loss(z_features)
-                    self.write_summary("z_cov_loss", z_loss, skip=self.xla)
-                elif z_type == "mmd":
-                    z_loss = self._compute_mmd_loss(z_features)
-                    self.write_summary("z_mmd_loss", z_loss, skip=self.xla)
-                else:
-                    raise ValueError(f"Invalid z_type {z_type}. Must be 'cov' or 'mmd'.")
+                # memory bank
+                z_input, z_scale = self._update_and_get_z_bank(z_features)
 
-                loss = loss + z_weight * z_loss
+                if z_type == "cov":
+                    LOGGER.info("Using VICReg covariance loss for z regularization")
+                    z_loss = self._compute_vicreg_loss(z_input)
+                elif z_type == "mmd":
+                    LOGGER.info("Using MMD loss for z regularization")
+                    z_loss = self._compute_mmd_loss(z_input)
+                elif z_type == "sw":
+                    LOGGER.info("Using Sliced Wasserstein loss for z regularization")
+                    z_loss = self._compute_sw_loss(z_input)
+                else:
+                    raise ValueError(f"Invalid z_type {z_type}. Must be 'cov', 'mmd', or 'sw'.")
+
+                self.write_summary(f"z_{z_type}_loss", z_loss, skip=self.xla)
+
+                loss = loss + z_weight * z_scale * z_loss
 
             # mixed precision
             if isinstance(self.optimizer, tf.keras.mixed_precision.LossScaleOptimizer):

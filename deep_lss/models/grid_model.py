@@ -51,6 +51,7 @@ class GridLossModel(BaseModel):
         restore_checkpoint=False,
         max_checkpoints=3,
         init_step=0,
+        z_bank_size=None,
         strategy=None,
         xla=False,
     ):
@@ -80,6 +81,8 @@ class GridLossModel(BaseModel):
                 Defaults to False.
             max_checkpoints (int, optional): Maximum number of checkpoints to keep. Defaults to 3.
             init_step (int, optional): Initial step. Defaults to 0.
+            z_bank_size (int, optional): Size of the memory bank for the z regularization. Defaults to None, then no
+                memory bank is used.
             strategy (Union[tf.distribute.Strategy, deep_lss.utils.distribute.HorovodStrategy], optional):
                 The distribution strategy the model was created within. Defaults to None, then training is local.
             xla (bool, optional): Whether to enable XLA just in time compilation. Note that this is incompatible with
@@ -106,6 +109,7 @@ class GridLossModel(BaseModel):
             n_neighbors=n_neighbors,
             max_batch_size=max_batch_size,
             initial_Fin=initial_Fin,
+            z_bank_size=z_bank_size,
         )
         LOGGER.info(f"Initialized the GridLossModel")
 

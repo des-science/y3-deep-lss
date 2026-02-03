@@ -38,13 +38,12 @@ class MultiLayerPerceptron(tf.keras.Model):
 
         if num_penultimate is not None:
             LOGGER.info("Including a penultimate layer in the MLP")
-            # self.hidden_layers.append(tf.keras.layers.Dense(num_penultimate, activation=activation))
-            self.hidden_layers.append(tf.keras.layers.Dense(num_penultimate))
+            self.hidden_layers.append(tf.keras.layers.Dense(num_penultimate, name="penultimate"))
 
-        self.output_layer = tf.keras.layers.Dense(output_size)
+        self.output_layer = tf.keras.layers.Dense(output_size, name="output")
 
-    def call(self, inputs):
+    def call(self, inputs, training=False):
         x = self.norm_layer(inputs)
         for layer in self.hidden_layers:
-            x = layer(x)
+            x = layer(x, training=training)
         return self.output_layer(x)
