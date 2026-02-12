@@ -506,7 +506,7 @@ class BaseModel(object):
 
         return mmd_loss
 
-    def _compute_sw_loss(self, z, num_projections=None):
+    def _compute_sw_loss(self, z, num_projections=None, method="analytical"):
         """Compute Sliced Wasserstein distance between features and standard Gaussian.
 
         Projects the distribution onto random 1D lines where Wasserstein distance has a closed-form
@@ -515,6 +515,8 @@ class BaseModel(object):
         Args:
             z (tf.tensor): Features from the penultimate layer, shape (batch_size, feature_dim)
             num_projections (int): Number of random projection lines. If None, defaults to max(512, feature_dim).
+            method (str): Method to estimate the target distribution. "sample" (random Gaussian sampling) or
+                "analytical" (theoretical quantiles). Defaults to "analytical".
 
         Returns:
             tf.tensor: Scalar SW loss (squared)
@@ -524,20 +526,29 @@ class BaseModel(object):
         if num_projections is None:
             num_projections = tf.maximum(512, feature_dim)
 
-        z_gaussian = tf.random.normal(shape=tf.shape(z))
-
         # generate random projection vectors on the unit sphere
         projections = tf.random.normal(shape=(feature_dim, num_projections))
         projections = tf.math.l2_normalize(projections, axis=0)
 
-        # project both distributions
+        # project features
         projected_z = tf.matmul(z, projections)
-        projected_gaussian = tf.matmul(z_gaussian, projections)
-
-        # sort and compute quantile matching loss
         sorted_z = tf.sort(projected_z, axis=0)
-        sorted_gaussian = tf.sort(projected_gaussian, axis=0)
 
+        if method == "analytical":
+            batch_size = tf.shape(z)[0]
+            probs = (tf.cast(tf.range(batch_size), z.dtype) + 0.5) / tf.cast(batch_size, z.dtype)
+            expected_quantiles = tf.math.ndtri(probs)
+            sorted_gaussian = tf.expand_dims(expected_quantiles, -1)  # Shape (Batch, 1)
+
+        elif method == "sample":
+            z_gaussian = tf.random.normal(shape=tf.shape(z))
+            projected_gaussian = tf.matmul(z_gaussian, projections)
+            sorted_gaussian = tf.sort(projected_gaussian, axis=0)
+
+        else:
+            raise ValueError(f"Invalid method {method}. Must be 'sample' or 'analytical'.")
+
+        # (batch, Projections) - (batch, 1) or (batch, Projections)
         sw_loss = tf.reduce_mean(tf.square(sorted_z - sorted_gaussian))
 
         return sw_loss
