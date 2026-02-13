@@ -12,11 +12,11 @@ This repository contains the pipeline to train neural networks that learn inform
 
 Requires Python >= 3.8, TensorFlow >= 2.0, TensorFlow-Probability, and Horovod.
 
-**Dependencies:**
+**Main dependencies:**
 - [`multiprobe-simulation-forward-model`](https://github.com/des-science/multiprobe-simulation-forward-model) for data loading and utilities
 - [`deepsphere-cosmo-tf2`](https://github.com/deepsphere/deepsphere-cosmo-tf2) for graph convolutional neural networks on the pixelized sphere
 
-**Step 1: Install companion packages from GitHub**
+**Step 1: Install dependencies from GitHub**
 ```bash
 # Install multiprobe-simulation-forward-model (data loading)
 pip install git+https://github.com/des-science/multiprobe-simulation-forward-model.git
@@ -42,16 +42,16 @@ Use the first option when TensorFlow and Horovod are available via system module
 ## Repository Structure
 
 ### `deep_lss`
-- `deep_lss/apps` training and evaluation scripts to be submitted via `slurm`. 
-- `deep_lss/models` loss function-specific model classes. 
-- `deep_lss/nets` neural network implementations.
-- `deep_lss/utils` loss function implementations, multi-GPU distribution and miscellaneous utilities.
+- `deep_lss/apps` - Training and evaluation scripts for `slurm` submission
+- `deep_lss/models` - Loss function-specific model classes
+- `deep_lss/nets` - Neural network implementations
+- `deep_lss/utils` - Loss functions, multi-GPU distribution, and helper functions
 
 ### `configs`
-Configuration files specifying the network, loss, and optimizer hyperparameters, and analysis choices like the cosmological probe(s) to include, parameters to be constrained, and smoothing scales.
+Configuration files for network architecture, loss function, and optimizer hyperparameters, and analysis choices including the selected cosmological probe(s), parameters to be constrained, and smoothing scales.
 
 ### `submissions`
-Submission bash scripts for correct HPC `slurm` scheduling of the training jobs.
+Bash scripts for HPC `slurm` job scheduling.
 
 ## Companion Repositories
 - Forward modeling: [`multiprobe-simulation-forward-model`](https://github.com/des-science/multiprobe-simulation-forward-model)
