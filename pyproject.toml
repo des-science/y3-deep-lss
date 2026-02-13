@@ -33,13 +33,15 @@ dependencies = [
     "h5py",
     "pyyaml",
     "wandb",
+    "icecream",
 ]
 
 [project.optional-dependencies]
-# Only for environments where TensorFlow is not pre-installed
+# Only for environments where TensorFlow/Horovod are not pre-installed
 tf = [
     "tensorflow>=2.0",
     "tensorflow-probability",
+    "horovod[tensorflow]",
 ]
 
 # Development tools

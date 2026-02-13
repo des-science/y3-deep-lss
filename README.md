@@ -10,27 +10,34 @@ This repository contains the pipeline to train neural networks that learn inform
 
 ## Installation
 
-### Requirements
-- Python >= 3.8
-- Python environment with pre-existing installations of [`TensorFlow`](https://www.tensorflow.org/install), [`TensorFlow-Probability`](https://www.tensorflow.org/probability), and [`Horovod`](https://horovod.readthedocs.io/) (to ensure proper GPU support on HPC clusters)
+Requires Python >= 3.8, TensorFlow >= 2.0, TensorFlow-Probability, and Horovod.
+
+**Dependencies:**
 - [`multiprobe-simulation-forward-model`](https://github.com/des-science/multiprobe-simulation-forward-model) for data loading and utilities
 - [`deepsphere-cosmo-tf2`](https://github.com/deepsphere/deepsphere-cosmo-tf2) for graph convolutional neural networks on the pixelized sphere
 
-### Installation Steps
-
-1. **Install dependencies from GitHub:**
+**Step 1: Install companion packages from GitHub**
 ```bash
-# Install multiprobe-simulation-forward-model
+# Install multiprobe-simulation-forward-model (data loading)
 pip install git+https://github.com/des-science/multiprobe-simulation-forward-model.git
 
-# Install deepsphere-cosmo-tf2
+# Install deepsphere-cosmo-tf2 (graph convolutional networks in TensorFlow 2)
 pip install git+https://github.com/deepsphere/deepsphere-cosmo-tf2.git
 ```
 
-2. **Install this package in editable mode:**
+**Step 2: Install this package**
+
+*On HPC clusters with pre-installed TensorFlow/Horovod* (recommended):
 ```bash
 pip install -e .
 ```
+
+*On systems without TensorFlow/Horovod*:
+```bash
+pip install -e .[tf]
+```
+
+Use the first option when TensorFlow and Horovod are available via system modules (e.g., `module load tensorflow horovod`) to preserve optimized GPU/MPI configurations.
 
 ## Repository Structure
 
