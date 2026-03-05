@@ -209,13 +209,13 @@ def evaluate_grid(model, tfr_pattern, msfm_conf, dlss_conf, net_conf, dir_out, f
 
     def write_out_file():
         with h5py.File(out_file, "a") as f:
-            f.create_dataset(name="grid/pred", data=preds)
-            f.create_dataset(name="grid/cosmo", data=cosmos)
-            f.create_dataset(name="grid/i_sobol", data=i_sobols)
-            f.create_dataset(name="grid/i_noise", data=i_noises)
-            f.create_dataset(name="grid/i_example", data=i_examples)
+            f.create_dataset(name="grid/preds/test", data=preds)
+            f.create_dataset(name="grid/cosmos/test", data=cosmos)
+            f.create_dataset(name="grid/i_sobol/test", data=i_sobols)
+            f.create_dataset(name="grid/i_noise/test", data=i_noises)
+            f.create_dataset(name="grid/i_example/test", data=i_examples)
             if save_second_to_last_layer:
-                f.create_dataset(name="grid/second_to_last_layer", data=second_to_last_layer)
+                f.create_dataset(name="grid/second_to_last_layer/test", data=second_to_last_layer)
 
         LOGGER.info(f"Evaluation of the grid has finished, saved the predictions in {out_file}")
 

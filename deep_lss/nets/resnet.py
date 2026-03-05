@@ -82,7 +82,7 @@ class ResNetLayers:
         # downsampling and Chebyshev convolutions
         for _ in range(cheby_layers):
             self.layers.append(healpy_layers.HealpyChebyshev(K=poly_degree, Fout=n_channels, activation=activation))
-            self.layers.append(tf.keras.layers.LayerNormalization(axis=-1, **norm_kwargs))
+            self.layers.append(tf.keras.layers.LayerNormalization(**{"axis": -1, **norm_kwargs}))
             self.layers.append(healpy_layers.HealpyPseudoConv(p=1, Fout=n_channels, activation=activation))
 
         # residual Chebyshev convolutions
