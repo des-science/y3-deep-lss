@@ -22,7 +22,7 @@ from msfm.fiducial_pipeline import FiducialPipeline
 from msfm.grid_pipeline import GridPipeline
 from msfm.utils import logger, input_output, files, parameters
 
-from deep_lss.utils import distribute, eval, configuration, optimization, delta_loss
+from deep_lss.utils import distribute, configuration, evaluation, optimization, delta_loss
 from deep_lss.models.delta_model import DeltaLossModel
 from deep_lss.models.grid_model import GridLossModel
 from deep_lss.utils.distribute import HorovodStrategy
@@ -250,30 +250,30 @@ def training():
             LOGGER.info(f"Created model directory {args.dir_model}")
 
         # make output directory
-        dir_out = os.path.join(args.dir_base, args.dir_model)
-        os.makedirs(dir_out, exist_ok=True)
-        LOGGER.info(f"Created output directory {dir_out}")
+        dir_model = os.path.join(args.dir_base, args.dir_model)
+        os.makedirs(dir_model, exist_ok=True)
+        LOGGER.info(f"Created output directory {dir_model}")
 
         # additions to the configs
         net_conf["run"] = {}
-        net_conf["run"]["dir_model"] = dir_out
+        net_conf["run"]["dir_model"] = dir_model
         net_conf["run"]["dir_log"] = args.slurm_output
         net_conf["run"]["loss_func"] = args.loss_function
         net_conf["run"]["dist_strategy"] = args.dist_strategy
 
         # save the configs
-        with open(os.path.join(dir_out, "configs.yaml"), "w") as f:
+        with open(os.path.join(dir_model, "configs.yaml"), "w") as f:
             yaml.dump_all([net_conf, dlss_conf, msfm_conf], f)
 
     # restore a saved model
     elif args.restore_checkpoint and (args.dir_model is not None):
         # make output directory
-        dir_out = os.path.join(args.dir_base, args.dir_model)
-        os.makedirs(dir_out, exist_ok=True)
-        LOGGER.info(f"Created output directory {dir_out}")
+        dir_model = os.path.join(args.dir_base, args.dir_model)
+        os.makedirs(dir_model, exist_ok=True)
+        LOGGER.info(f"Created output directory {dir_model}")
 
         # load the configs
-        with open(os.path.join(dir_out, "configs.yaml"), "r") as f:
+        with open(os.path.join(dir_model, "configs.yaml"), "r") as f:
             net_conf, dlss_conf, msfm_conf = list(yaml.load_all(f, Loader=yaml.FullLoader))
 
         LOGGER.info(f"Loaded configs from the model directory")
@@ -288,14 +288,14 @@ def training():
         os.makedirs(os.path.dirname(temp_file), exist_ok=True)
         LOGGER.info(f"Writing the model directory to {temp_file}")
         with open(temp_file, "w") as f:
-            f.write(dir_out)
+            f.write(dir_model)
 
     # weights and biases
     if args.wandb:
         group_name = distribute.get_wandb_group_name(strategy)
 
         # check if there's an existing run ID to resume
-        wandb_id_file = os.path.join(dir_out, "wandb_run_id.txt")
+        wandb_id_file = os.path.join(dir_model, "wandb_run_id.txt")
         existing_run_id = None
 
         if os.path.exists(wandb_id_file) and args.restore_checkpoint:
@@ -308,7 +308,7 @@ def training():
                 id=existing_run_id,
                 resume="allow",
                 project="y3-deep-lss",
-                dir=dir_out,
+                dir=dir_model,
                 group=group_name,
                 job_type="training",
                 # make sure that wandb logs to the cloud
@@ -324,7 +324,7 @@ def training():
         else:
             wandb_run = wandb.init(
                 project="y3-deep-lss",
-                dir=dir_out,
+                dir=dir_model,
                 group=group_name,
                 job_type="training",
                 mode="online",
@@ -360,15 +360,15 @@ def training():
         # only update the config here instead of in the init so that possible changes by a sweep agent are included
         wandb_run.config.setdefaults({"msfm": msfm_conf, "dlss": dlss_conf, "net": net_conf})
 
-        LOGGER.info(f"Initialized weights & biases to {dir_out}")
+        LOGGER.info(f"Initialized weights & biases to {dir_model}")
         LOGGER.warning(f"Running with {strategy.num_replicas_in_sync} replicas")
 
     LOGGER.info(f"TensorFlow version {tf.__version__}")
 
     # set up subdirectories
-    checkpoint_dir = os.path.abspath(os.path.join(dir_out, "checkpoint"))
+    checkpoint_dir = os.path.abspath(os.path.join(dir_model, "checkpoint"))
     os.makedirs(checkpoint_dir, exist_ok=True)
-    summary_dir = os.path.abspath(os.path.join(dir_out, "summary"))
+    summary_dir = os.path.abspath(os.path.join(dir_model, "summary"))
     os.makedirs(summary_dir, exist_ok=True)
 
     # constants: msfm
@@ -393,7 +393,7 @@ def training():
     # constants: miscellaneous
     training_type = "fiducial" if args.loss_function == "delta" else "grid"
     smoothing_kwargs = configuration.get_smoothing_kwargs(
-        args.loss_function, msfm_conf, dlss_conf, net_conf, dir_base=args.dir_base
+        args.loss_function, msfm_conf, dlss_conf, net_conf, dir_base=dir_model
     )
 
     dset_kwargs = net_conf["dset"]["training"]["common"]
@@ -760,7 +760,7 @@ def training():
 
             # output
             if (output_every is not None) and (step % output_every == 0):
-                _copy_log(args, dir_out)
+                _copy_log(args, dir_model)
 
             # checkpoint
             if (checkpoint_every is not None) and (step % checkpoint_every == 0):
@@ -791,24 +791,24 @@ def training():
                 # fiducial training
                 if args.evaluate_training_set:
                     if training_type == "fiducial":
-                        out_file = eval.evaluate_fiducial(
+                        out_file = evaluation.evaluate_fiducial(
                             model=model,
                             tfr_pattern=args.train_tfr_pattern,
                             msfm_conf=msfm_conf,
                             dlss_conf=dlss_conf,
                             net_conf=net_conf,
-                            dir_out=dir_out,
+                            dir_out=dir_model,
                             file_label=train_step,
                             training_set=True,
                         )
                     elif training_type == "grid":
-                        out_file = eval.evaluate_grid(
+                        out_file = evaluation.evaluate_grid(
                             model=model,
                             tfr_pattern=args.train_tfr_pattern,
                             msfm_conf=msfm_conf,
                             dlss_conf=dlss_conf,
                             net_conf=net_conf,
-                            dir_out=dir_out,
+                            dir_out=dir_model,
                             file_label=train_step,
                         )
                 else:
@@ -816,13 +816,13 @@ def training():
 
                 # fiducial evaluation
                 if args.fidu_eval_tfr_pattern is not None:
-                    out_file = eval.evaluate_fiducial(
+                    out_file = evaluation.evaluate_fiducial(
                         model=model,
                         tfr_pattern=args.fidu_eval_tfr_pattern,
                         msfm_conf=msfm_conf,
                         dlss_conf=dlss_conf,
                         net_conf=net_conf,
-                        dir_out=dir_out,
+                        dir_out=dir_model,
                         file_label=train_step,
                         training_set=False,
                     )
@@ -831,13 +831,13 @@ def training():
 
                 # grid evaluation
                 if args.grid_eval_tfr_pattern is not None:
-                    out_file = eval.evaluate_grid(
+                    out_file = evaluation.evaluate_grid(
                         model=model,
                         tfr_pattern=args.grid_eval_tfr_pattern,
                         msfm_conf=msfm_conf,
                         dlss_conf=dlss_conf,
                         net_conf=net_conf,
-                        dir_out=dir_out,
+                        dir_out=dir_model,
                         file_label=train_step,
                     )
                 else:
@@ -900,7 +900,7 @@ def training():
     model.delete_temp_summaries()
 
     LOGGER.info(f"Script completed successfully")
-    _copy_log(args, dir_out)
+    _copy_log(args, dir_model)
 
 
 def _copy_log(args, dir_out):

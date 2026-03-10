@@ -10,6 +10,7 @@ Evaluate the DeepSphere graph neural networks on the CosmoGrid
 import numpy as np
 import tensorflow as tf
 import os, warnings, h5py, math, logging, wandb
+from trianglechain import TriangleChain
 
 from msfm.fiducial_pipeline import FiducialPipeline
 from msfm.grid_pipeline import GridPipeline
@@ -85,7 +86,9 @@ def _remove_example_axis(array):
     return array
 
 
-def evaluate_grid(model, tfr_pattern, msfm_conf, dlss_conf, net_conf, dir_out, file_label=None, wandb_run=None):
+def evaluate_grid(
+    model, tfr_pattern, msfm_conf, dlss_conf, net_conf, dir_out, file_label=None, wandb_run=None, debug=False
+):
     """Evaluate the model on the grid part of the CosmoGrid.
 
     Args:
@@ -146,6 +149,9 @@ def evaluate_grid(model, tfr_pattern, msfm_conf, dlss_conf, net_conf, dir_out, f
             # distribution
             input_context=input_context,
         )
+
+        if debug:
+            dset = dset.take(global_batch_size * 2)
 
         return dset
 
@@ -381,3 +387,29 @@ def evaluate_fiducial(
         wandb_run.log_artifact(artifact)
 
     return out_file
+
+
+def append_obs_to_file(pred_file, label, pred):
+    pred = np.squeeze(pred)
+
+    with h5py.File(pred_file, "a") as f:
+        if label in f:
+            del f[label]
+        f.create_dataset(name=label, data=pred)
+        print(f"wrote {label} of shape {pred.shape}")
+
+
+def plot_summary_space_prior_predictive(grid_preds, obs_pred, n_rand=1_000, np_seed=12):
+    rng = np.random.default_rng(np_seed)
+
+    i_rand = rng.integers(0, grid_preds.shape[0], n_rand)
+
+    tri = TriangleChain(size=2)
+    tri.scatter(np.array(grid_preds)[i_rand], scatter_kwargs={"s": 10, "marker": "o"})
+    tri.scatter(
+        np.atleast_2d(obs_pred),
+        scatter_kwargs={"s": 200, "marker": "*"},
+        color="k",
+        scatter_vline_1D=True,
+        plot_histograms_1D=False,
+    )

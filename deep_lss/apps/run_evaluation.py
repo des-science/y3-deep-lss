@@ -18,7 +18,7 @@ import os, argparse, warnings, yaml, wandb
 
 from msfm.utils import logger, files
 
-from deep_lss.utils import configuration, distribute, eval
+from deep_lss.utils import configuration, distribute, evaluation
 from deep_lss.models.base_model import BaseModel
 from deep_lss.nets import NETWORKS
 
@@ -206,7 +206,7 @@ if __name__ == "__main__":
 
         # fiducial training
         if args.fidu_train_tfr_pattern is not None:
-            out_file = eval.evaluate_fiducial(
+            out_file = evaluation.evaluate_fiducial(
                 model=model,
                 tfr_pattern=args.fidu_train_tfr_pattern,
                 msfm_conf=msfm_conf,
@@ -221,7 +221,7 @@ if __name__ == "__main__":
 
         # fiducial validation
         if args.fidu_vali_tfr_pattern is not None:
-            out_file = eval.evaluate_fiducial(
+            out_file = evaluation.evaluate_fiducial(
                 model=model,
                 tfr_pattern=args.fidu_vali_tfr_pattern,
                 msfm_conf=msfm_conf,
@@ -236,7 +236,7 @@ if __name__ == "__main__":
 
         # grid validation
         if args.grid_vali_tfr_pattern is not None:
-            out_file = eval.evaluate_grid(
+            out_file = evaluation.evaluate_grid(
                 model=model,
                 tfr_pattern=args.grid_vali_tfr_pattern,
                 msfm_conf=msfm_conf,
@@ -244,6 +244,7 @@ if __name__ == "__main__":
                 net_conf=net_conf,
                 dir_out=args.dir_model,
                 file_label=file_label,
+                debug=args.debug,
             )
         else:
             LOGGER.warning(f"Skipping evaluation of the grid set")
