@@ -1,6 +1,6 @@
 #!/bin/bash
-#SBATCH --account=des_g
-#SBATCH --constraint=gpu
+#SBATCH --account=m5030_g
+#SBATCH --constraint=gpu&hbm40g
 #SBATCH --qos=regular
 #SBATCH --time=04:00:00
 #SBATCH --nodes=1
@@ -8,26 +8,29 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-task=4
 #SBATCH --cpus-per-task=128
-#SBATCH --job-name=mirrored_eval
-#SBATCH --output=./logs/mirrored_eval.%j.log
+#SBATCH --job-name=evaluation
 
-VERSION="v13"
-# BIAS="linear_bias"
-BIAS="extended"
+VERSION="v16"
+SUBVERSION="default"
+# MODEL="v1"
+MODEL="v2"
 
-VERSION="v13"
+PROBE="lensing"
+# PROBE="clustering"
+# PROBE="combined"
 
-SUBVERSION=$BIAS
-# SUBVERSION=""$BIAS"_octant"
-# SUBVERSION=""$BIAS"_hard_cut"
+BASE="/pscratch/sd/a/athomsen/deep_lss/$VERSION/$SUBVERSION/maps/$PROBE"
+OUTPUT="/$BASE/$MODEL/logs/separate_"$STRATEGY"_"$SLURM_JOB_ID""
 
-FIDU_EVAL_TFR="/pscratch/sd/a/athomsen/v11desy3/$VERSION/$SUBVERSION/tfrecords/fiducial/validation/DESy3_fiducial_dmb_????.tfrecord"
 GRID_EVAL_TFR="/pscratch/sd/a/athomsen/v11desy3/$VERSION/$SUBVERSION/tfrecords/grid/DESy3_grid_dmb_????.tfrecord"
 
-srun --cpu-bind=threads --gpu-bind=none \
+srun --cpu-bind=threads --gpu-bind=none --output=""$OUTPUT"_inference.log" \
     python ../../deep_lss/apps/run_evaluation.py \
-    --dist_strategy="mirrored" \
-    --grid_vali_tfr_pattern=$GRID_EVAL_TFR \
-    --dir_model="/pscratch/sd/a/athomsen/run_files/v13/extended/lensing/mutual_info/2025-01-11_07-17-28_deepsphere_default" \
-    --evaluate_all_checkpoints
-# --fidu_vali_tfr_pattern=$FIDU_VALI_TFR \
+        --dist_strategy="mirrored" \
+        --grid_vali_tfr_pattern=$GRID_EVAL_TFR \
+        --dir_model="/pscratch/sd/a/athomsen/deep_lss/$VERSION/$SUBVERSION/maps/$PROBE/$MODEL"
+
+# python ../../deep_lss/apps/run_evaluation.py \
+#     --dist_strategy="mirrored" \
+#     --grid_vali_tfr_pattern=$GRID_EVAL_TFR \
+#     --dir_model="/pscratch/sd/a/athomsen/deep_lss/$VERSION/$SUBVERSION/maps/$PROBE/$MODEL"

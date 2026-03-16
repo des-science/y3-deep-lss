@@ -16,30 +16,6 @@ optimization:
     clip_by_value: null
     clip_by_norm: null
     clip_by_global_norm: 1.0
-  delta_loss:
-    # at the end of the warmup or from the beginning, if there is no schedule
-    learning_rate: 1.0e-4
-    # for beta_1, beta_2, epsilon, etc.
-    optimizer_kwargs:
-      beta_1: 0.9
-      beta_2: 0.999
-    # Null, "warmup" or "cosine" (which includes a warmup)
-    scheduler: warmup
-    warmup_steps: 5000
-    warmup_init_learning_rate: 1.0e-5
-    # for cosine schedule: alpha = decay_end_learning_rate / learning_rate
-    decay_alpha: 0.0
-    # linearly increase the noise amplitude from 0 to 1
-    noise_schedule_steps: Null
-  likelihood_loss:
-    learning_rate: 1.0e-4
-    optimizer_kwargs:
-      beta_1: 0.9
-      beta_2: 0.999
-    scheduler: warmup
-    warmup_steps: 5000
-    warmup_init_learning_rate: 1.0e-5
-    decay_alpha: 0.0
   mutual_info_loss:
     learning_rate: 1.0e-4
     optimizer_kwargs:
@@ -71,48 +47,33 @@ dset:
   training:
     common:
       is_eval: False
+      signal_indices: 0.8
+      noise_indices: Null
       n_readers: 16
       n_prefetch: 2
       n_workers: 96
-    # delta loss
-    fiducial:
-      noise_indices: 10
-      # because of the derivatives, this is multiplied by 1 + 2 * n_params
-      local_batch_size: 4
-      file_name_shuffle_buffer: 64
-      examples_shuffle_buffer: 128
-      is_cached: False
-    # mutual info, likelihood, mse loss
     grid:
-      noise_indices: 4
       local_batch_size: 16
       file_name_shuffle_buffer: 64
       examples_shuffle_buffer: 128
+  validation:
+    n_batches: 1000
+    common:
+      is_eval: True
+      signal_indices: 0.8
+      noise_indices: Null
+      n_readers: 8
+      n_prefetch: 1
+      n_workers: 16
+    grid:
+      local_batch_size: 10
   eval:
     common:
       is_eval: True
-      local_batch_size: 10
-    fiducial:
-      noise_indices: 10
+      signal_indices: 0.8
+      noise_indices: Null
+      n_readers: 16
       n_prefetch: 2
       n_workers: 96
-      n_readers: 16
-      is_cached: False
     grid:
-      noise_indices: [4]
-      n_prefetch: 2
-      n_workers: 96
-      n_readers: 16
-    validation:
-      n_batches: 1000
-      grid:
-        noise_indices: [4]
-        n_prefetch: 1
-        n_workers: 16
-        n_readers: 8
-      fiducial:
-        noise_indices: 10
-        n_prefetch: 1
-        n_readers: 1
-        n_workers: 8
-        is_cached: False
+      local_batch_size: 10

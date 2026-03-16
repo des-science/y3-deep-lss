@@ -13,9 +13,10 @@
 VERSION="v16"
 SUBVERSION="default"
 MODEL="v1"
+# MODEL="v2"
 
-# PROBE="lensing"
-PROBE="clustering"
+PROBE="lensing"
+# PROBE="clustering"
 # PROBE="combined"
 
 RUN_NUM=${RUN_NUM:-1}
@@ -48,10 +49,16 @@ srun --cpu-bind=threads --gpu-bind=none --output=""$OUTPUT"_training.log" \
         --wandb \
         --wandb_tags "$VERSION" "$SUBVERSION" "$PROBE" "$LOSS" "$STRATEGY" "resnet" \
         --wandb_notes="single $PROBE node run $RUN_NUM" \
-        $RESTORE_FLAG \
+        $RESTORE_FLAG
+        # --restore_checkpoint \
 
 # evaluate all the network checkpoints in a separate script after training has completed to avoid CPU OOM errors
 srun --cpu-bind=threads --gpu-bind=none --output=""$OUTPUT"_inference.log" \
     python ../../deep_lss/apps/run_evaluation.py \
         --dist_strategy="$STRATEGY" \
         --grid_vali_tfr_pattern=$GRID_EVAL_TFR
+
+python ../../deep_lss/apps/run_evaluation.py \
+    --dist_strategy="$STRATEGY" \
+    --grid_vali_tfr_pattern=$GRID_EVAL_TFR \
+    --dir_model="/pscratch/sd/a/athomsen/deep_lss/v16/default/maps/lensing/v1"

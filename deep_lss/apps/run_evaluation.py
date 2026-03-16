@@ -98,11 +98,11 @@ def setup():
         LOGGER.warning(f"Loaded the model directory {args.dir_model} from {temp_file}")
 
     if args.debug:
-        # tf.config.run_functions_eagerly(True)
-        # tf.config.set_soft_device_placement(False)
-        tf.debugging.set_log_device_placement(True)
-        # tf.data.experimental.enable_debug_mode()
+        tf.config.run_functions_eagerly(True)
         LOGGER.warning(f"!!!!! Running the training in test mode, TensorFlow is executed eagerly !!!!!")
+        # tf.config.set_soft_device_placement(False)
+        # tf.debugging.set_log_device_placement(True)
+        # tf.data.experimental.enable_debug_mode()
 
     return args
 
@@ -187,7 +187,7 @@ if __name__ == "__main__":
             indices=data_vec_pix,
             n_neighbors=net_conf["network"]["n_neighbors"],
             input_shape=(None, len(data_vec_pix), n_z_bins),
-            max_batch_size=net_conf["dset"]["eval"]["common"]["local_batch_size"],
+            max_batch_size=net_conf["dset"]["eval"]["grid"]["local_batch_size"],
             checkpoint_dir=checkpoint_dir,
             # always load from a checkpoint
             restore_checkpoint=True,

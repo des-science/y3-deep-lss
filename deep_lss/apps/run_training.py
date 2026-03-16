@@ -541,9 +541,9 @@ def training():
     # validation loss
     if vali_every is not None:
         vali_pipe_kwargs = dlss_conf["dset"]["common"]
-        vali_dset_kwargs = {**net_conf["dset"]["eval"]["common"]}
+        vali_dset_kwargs = net_conf["dset"]["validation"]["common"]
         vali_dset_kwargs["drop_remainder"] = True
-        n_vali_batches = net_conf["dset"]["eval"]["validation"]["n_batches"]
+        n_vali_batches = net_conf["dset"]["validation"]["n_batches"]
 
         @tf.function
         def vali_merge_mean(losses):
@@ -553,7 +553,7 @@ def training():
             return losses
 
         if args.fidu_vali_tfr_pattern is not None:
-            vali_dset_kwargs.update(net_conf["dset"]["eval"]["validation"]["fiducial"])
+            vali_dset_kwargs.update(net_conf["dset"]["validation"]["fiducial"])
 
             if args.loss_function == "delta":
                 # we need the perturbations
@@ -670,8 +670,7 @@ def training():
         elif args.grid_vali_tfr_pattern is not None:
             vali_pipe_kwargs["params"] = dlss_conf["dset"]["eval"]["grid"]["params"]
 
-            vali_dset_kwargs.update(net_conf["dset"]["eval"]["grid"])
-            vali_dset_kwargs["is_eval"] = False
+            vali_dset_kwargs.update(net_conf["dset"]["validation"]["grid"])
 
             LOGGER.warning(f"Grid validation set")
             vali_grid_pipe = GridPipeline(conf=msfm_conf, **vali_pipe_kwargs)

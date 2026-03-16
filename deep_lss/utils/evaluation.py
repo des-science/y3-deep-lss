@@ -103,39 +103,12 @@ def evaluate_grid(
     LOGGER.info(f"Starting evaluation of the grid")
 
     dset_kwargs = {**net_conf["dset"]["eval"]["common"], **net_conf["dset"]["eval"]["grid"]}
-    dset_kwargs["drop_remainder"] = True
-
-    # pipeline constants
-    n_cosmos = msfm_conf["analysis"]["grid"]["n_cosmos"]
-    n_patches = msfm_conf["analysis"]["n_patches"]
-    n_perms_per_cosmo = msfm_conf["analysis"]["grid"]["n_perms_per_cosmo"]
-    n_examples_per_cosmo = n_patches * n_perms_per_cosmo
-
-    # multiple shape and poisson noise realizations
-    if isinstance(dset_kwargs["noise_indices"], int):
-        n_noise = dset_kwargs["noise_indices"]
-    elif isinstance(dset_kwargs["noise_indices"], list):
-        n_noise = len(dset_kwargs["noise_indices"])
-    else:
-        raise ValueError(f"Unknown type of noise indices {dset_kwargs['noise_indices']}")
-    n_examples_per_cosmo *= n_noise
-
-    n_examples = n_cosmos * n_examples_per_cosmo
-    LOGGER.info(f"There's a total of {n_examples} data vectors to be evaluated ({n_examples_per_cosmo} per cosmology)")
+    dset_kwargs["drop_remainder"] = True    
 
     # network constants
     save_second_to_last_layer = net_conf["network"]["save_second_to_last_layer"]
 
     strategy = model.strategy
-    local_batch_size = dset_kwargs["local_batch_size"]
-    global_batch_size = distribute.get_global_batch_size(strategy, local_batch_size)
-    n_batches = math.ceil(n_examples / global_batch_size)
-
-    if n_examples % (strategy.num_replicas_in_sync * local_batch_size) != 0:
-        LOGGER.warning(
-            f"Number of examples {n_examples} is not divisible by the number of replicas "
-            f"{strategy.num_replicas_in_sync} times the local batch size {local_batch_size}"
-        )
 
     grid_pipeline = GridPipeline(
         conf=msfm_conf, **{**dlss_conf["dset"]["common"], **dlss_conf["dset"]["eval"]["grid"]}
@@ -156,6 +129,23 @@ def evaluate_grid(
         return dset
 
     dist_dset = strategy.distribute_datasets_from_function(dataset_fn)
+
+    n_cosmos = msfm_conf["analysis"]["grid"]["n_cosmos"]
+    n_noise = grid_pipeline.n_noise
+    n_signal = grid_pipeline.n_signal
+    n_examples_per_cosmo = n_noise * n_signal
+    n_examples = n_cosmos * n_examples_per_cosmo
+    LOGGER.info(f"There's a total of {n_examples} data vectors to be evaluated ({n_examples_per_cosmo} per cosmology)")
+
+    local_batch_size = dset_kwargs["local_batch_size"]
+    global_batch_size = distribute.get_global_batch_size(strategy, local_batch_size)
+    n_batches = math.ceil(n_examples / global_batch_size)
+
+    if n_examples % (strategy.num_replicas_in_sync * local_batch_size) != 0:
+        LOGGER.warning(
+            f"Number of examples {n_examples} is not divisible by the number of replicas "
+            f"{strategy.num_replicas_in_sync} times the local batch size {local_batch_size}"
+        )
 
     # set up a network that outputs the second to last layer too
     if save_second_to_last_layer:
