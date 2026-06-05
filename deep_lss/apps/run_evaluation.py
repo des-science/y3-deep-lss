@@ -87,9 +87,9 @@ def setup():
     parser.add_argument("--include_des", action="store_true", help="evaluate DES Y3 catalogs")
     parser.add_argument("--include_buzzard", action="store_true", help="evaluate Buzzard N-body realizations")
     parser.add_argument("--buzzard_labels", nargs="+", default=["Buzzard_mean"])
-    parser.add_argument("--include_bench", action="store_true", help="evaluate benchmark simulations")
-    parser.add_argument("--bench_labels", nargs="+", default=["bench_bsc=rot", "bench_bsc=fit", "bench_bsc=0", "bench_bsc=1"])
-    parser.add_argument("--data_dir", type=str, default=None, help="base data directory (needed for --include_bench)")
+    parser.add_argument("--include_mocks", action="store_true", help="evaluate mock observations from data_dir/obs/")
+    parser.add_argument("--mock_labels", nargs="+", default=["fiducial_bench"])
+    parser.add_argument("--data_dir", type=str, default=None, help="base data directory (needed for --include_mocks)")
 
     args, _ = parser.parse_known_args()
 
@@ -108,8 +108,9 @@ def setup():
         LOGGER.warning(f"Loaded the model directory {args.dir_model} from {temp_file}")
 
     if args.debug:
-        tf.config.run_functions_eagerly(True)
-        LOGGER.warning(f"!!!!! Running the training in test mode, TensorFlow is executed eagerly !!!!!")
+        pass
+        # tf.config.run_functions_eagerly(True)
+        # LOGGER.warning(f"!!!!! Running the training in test mode, TensorFlow is executed eagerly !!!!!")
         # tf.config.set_soft_device_placement(False)
         # tf.debugging.set_log_device_placement(True)
         # tf.data.experimental.enable_debug_mode()
@@ -224,9 +225,18 @@ if __name__ == "__main__":
             np.add.at(result, (slice(None), parent_output_idx, slice(None)), maps)
             return result / _counts[np.newaxis, :, np.newaxis]
 
-        model_fn = lambda x: model(_downsample(x), training=False).numpy()
+    def _call_model(x):
+        # HealpySmoothing pre-computes n_matmul_splits=2 for this pixel resolution;
+        # tf.split requires the batch dim divisible by 2, so pad batch=1 → 2.
+        if x.shape[0] == 1:
+            x = np.concatenate([x, x], axis=0)
+            return model(x, training=False).numpy()[:1]
+        return model(x, training=False).numpy()
+
+    if parent_output_idx is not None:
+        model_fn = lambda x: _call_model(_downsample(x))
     else:
-        model_fn = lambda x: model(x, training=False).numpy()
+        model_fn = _call_model
 
     def evaluate_current_checkpoint(model):
         train_step = model.get_step()
@@ -287,14 +297,14 @@ if __name__ == "__main__":
         if out_file is not None:
             if args.include_grid:
                 with h5py.File(out_file, "r") as _f:
-                    _gp   = _f["grid/preds/test"][:]
-                    _gc   = _f["grid/cosmos/test"][:]
+                    _gp = _f["grid/preds/test"][:]
+                    _gc = _f["grid/cosmos/test"][:]
                     _isob = _f["grid/i_sobol/test"][:]
                     _isig = _f["grid/i_signal/test"][:]
                     _inoi = _f["grid/i_noise/test"][:]
                 if _gp.ndim == 3:
-                    _gp   = np.concatenate(_gp,   axis=0)
-                    _gc   = np.concatenate(_gc,   axis=0)
+                    _gp = np.concatenate(_gp, axis=0)
+                    _gc = np.concatenate(_gc, axis=0)
                     _isob = np.concatenate(_isob, axis=0)
                     _isig = np.concatenate(_isig, axis=0)
                     _inoi = np.concatenate(_inoi, axis=0)
@@ -306,9 +316,9 @@ if __name__ == "__main__":
             if args.include_buzzard:
                 evaluation.evaluate_obs_buzzard(model_fn, out_file, msfm_conf, dlss_conf, args.buzzard_labels)
 
-            if args.include_bench:
+            if args.include_mocks:
                 evaluation.evaluate_obs_benchmark(
-                    model_fn, out_file, msfm_conf, dlss_conf, args.data_dir, args.bench_labels
+                    model_fn, out_file, msfm_conf, dlss_conf, args.data_dir, args.mock_labels
                 )
 
         if args.wandb and out_file is not None:
@@ -331,3 +341,8 @@ if __name__ == "__main__":
     else:
         LOGGER.warning(f"Evaluating only the latest checkpoint")
         evaluate_current_checkpoint(model)
+
+    # Release TF checkpoint objects explicitly so _CheckpointRestoreCoordinatorDeleter
+    # is GC'd now, before interpreter shutdown nulls out TF module-level state.
+    model.checkpoint = None
+    model.checkpoint_manager = None

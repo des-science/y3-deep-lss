@@ -7,14 +7,16 @@ for gpu in tf.config.list_physical_devices(device_type="GPU"):
 
 from tqdm import tqdm
 
-from msfm.utils import files
+from msfm.utils import files, logger
+
+LOGGER = logger.get_logger(__file__)
 
 from deep_lss.models.grid_model import GridLossModel
 from deep_lss.nets.mlp import MultiLayerPerceptron, PCAWhiteningLayer
 from deep_lss.utils import cls_evaluation, evaluation
 from deep_lss.utils.mutual_info_loss import distance_correlation
 
-from msi.utils import dataset, preprocessing
+from msi.utils import dataset
 
 
 class EarlyStopper:
@@ -50,24 +52,19 @@ def setup():
     parser.add_argument("--out_dir", required=True)
     parser.add_argument("--model_name", default="model")
     parser.add_argument("--restore_checkpoint", action="store_true")
-    parser.add_argument(
-        "--hard_cut",
-        action="store_true",
-        help="Use hard ℓ-bin truncation instead of Gaussian smoothing + white noise scale cuts.",
-    )
 
     # Observation inclusion flags (all default off)
     parser.add_argument("--include_grid", action="store_true")
     parser.add_argument("--n_grid_examples", type=int, default=4)
     parser.add_argument("--include_des", action="store_true")
-    parser.add_argument("--include_bench", action="store_true")
+    parser.add_argument("--include_mocks", action="store_true", help="evaluate mock observations from data_dir/obs/")
+    parser.add_argument("--mock_labels", nargs="+", default=["fiducial_bench"])
 
     return parser.parse_args()
 
 
 def main():
     args = setup()
-
     msfm_conf = files.load_config(args.msfm_config)
     from msfm.utils import input_output
 
@@ -95,21 +92,27 @@ def main():
     n_params = len(params)
     n_summary = 2 * n_params
 
+    scale_cut = mlp_conf.get("scale_cut", "hard")
+
     n_steps = mlp_conf["n_steps"]
     batch_size = mlp_conf["batch_size"]
     log_every = mlp_conf["log_every"]
     vali_every = mlp_conf["vali_every"]
+    signal_indices = mlp_conf.get("signal_indices", None)
+    noise_indices = mlp_conf.get("noise_indices", 0.8)
 
     pred_dir = os.path.join(args.out_dir, args.model_name)
     os.makedirs(pred_dir, exist_ok=True)
 
     pred_file = os.path.join(pred_dir, f"preds_{n_steps}.h5")
 
-    print(f"probe       = {probe}")
-    print(f"pred_dir    = {pred_dir}")
-    print(f"pred_file   = {pred_file}")
-    print(f"params      = {params}")
-    print(f"n_steps     = {n_steps}")
+    LOGGER.info(f"probe          = {probe}")
+    LOGGER.info(f"pred_dir       = {pred_dir}")
+    LOGGER.info(f"pred_file      = {pred_file}")
+    LOGGER.info(f"params         = {params}")
+    LOGGER.info(f"n_steps        = {n_steps}")
+    LOGGER.info(f"signal_indices = {signal_indices}")
+    LOGGER.info(f"noise_indices  = {noise_indices}")
 
     with open(os.path.join(pred_dir, "configs.yaml"), "w") as f:
         yaml.dump_all([mlp_conf, vmim_conf, dlss_conf, msfm_conf], f)
@@ -117,12 +120,14 @@ def main():
     apply_log = mlp_conf.get("apply_log", True)
     ell_weighting = mlp_conf.get("ell_weighting", None)
 
-    _dset_fn = dataset.get_binned_power_spectra_dset_hard_cut if args.hard_cut else dataset.get_binned_power_spectra_dset
-    cl_dset_train, cl_dset_test, out_dict = _dset_fn(
-        args.data_dir,
+    cl_dset_train, cl_dset_test, out_dict = dataset.get_binned_power_spectra_dset_for_scale_cut(
+        scale_cut,
+        base_dir=args.data_dir,
         msfm_conf=msfm_conf,
         dlss_conf=dlss_conf,
         params=params,
+        signal_indices=signal_indices,
+        noise_indices=noise_indices,
         with_lensing=with_lensing,
         with_clustering=with_clustering,
         with_cross_z=with_cross_z,
@@ -273,15 +278,15 @@ def main():
                 tf.summary.scalar("loss/vali", vali_loss, step=i)
                 tf.summary.scalar("loss/vali_dc", dc_val, step=i)
             tb_writer.flush()
-            tqdm.write(f"step {i:>7d}  vali_loss = {vali_loss:.4f}  vali_dc = {dc_val:.4f}")
+            LOGGER.info(f"step {i:>7d}  vali_loss = {vali_loss:.4f}  vali_dc = {dc_val:.4f}")
 
             if early_stopper is not None:
                 improved = early_stopper.update(vali_loss)
                 if improved:
                     model.save_model()
-                    tqdm.write(f"  -> new best vali_loss={vali_loss:.4f}, saved checkpoint")
+                    LOGGER.info(f"  -> new best vali_loss={vali_loss:.4f}, saved checkpoint")
                 if early_stopper.should_stop(i):
-                    tqdm.write(
+                    LOGGER.info(
                         f"Early stopping at step {i} "
                         f"(best={early_stopper.best_loss:.4f}, wait={early_stopper.wait})"
                     )
@@ -304,7 +309,7 @@ def main():
     )
 
     # --- evaluate on test set (directly from out_dict, matching the notebook) ---
-    print("Evaluating on test set...")
+    LOGGER.info("Evaluating on test set...")
     cls_test = cls_test_dc  # already extracted above with correct apply_log/ell_weighting
     grid_cosmos = grid_cosmos_dc
 
@@ -320,15 +325,15 @@ def main():
         f.create_dataset("grid/preds/test", data=grid_preds)
         f.create_dataset("grid/cosmos/test", data=grid_cosmos)
 
-    print(f"Saved {len(grid_preds)} test predictions to {pred_file}")
+    LOGGER.info(f"Saved {len(grid_preds)} test predictions to {pred_file}")
 
     # --- named grid observations (example 0 per cosmology, labeled by simulation indices) ---
     if args.include_grid:
-        obs_i_sobol  = out_dict["grid/obs/i_sobol"]
+        obs_i_sobol = out_dict["grid/obs/i_sobol"]
         obs_i_signal = out_dict["grid/obs/i_signal"]
-        obs_i_noise  = out_dict["grid/obs/i_noise"]
-        obs_cls      = out_dict["grid/obs/cls"]
-        obs_cosmos   = out_dict["grid/obs/cosmos"]
+        obs_i_noise = out_dict["grid/obs/i_noise"]
+        obs_cls = out_dict["grid/obs/cls"]
+        obs_cosmos = out_dict["grid/obs/cosmos"]
 
         n_grid_obs = min(args.n_grid_examples, len(obs_cls))
         obs_preds = np.concatenate(
@@ -344,30 +349,32 @@ def main():
             evaluation.append_obs_to_file(pred_file, f"obs/preds/{label}", obs_preds[k])
             evaluation.append_obs_to_file(pred_file, f"obs/cosmos/{label}", obs_cosmos[k])
 
-        print(f"Saved {n_grid_obs} grid observations")
+        LOGGER.info(f"Saved {n_grid_obs} grid observations")
 
-    # --- benchmark fiducial observation ---
-    if args.include_bench:
-        try:
-            cls_evaluation.evaluate_bench_fidu_cls(
-                model=model,
-                pred_file=pred_file,
-                data_dir=args.data_dir,
-                msfm_conf=msfm_conf,
-                dlss_conf=dlss_conf,
-                params=params,
-                batch_size=batch_size,
-                with_lensing=with_lensing,
-                with_clustering=with_clustering,
-                with_cross_z=with_cross_z,
-                with_cross_probe=with_cross_probe,
-                ggl_only=ggl_only,
-                apply_log=apply_log,
-                ell_weighting=ell_weighting,
-                hard_cut=args.hard_cut,
-            )
-        except Exception as e:
-            print(f"WARNING: bench_fidu evaluation failed ({e}), skipping")
+    # --- mock observations ---
+    if args.include_mocks:
+        for label in args.mock_labels:
+            try:
+                cls_evaluation.evaluate_mock_cls(
+                    label=label,
+                    model=model,
+                    pred_file=pred_file,
+                    data_dir=args.data_dir,
+                    msfm_conf=msfm_conf,
+                    dlss_conf=dlss_conf,
+                    params=params,
+                    batch_size=batch_size,
+                    with_lensing=with_lensing,
+                    with_clustering=with_clustering,
+                    with_cross_z=with_cross_z,
+                    with_cross_probe=with_cross_probe,
+                    ggl_only=ggl_only,
+                    apply_log=apply_log,
+                    ell_weighting=ell_weighting,
+                    scale_cut=scale_cut,
+                )
+            except Exception as e:
+                LOGGER.warning(f"mock {label} evaluation failed ({e}), skipping")
 
     # --- DES Y3 real-data observation ---
     if args.include_des:
@@ -385,10 +392,10 @@ def main():
                 ggl_only=ggl_only,
                 apply_log=apply_log,
                 ell_weighting=ell_weighting,
-                hard_cut=args.hard_cut,
+                scale_cut=scale_cut,
             )
         except Exception as e:
-            print(f"WARNING: DES Y3 evaluation failed ({e}), skipping")
+            LOGGER.warning(f"DES Y3 evaluation failed ({e}), skipping")
 
 
 if __name__ == "__main__":

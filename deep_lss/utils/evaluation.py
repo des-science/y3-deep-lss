@@ -24,6 +24,10 @@ warnings.filterwarnings("ignore", category=RuntimeWarning)
 warnings.filterwarnings("once", category=UserWarning)
 LOGGER = logger.get_logger(__file__)
 
+# Keys in dset.common that are only used by Cls-based pipelines and must be stripped
+# before constructing GridPipeline / FiducialPipeline (map-based pipelines don't accept them).
+_CLS_ONLY_KEYS = frozenset({"with_cross_z", "with_cross_probe", "ggl_only"})
+
 # suppress a specific warning
 logging.getLogger("tensorflow").addFilter(
     lambda record: "gather/all_gather with NCCL or HierarchicalCopy is not supported" not in record.getMessage()
@@ -120,8 +124,13 @@ def evaluate_grid(
         parent_output_idx = None
 
     grid_pipeline = GridPipeline(
-        conf=msfm_conf, **{**dlss_conf["dset"]["common"], **dlss_conf["dset"]["eval"]["grid"]}
+        conf=msfm_conf,
+        **{k: v for k, v in {**dlss_conf["dset"]["common"], **dlss_conf["dset"]["eval"]["grid"]}.items()
+           if k not in _CLS_ONLY_KEYS},
     )
+
+    local_batch_size = dset_kwargs["local_batch_size"]
+    global_batch_size = distribute.get_global_batch_size(strategy, local_batch_size)
 
     # like https://www.tensorflow.org/tutorials/distribute/input#tfdistributestrategydistribute_datasets_from_function
     def dataset_fn(input_context):
@@ -149,8 +158,6 @@ def evaluate_grid(
     n_examples = n_cosmos * n_examples_per_cosmo
     LOGGER.info(f"There's a total of {n_examples} data vectors to be evaluated ({n_examples_per_cosmo} per cosmology)")
 
-    local_batch_size = dset_kwargs["local_batch_size"]
-    global_batch_size = distribute.get_global_batch_size(strategy, local_batch_size)
     n_batches = math.ceil(n_examples / global_batch_size)
 
     if n_examples % (strategy.num_replicas_in_sync * local_batch_size) != 0:
@@ -201,7 +208,7 @@ def evaluate_grid(
             second_to_last_layer.append(second_to_last_layer_batch)
 
     # sort according to the sobol index
-    sorted_indices = tf.argsort(tf.concat(i_sobols, axis=0), axis=0)
+    sorted_indices = tf.argsort(tf.concat(i_sobols, axis=0), axis=0, stable=True)
 
     # shape (n_cosmos, n_examples_per_cosmo, None)
     preds = _stack_grid_cosmos(preds, sorted_indices, n_examples_per_cosmo)
@@ -217,7 +224,13 @@ def evaluate_grid(
 
     def write_out_file():
         with h5py.File(out_file, "a") as f:
-            keys = ["grid/preds/test", "grid/cosmos/test", "grid/i_sobol/test", "grid/i_signal/test", "grid/i_noise/test"]
+            keys = [
+                "grid/preds/test",
+                "grid/cosmos/test",
+                "grid/i_sobol/test",
+                "grid/i_signal/test",
+                "grid/i_noise/test",
+            ]
             if save_second_to_last_layer:
                 keys.append("grid/second_to_last_layer/test")
             for key in keys:
@@ -306,7 +319,9 @@ def evaluate_fiducial(
         parent_output_idx = None
 
     fiducial_pipeline = FiducialPipeline(
-        conf=msfm_conf, **{**dlss_conf["dset"]["common"], **dlss_conf["dset"]["eval"]["fiducial"]}
+        conf=msfm_conf,
+        **{k: v for k, v in {**dlss_conf["dset"]["common"], **dlss_conf["dset"]["eval"]["fiducial"]}.items()
+           if k not in _CLS_ONLY_KEYS},
     )
 
     # like https://www.tensorflow.org/tutorials/distribute/input#tfdistributestrategydistribute_datasets_from_function
@@ -512,10 +527,12 @@ def evaluate_obs_benchmark(model_fn, pred_file, msfm_conf, dlss_conf, data_dir, 
     obs_dir = os.path.join(data_dir, "obs")
 
     for label in obs_labels:
-        obs_file = os.path.join(obs_dir, f"{label}.h5")
+        obs_file = os.path.join(obs_dir, f"{label}_obs_maps.h5")
         if not os.path.exists(obs_file):
             LOGGER.warning(f"Benchmark file not found: {obs_file}, skipping.")
             continue
+
+        out_label = label
 
         with h5py.File(obs_file, "r") as f:
             obs_maps = f["obs/maps"][:].astype(np.float32)
@@ -536,9 +553,9 @@ def evaluate_obs_benchmark(model_fn, pred_file, msfm_conf, dlss_conf, data_dir, 
 
         preds = np.concatenate([model_fn(obs_maps[i : i + 1]) for i in range(len(obs_maps))], axis=0)
 
-        append_obs_to_file(pred_file, f"obs/preds/{label}_stack", preds)
-        append_obs_to_file(pred_file, f"obs/preds/{label}_mean", np.mean(preds, axis=0))
-        append_obs_to_file(pred_file, f"obs/cosmos/{label}", fiducial_cosmo)
+        append_obs_to_file(pred_file, f"obs/preds/{out_label}_stack", preds)
+        append_obs_to_file(pred_file, f"obs/preds/{out_label}_mean", np.mean(preds, axis=0))
+        append_obs_to_file(pred_file, f"obs/cosmos/{out_label}", fiducial_cosmo)
 
 
 def plot_summary_space_prior_predictive(grid_preds, obs_pred, n_rand=1_000, np_seed=12):
