@@ -65,3 +65,18 @@ srun --uenv=pytorch/v2.9.1:v2 --view=default -A a0158 -t 00:10:00 -n 1 --pty cod
 # login node
 uenv run --view=default pytorch/v2.9.1:v2 -- code tunnel --name=$CLUSTER_NAME-tunnel
 ```
+
+## activate environment session
+```
+# login node
+uenv start --view=default pytorch/v2.9.1:v2
+source ~/dlss/torch_env/bin/activate
+```
+
+## Tensorboard
+```
+uenv start --view=default pytorch/v2.9.1:v2
+source ~/dlss/torch_env/bin/activate
+
+tensorboard --logdir /users/athomsen/scratch/deep_lss/runs/v16/rot_in_place/maps --bind_all --port 6007
+```

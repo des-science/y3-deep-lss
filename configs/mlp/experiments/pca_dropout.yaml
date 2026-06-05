@@ -17,7 +17,7 @@ weight_decay: 1e-3
 clip_by_global_norm: 1.0
 lr_schedule: constant
 early_stopping:
-  patience: 5
+  patience: 2
   min_delta: 1e-2
   min_steps: 10000
 
@@ -25,7 +25,6 @@ early_stopping:
 signal_indices: 0.8
 noise_indices: Null
 apply_log: true
-scale_cut: soft_pruned
 
 # Logging / checkpointing
 log_every: 100

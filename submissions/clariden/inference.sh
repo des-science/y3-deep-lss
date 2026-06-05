@@ -42,4 +42,4 @@ srun -N1 --ntasks-per-node=1 --gpus-per-task=1 --cpus-per-task=72 --mem=110G \
         --flow_config=\"$FLOW_CONFIG\" \
         --include_grid \
         --include_des \
-        --include_bench"
+        --include_mocks"

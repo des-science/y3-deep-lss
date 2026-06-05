@@ -1,0 +1,32 @@
+# PCA whitening: compress the raw C_ℓ datavector to decorrelated, unit-variance
+# components before the MLP. Fitted once on training data; stored in the checkpoint.
+#
+# Rule of thumb: num_hidden_units ≈ 2 × pca_components.
+# Making the hidden layers much wider than the whitened input re-expands the space
+# and partially defeats the hypothesis-class restriction that whitening provides.
+pca_components: 128
+
+# Network architecture — width matched to 2 × pca_components
+num_hidden_units: 256
+num_layers: 4
+dropout_rate: 0.1
+normalization: layer # ignored when pca_components is set; kept for config clarity
+activation: relu
+
+# Training — same as default.yaml
+n_steps: 500000
+batch_size: 1024
+learning_rate: 1e-4
+clip_by_global_norm: 1.0
+
+lr_schedule: constant
+apply_log: true
+signal_indices: null   # null = all; float 0<x<1 = train on first x fraction, eval on remainder
+noise_indices: 0.8     # 0.8 = train on first 80% of noise realizations, eval on last 20%
+
+# Logging / checkpointing
+log_every: 100
+vali_every: 10000
+
+# XLA compilation
+xla: true

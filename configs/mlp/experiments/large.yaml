@@ -1,0 +1,31 @@
+# Network architecture
+num_hidden_units: 1024
+num_layers: 8
+dropout_rate: 0.1
+normalization: layer
+activation: relu
+
+# Training
+n_steps: 500000
+batch_size: 1024
+learning_rate: 1e-4
+clip_by_global_norm: 1.0
+
+# Learning rate schedule
+lr_schedule: constant # no cosine decay; learning_rate is held fixed throughout
+apply_log: true
+signal_indices: null   # null = all; float 0<x<1 = train on first x fraction, eval on remainder
+noise_indices: 0.8     # 0.8 = train on first 80% of noise realizations, eval on last 20%
+
+# Logging / checkpointing
+log_every: 100
+vali_every: 10000
+
+# XLA compilation (speeds up GPU training step ~20-40%)
+xla: true
+
+# Early stopping (patience counts vali evaluations without improvement)
+early_stopping:
+  patience: 10 # stop after 10 stale vali evals (= 100k steps at vali_every=10k)
+  min_delta: 1e-2 # must improve by at least this much
+  min_steps: 100000 # never stop before this many training steps

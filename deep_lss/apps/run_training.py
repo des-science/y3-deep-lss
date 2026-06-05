@@ -80,9 +80,9 @@ def setup():
     parser.add_argument(
         "--loss_function",
         type=str,
-        default="delta",
+        default=None,
         choices=["delta", "mse", "likelihood", "mutual_info"],
-        help="loss function to train the network with",
+        help="loss function to train with. If omitted, read from loss_function key in the loss config.",
     )
     parser.add_argument(
         "--dist_strategy",
@@ -146,12 +146,14 @@ def setup():
     parser.add_argument(
         "--dlss_config",
         type=str,
-        default="config/dlss_config.yaml",
+        default=None,
         help=(
-            "configuration .yaml file of this repo. None means that the standard configuration file in"
-            " configs/dlss_config.yaml relative to this repo is loaded."
+            "configuration .yaml file of this repo. Mutually exclusive with --probes_config."
         ),
     )
+    parser.add_argument("--probes_config", type=str, default=None, help="probe/parameter config (configs/probes/)")
+    parser.add_argument("--scales_config", type=str, default=None, help="scale-cut config (configs/scales/)")
+    parser.add_argument("--loss_config", type=str, default=None, help="loss function config (configs/loss/)")
     parser.add_argument(
         "--msfm_config",
         type=str,
@@ -201,11 +203,6 @@ def setup():
 
     if args.summary_every < 1:
         raise ValueError(f"summary_every must be >= 1, got {args.summary_every}")
-
-    if args.loss_function == "delta":
-        assert "fiducial" in args.train_tfr_pattern, f"The delta loss can only be used for the fiducial dataset"
-    else:
-        assert "grid" in args.train_tfr_pattern, f"The {args.loss_function} loss can only be used for the grid dataset"
 
     assert not (
         (args.fidu_vali_tfr_pattern is not None) and (args.grid_vali_tfr_pattern is not None)
@@ -271,6 +268,9 @@ def setup():
             f"Could not configure the GPUs to memory growth mode, all available GPU memory is reserved for TensorFlow"
         )
 
+    if not args.restore_checkpoint and not args.dlss_config and not args.probes_config:
+        parser.error("Either --dlss_config or --probes_config is required")
+
     return args
 
 
@@ -287,8 +287,19 @@ def training():
     if not args.restore_checkpoint:
         # load the configs
         net_conf = input_output.read_yaml(os.path.join(args.repo_dir, args.net_config))
-        dlss_conf = input_output.read_yaml(os.path.join(args.repo_dir, args.dlss_config))
+        if args.dlss_config:
+            dlss_conf = input_output.read_yaml(os.path.join(args.repo_dir, args.dlss_config))
+        else:
+            dlss_conf = input_output.read_yaml(args.probes_config)
+            if args.scales_config:
+                dlss_conf.update(input_output.read_yaml(args.scales_config))
+            if args.loss_config:
+                dlss_conf.update(input_output.read_yaml(args.loss_config))
         msfm_conf = files.load_config(args.msfm_config)
+        if args.loss_function is None:
+            args.loss_function = dlss_conf.get("loss_function")
+        if args.loss_function is None:
+            raise ValueError("loss_function not set; either pass --loss_function or use a --loss_config with a loss_function key")
         LOGGER.info(f"Loaded configs from the provided paths")
 
         if args.dir_model is None:
@@ -324,6 +335,8 @@ def training():
         with open(os.path.join(dir_model, "configs.yaml"), "r") as f:
             net_conf, dlss_conf, msfm_conf = list(yaml.load_all(f, Loader=yaml.FullLoader))
 
+        if args.loss_function is None:
+            args.loss_function = net_conf["run"]["loss_func"]
         LOGGER.info(f"Loaded configs from the model directory")
 
     else:
@@ -449,6 +462,10 @@ def training():
     eval_every = net_conf["training"]["eval_every"]
 
     # constants: miscellaneous
+    if args.loss_function == "delta":
+        assert "fiducial" in args.train_tfr_pattern, "The delta loss can only be used for the fiducial dataset"
+    else:
+        assert "grid" in args.train_tfr_pattern, f"The {args.loss_function} loss can only be used for the grid dataset"
     training_type = "fiducial" if args.loss_function == "delta" else "grid"
     smoothing_kwargs = configuration.get_smoothing_kwargs(
         args.loss_function, msfm_conf, dlss_conf, net_conf, dir_base=dir_model

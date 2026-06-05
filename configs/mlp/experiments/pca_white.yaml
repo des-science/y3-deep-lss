@@ -1,0 +1,39 @@
+# PCA rotation only: decorrelates and centers the C_ℓ datavector but does NOT
+# scale to unit variance (pca_whiten: false). Components retain their original
+# variance (λ_i), so the dominant modes are still louder than subdominant ones.
+# LayerNorm in the first MLP layer compensates per-sample, but not per-population.
+#
+# Use this to isolate the effect of whitening vs plain PCA rotation.
+pca_components: 9999
+pca_whiten: true
+
+# Network architecture — same as pca_default.yaml
+num_hidden_units: 1024
+num_layers: 4
+dropout_rate: 0.1
+normalization: layer
+activation: relu
+
+# Training — same as pca_default.yaml
+n_steps: 500000
+batch_size: 1024
+learning_rate: 1e-4
+weight_decay: 1e-3
+clip_by_global_norm: 1.0
+
+lr_schedule: constant
+apply_log: true
+signal_indices: null   # null = all; float 0<x<1 = train on first x fraction, eval on remainder
+noise_indices: 0.8     # 0.8 = train on first 80% of noise realizations, eval on last 20%
+
+# Logging / checkpointing
+log_every: 100
+vali_every: 10000
+
+# XLA compilation
+xla: true
+
+early_stopping:
+  patience: 10 # stop after 10 stale vali evals (= 100k steps at vali_every=10k)
+  min_delta: 1e-2 # must improve by at least this much
+  min_steps: 100000 # never stop before this many training steps

@@ -1,0 +1,80 @@
+# contains the model specific configuration parameters for training and hyperparameter optimization
+name: deepsphere_default
+
+training:
+  n_steps: 50000
+  output_every: Null
+  checkpoint_every: 10000
+  vali_every: 10000
+  eval_every: Null
+
+optimization:
+  # adam or sgd
+  optimizer: adam
+  # this could also be handled in the optimizer instead of the training step
+  gradient_clipping:
+    clip_by_value: null
+    clip_by_norm: null
+    clip_by_global_norm: 1.0
+  mutual_info_loss:
+    learning_rate: 1e-4
+    optimizer_kwargs:
+      beta_1: 0.9
+      beta_2: 0.999
+    scheduler: Null
+    warmup_steps: 5000
+    warmup_init_learning_rate: 1e-5
+    decay_alpha: 0.0
+
+network:
+  name: resnet
+  n_neighbors: 60
+  max_checkpoints: 50
+  save_second_to_last_layer: False
+  z_bank_size: Null
+  kwargs:
+    base_channels: 32
+    # depth
+    downsampling_layers: 3
+    cheby_layers: 2
+    residual_layers: 5
+    # misc
+    poly_degree: 5
+    head_type: "dense"
+    second_to_last_features: Null
+    dropout_rate: 0.01
+
+dset:
+  training:
+    common:
+      is_eval: False
+      signal_indices: 0.8
+      noise_indices: Null
+      n_readers: 32
+      n_prefetch: 2
+      n_workers: Null
+    grid:
+      local_batch_size: 24
+      file_name_shuffle_buffer: 64
+      examples_shuffle_buffer: 128
+  validation:
+    n_batches: 1000
+    common:
+      is_eval: True
+      signal_indices: 0.8
+      noise_indices: Null
+      n_readers: 8
+      n_prefetch: 2
+      n_workers: 16
+    grid:
+      local_batch_size: 20
+  eval:
+    common:
+      is_eval: True
+      signal_indices: 0.8
+      noise_indices: Null
+      n_readers: 64
+      n_prefetch: 2
+      n_workers: Null
+    grid:
+      local_batch_size: 20

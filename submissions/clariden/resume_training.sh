@@ -12,7 +12,8 @@
 
 REPOS="/users/athomsen/dlss/repos"
 STRATEGY="mirrored"
-LOSS="mutual_info"
+LOSS="vmim"
+SCALES="8wl,32gc"
 FLOW_CONFIG="$REPOS/multiprobe-simulation-inference/configs/flow/default.yaml"
 
 VERSION="v16"
@@ -20,9 +21,8 @@ VERSION="v16"
 # SUBVERSION="no_sc"
 SUBVERSION="rot_in_place"
 
-# MODEL="40Mpc"
-MODEL="v1"
-# MODEL="v5"
+# MODEL="v1"
+MODEL="v2"
 
 # PROBE="lensing"
 PROBE="clustering"
@@ -42,18 +42,17 @@ export WANDB_API_KEY=$(awk '/password/ {print $2}' ~/.netrc)
 export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK}
 export TF_NUM_INTRAOP_THREADS=${SLURM_CPUS_PER_TASK}
 
-echo $MODEL
-
 srun --environment=tensorflow --gpu-bind=none --output=""$LOG"_training.log" \
     python $REPOS/y3-deep-lss/deep_lss/apps/run_training.py \
         --dir_base=$OUTPUT \
         --dir_model=$MODEL \
-        --loss_function=$LOSS \
         --train_tfr_pattern=$TRAIN_TFR \
         --grid_vali_tfr_pattern=$GRID_EVAL_TFR \
         --msfm_config="$REPOS/multiprobe-simulation-forward-model/configs/$VERSION/$SUBVERSION.yaml" \
-        --dlss_config="$REPOS/y3-deep-lss/configs/$VERSION/$SUBVERSION/$PROBE/dlss.yaml" \
-        --net_config="$REPOS/y3-deep-lss/configs/$VERSION/$SUBVERSION/$PROBE/deepsphere_256.yaml" \
+        --probes_config="$REPOS/y3-deep-lss/configs/probes/${PROBE}.yaml" \
+        --scales_config="$REPOS/y3-deep-lss/configs/scales/${SCALES}.yaml" \
+        --loss_config="$REPOS/y3-deep-lss/configs/loss/${LOSS}.yaml" \
+        --net_config="$REPOS/y3-deep-lss/configs/deepsphere/${PROBE}/default.yaml" \
         --dist_strategy="$STRATEGY" \
         --wandb \
         --wandb_tags "$VERSION" "$SUBVERSION" "$PROBE" "$LOSS" "$STRATEGY" "resnet" \
@@ -68,7 +67,7 @@ srun --environment=tensorflow --gpu-bind=none --output=""$LOG"_inference.log" \
         --data_dir=$INPUT \
         --include_grid \
         --include_des \
-        --include_bench
+        --include_mocks
 
 sleep 30
 
@@ -81,4 +80,4 @@ srun -N1 --ntasks-per-node=1 --gpus-per-task=1 --cpus-per-task=72 --mem=110G \
         --flow_config=\"$FLOW_CONFIG\" \
         --include_grid \
         --include_des \
-        --include_bench"
+        --include_mocks"

@@ -38,7 +38,7 @@ for FLOW_CONFIG in "${FLOW_CONFIGS[@]}"; do
                 --flow_label=\"${FLOW_CONFIG}\" \
                 --include_grid \
                 --include_des \
-                --include_bench" &
+                --include_mocks" &
 done
 
 wait

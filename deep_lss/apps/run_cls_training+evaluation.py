@@ -45,9 +45,11 @@ def setup():
         description="Train an MLP summary network on binned power spectra (Cls) using the mutual information loss."
     )
     parser.add_argument("--msfm_config", required=True)
-    parser.add_argument("--dlss_config", required=True)
+    parser.add_argument("--dlss_config", default=None)
+    parser.add_argument("--probes_config", default=None)
+    parser.add_argument("--scales_config", default=None)
+    parser.add_argument("--loss_config", required=True)
     parser.add_argument("--mlp_config", required=True)
-    parser.add_argument("--vmim_config", required=True)
     parser.add_argument("--data_dir", required=True)
     parser.add_argument("--out_dir", required=True)
     parser.add_argument("--model_name", default="model")
@@ -60,7 +62,10 @@ def setup():
     parser.add_argument("--include_mocks", action="store_true", help="evaluate mock observations from data_dir/obs/")
     parser.add_argument("--mock_labels", nargs="+", default=["fiducial_bench"])
 
-    return parser.parse_args()
+    args = parser.parse_args()
+    if not args.dlss_config and not args.probes_config:
+        parser.error("Either --dlss_config or --probes_config is required")
+    return args
 
 
 def main():
@@ -68,9 +73,15 @@ def main():
     msfm_conf = files.load_config(args.msfm_config)
     from msfm.utils import input_output
 
-    dlss_conf = input_output.read_yaml(args.dlss_config)
+    if args.dlss_config:
+        dlss_conf = input_output.read_yaml(args.dlss_config)
+    else:
+        dlss_conf = input_output.read_yaml(args.probes_config)
+        if args.scales_config:
+            dlss_conf.update(input_output.read_yaml(args.scales_config))
     mlp_conf = input_output.read_yaml(args.mlp_config)
-    vmim_conf = input_output.read_yaml(args.vmim_config)
+    vmim_conf = input_output.read_yaml(args.loss_config)
+    mi = vmim_conf["mutual_info_loss"]
 
     common = dlss_conf["dset"]["common"]
     with_lensing = common["with_lensing"]
@@ -203,18 +214,18 @@ def main():
         loss="mutual_info",
         dim_x=n_cls,
         dim_summary=n_summary,
-        mutual_info_estimator=vmim_conf["estimator"],
+        mutual_info_estimator=mi["estimator"],
         clip_by_global_norm=mlp_conf.get("clip_by_global_norm", 1.0),
         mutual_info_kwargs={
-            "density_estimator": vmim_conf["density_estimator"],
-            "num_hidden_layers": vmim_conf.get("num_hidden_layers", 2),
-            "num_hidden_units": vmim_conf.get("num_hidden_units", 128),
-            "activation": vmim_conf.get("activation", "relu"),
-            "full_covariance": vmim_conf.get("full_covariance", True),
-            "num_components": vmim_conf.get("num_components", 4),
-            "num_layers": vmim_conf.get("num_layers", 4),
-            "scale_eps": float(vmim_conf.get("scale_eps", 1e-5)),
-            "log_scale_clip": float(vmim_conf.get("log_scale_clip", 5.0)),
+            "density_estimator": mi["density_estimator"],
+            "num_hidden_layers": mi["kwargs"].get("num_hidden_layers", 2),
+            "num_hidden_units": mi["kwargs"].get("num_hidden_units", 128),
+            "activation": mi["kwargs"].get("activation", "relu"),
+            "full_covariance": mi["kwargs"].get("full_covariance", True),
+            "num_components": mi["kwargs"].get("num_components", 4),
+            "num_layers": mi["kwargs"].get("num_layers", 4),
+            "scale_eps": float(mi["kwargs"].get("scale_eps", 1e-5)),
+            "log_scale_clip": float(mi["kwargs"].get("log_scale_clip", 5.0)),
         },
     )
 

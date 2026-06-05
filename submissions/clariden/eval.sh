@@ -19,7 +19,7 @@ VERSION="v16"
 # SUBVERSION="no_sc"
 SUBVERSION="rot_in_place"
 
-MODEL="v1"
+MODEL="v2"
 # MODEL="40Mpc"
 
 # PROBE="lensing"
@@ -39,14 +39,14 @@ export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK}
 export TF_NUM_INTRAOP_THREADS=${SLURM_CPUS_PER_TASK}
 
 srun --environment=tensorflow --gpu-bind=none --output=""$LOG"_evaluation.log" \
-    python $REPOS/y3-deep-lss/deep_lss/apps/run_evaluation.py \
+    python $REPOS/y3-deep-lss/deep_lss/apps/run_evaluation.py\
         --dist_strategy="$STRATEGY" \
         --grid_vali_tfr_pattern=$GRID_EVAL_TFR \
         --data_dir=$INPUT \
         --dir_model="$OUTPUT/$MODEL" \
         --include_grid \
         --include_des \
-        --include_bench
+        --include_mocks
 
 sleep 30
 
@@ -59,4 +59,4 @@ srun -N1 --ntasks-per-node=1 --gpus-per-task=1 --cpus-per-task=72 --mem=110G \
         --flow_config=\"$FLOW_CONFIG\" \
         --include_grid \
         --include_des \
-        --include_bench"
+        --include_mocks"
