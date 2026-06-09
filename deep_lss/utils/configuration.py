@@ -206,6 +206,79 @@ def get_smoothing_kwargs(loss_function, msfm_conf, dlss_conf, net_conf, dir_base
     return smoothing_kwargs
 
 
+def get_cls_bounds_per_pair(msfm_conf, dlss_conf):
+    """Return per-cross-pair (l_min_eff, l_max_eff) bin edges from the scales config.
+
+    For each cross pair (z1, z2):
+      ``l_max_eff[j] = min(l_max[z1], l_max[z2])``  (conservative: use the tighter cut)
+      ``l_min_eff[j] = max(l_min[z1], l_min[z2])``  (conservative: start where both are valid)
+
+    These are used as per-pair bin edges in ``ClsBinningAndTransformLayer``, so the
+    scale cut is baked into the binning rather than applied as a post-step.
+
+    ``l_min`` defaults to 30 per z-bin when absent from the scales config (covers configs
+    such as ``unsmoothed.yaml`` and ``8wl,40gc.yaml`` that omit the field).
+
+    Args:
+        msfm_conf (dict): Multiprobe-simulation-forward-model config.
+        dlss_conf (dict): Deep-LSS training config (must contain ``scale_cuts`` key).
+
+    Returns:
+        tuple: ``(names, l_min_eff_per_pair, l_max_eff_per_pair)`` where
+            - ``names``: list of str, e.g. ``["bin_0x0", "bin_0x1", …]``
+            - ``l_min_eff_per_pair``: list of float, one entry per cross pair.
+            - ``l_max_eff_per_pair``: list of float, one entry per cross pair.
+    """
+    from msfm.utils import cross_statistics
+
+    dset_common = dlss_conf["dset"]["common"]
+    with_lensing = dset_common["with_lensing"]
+    with_clustering = dset_common["with_clustering"]
+    n_z_lensing = len(msfm_conf["survey"]["metacal"]["z_bins"]) if with_lensing else 0
+    n_z_clustering = len(msfm_conf["survey"]["maglim"]["z_bins"]) if with_clustering else 0
+    with_cross_probe = with_lensing and with_clustering
+
+    _DEFAULT_L_MIN = 30
+
+    scale_cuts = dlss_conf.get("scale_cuts", {})
+    l_min_lensing = list(scale_cuts.get("lensing", {}).get("l_min", [_DEFAULT_L_MIN] * n_z_lensing))
+    l_min_clustering = list(scale_cuts.get("clustering", {}).get("l_min", [_DEFAULT_L_MIN] * n_z_clustering))
+    l_max_lensing = list(scale_cuts.get("lensing", {}).get("l_max", [None] * n_z_lensing))
+    l_max_clustering = list(scale_cuts.get("clustering", {}).get("l_max", [None] * n_z_clustering))
+    l_min_per_z = (l_min_lensing if with_lensing else []) + (l_min_clustering if with_clustering else [])
+    l_max_per_z = (l_max_lensing if with_lensing else []) + (l_max_clustering if with_clustering else [])
+
+    _, names = cross_statistics.get_cross_bin_indices(
+        n_z_lensing,
+        n_z_clustering,
+        with_lensing=with_lensing,
+        with_clustering=with_clustering,
+        with_cross_z=True,
+        with_cross_probe=with_cross_probe,
+    )
+    n_z_cross = len(names)
+
+    l_min_eff_per_pair = []
+    l_max_eff_per_pair = []
+    for name in names:
+        z1_str, z2_str = name.split("_", 1)[1].split("x")
+        z1, z2 = int(z1_str), int(z2_str)
+        lmin1 = l_min_per_z[z1] if z1 < len(l_min_per_z) else _DEFAULT_L_MIN
+        lmin2 = l_min_per_z[z2] if z2 < len(l_min_per_z) else _DEFAULT_L_MIN
+        lmax1 = l_max_per_z[z1] if z1 < len(l_max_per_z) else None
+        lmax2 = l_max_per_z[z2] if z2 < len(l_max_per_z) else None
+        l_min_eff_per_pair.append(max(lmin1, lmin2))
+        if lmax1 is None and lmax2 is None:
+            raise ValueError(f"No l_max defined for pair {name} — add l_max to the scales config.")
+        l_max_eff_per_pair.append(min(v for v in (lmax1, lmax2) if v is not None))
+
+    LOGGER.warning(
+        f"get_cls_bounds_per_pair: n_z_cross={n_z_cross}, "
+        f"l_min_eff={l_min_eff_per_pair}, l_max_eff={l_max_eff_per_pair}"
+    )
+    return names, l_min_eff_per_pair, l_max_eff_per_pair
+
+
 def get_backend_floatx():
     """Returns the current backend float of the keras backend.
 
