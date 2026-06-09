@@ -21,6 +21,8 @@ from msfm.utils import logger, files
 from deep_lss.utils import configuration, distribute, evaluation
 from deep_lss.models.base_model import BaseModel
 from deep_lss.nets import NETWORKS
+from deep_lss.nets.maps_plus_cls_network import MapsPlusCLSNetwork
+from deep_lss.nets.regression_head import get_cls_embedding_layers
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 warnings.filterwarnings("ignore", category=RuntimeWarning)
@@ -192,27 +194,70 @@ if __name__ == "__main__":
     # set up directories
     checkpoint_dir = os.path.abspath(os.path.join(args.dir_model, "checkpoint"))
 
+    return_cls = dlss_conf["dset"]["common"].get("return_cls", False)
+    if return_cls:
+        LOGGER.warning("return_cls=True in saved config — building MapsPlusCLSNetwork for evaluation")
+
+    max_batch_size = net_conf["dset"]["eval"]["grid"]["local_batch_size"]
+
     # create all of the variables within the strategy's scope, such that they are mirrored
     with strategy.scope():
-        # load the layers
-        network = NETWORKS[net_conf["network"]["name"]](
+        net_spec = NETWORKS[net_conf["network"]["name"]](
             out_features=n_output, smoothing_kwargs=smoothing_kwargs, **net_conf["network"]["kwargs"]
-        ).get_layers()
+        )
         LOGGER.info(f"Loaded a network specification of type {NETWORKS[net_conf['network']['name']]}")
 
-        # build the model, same regardless of the loss function (fiducial or grid)
-        model = BaseModel(
-            network=network,
-            n_side=smooth_nside,
-            indices=smooth_indices,
-            n_neighbors=net_conf["network"]["n_neighbors"],
-            input_shape=(None, len(smooth_indices), n_z_bins),
-            max_batch_size=net_conf["dset"]["eval"]["grid"]["local_batch_size"],
-            checkpoint_dir=checkpoint_dir,
-            # always load from a checkpoint
-            restore_checkpoint=True,
-            strategy=strategy,
-        )
+        if return_cls:
+            _, l_min_per_pair, l_max_per_pair = configuration.get_cls_bounds_per_pair(msfm_conf, dlss_conf)
+            n_cls_bins = net_conf["network"].get("cls_n_bins", 16)
+            cls_emb_widths = net_conf["network"].get("cls_embedding_layers", [512, 512, 512, 512])
+            cls_emb_dropout = net_conf["network"].get("cls_embedding_dropout_rate", None)
+            network = MapsPlusCLSNetwork(
+                conv_layers=net_spec.get_conv_layers(),
+                cls_embedding_layers=get_cls_embedding_layers(cls_emb_widths, dropout_rate=cls_emb_dropout),
+                regression_head_layers=net_spec.get_head_layers_no_flatten(),
+                n_side=smooth_nside,
+                tfr_n_side=n_side,
+                indices=smooth_indices,
+                n_neighbors=net_conf["network"]["n_neighbors"],
+                max_batch_size=max_batch_size,
+                initial_Fin=n_z_bins,
+                n_cls_bins=n_cls_bins,
+                l_min_per_pair=l_min_per_pair,
+                l_max_per_pair=l_max_per_pair,
+            )
+            network.gcnn.build((max_batch_size, len(smooth_indices), n_z_bins))
+            # Trace the full MapsPlusCLSNetwork so that network.built=True and BaseModel
+            # can call network.summary(). gcnn.build() only builds the map branch.
+            network(
+                (tf.zeros((2, len(smooth_indices), n_z_bins)),
+                 tf.zeros((2, 3 * n_side, len(l_min_per_pair)))),
+                training=False,
+            )
+            model = BaseModel(
+                network=network,
+                n_side=None,
+                indices=None,
+                n_neighbors=net_conf["network"]["n_neighbors"],
+                input_shape=None,
+                max_batch_size=max_batch_size,
+                checkpoint_dir=checkpoint_dir,
+                restore_checkpoint=True,
+                strategy=strategy,
+            )
+        else:
+            network = net_spec.get_layers()
+            model = BaseModel(
+                network=network,
+                n_side=smooth_nside,
+                indices=smooth_indices,
+                n_neighbors=net_conf["network"]["n_neighbors"],
+                input_shape=(None, len(smooth_indices), n_z_bins),
+                max_batch_size=max_batch_size,
+                checkpoint_dir=checkpoint_dir,
+                restore_checkpoint=True,
+                strategy=strategy,
+            )
 
     # Build a numpy-level model callable for individual observation evaluation.
     # Includes downsampling when smooth_nside < n_side.
@@ -225,16 +270,28 @@ if __name__ == "__main__":
             np.add.at(result, (slice(None), parent_output_idx, slice(None)), maps)
             return result / _counts[np.newaxis, :, np.newaxis]
 
-    def _call_model(x):
-        # HealpySmoothing pre-computes n_matmul_splits=2 for this pixel resolution;
-        # tf.split requires the batch dim divisible by 2, so pad batch=1 → 2.
-        if x.shape[0] == 1:
-            x = np.concatenate([x, x], axis=0)
-            return model(x, training=False).numpy()[:1]
-        return model(x, training=False).numpy()
+    if return_cls:
+        def _call_model(x, cls_raw):
+            # x: (B, n_pix_dv, n_ch); cls_raw: (B, n_ell, n_z_cross), precomputed consistently
+            # with training by forward_model_observation_map (same alm/smoothing pipeline that
+            # produces the Cls baked into the grid TFRecords) — passed in by evaluate_obs_*.
+            # HealpySmoothing's n_matmul_splits requires batch dim divisible by 2.
+            if x.shape[0] == 1:
+                x = np.concatenate([x, x], axis=0)
+                cls_raw = np.concatenate([cls_raw, cls_raw], axis=0)
+                return model((x, cls_raw), training=False).numpy()[:1]
+            return model((x, cls_raw), training=False).numpy()
+    else:
+        def _call_model(x, cls_raw=None):
+            # HealpySmoothing pre-computes n_matmul_splits=2 for this pixel resolution;
+            # tf.split requires the batch dim divisible by 2, so pad batch=1 → 2.
+            if x.shape[0] == 1:
+                x = np.concatenate([x, x], axis=0)
+                return model(x, training=False).numpy()[:1]
+            return model(x, training=False).numpy()
 
     if parent_output_idx is not None:
-        model_fn = lambda x: _call_model(_downsample(x))
+        model_fn = lambda x, cls_raw=None: _call_model(_downsample(x), cls_raw)
     else:
         model_fn = _call_model
 

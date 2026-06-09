@@ -14,7 +14,6 @@ LOGGER = logger.get_logger(__file__)
 from deep_lss.models.grid_model import GridLossModel
 from deep_lss.nets.mlp import MultiLayerPerceptron, PCAWhiteningLayer
 from deep_lss.utils import cls_evaluation, evaluation
-from deep_lss.utils.mutual_info_loss import distance_correlation
 
 from msi.utils import dataset
 
@@ -103,7 +102,7 @@ def main():
     n_params = len(params)
     n_summary = 2 * n_params
 
-    scale_cut = mlp_conf.get("scale_cut", "hard")
+    scale_cut = dlss_conf.get("scale_cut") or mlp_conf.get("scale_cut", "soft_pruned")
 
     n_steps = mlp_conf["n_steps"]
     batch_size = mlp_conf["batch_size"]
@@ -242,21 +241,21 @@ def main():
         else None
     )
 
-    # --- test-set tensors for DC evaluation — must match the training preprocessing ---
+    # --- test-set tensors for the vali MSE metric and final test evaluation — must match the training preprocessing ---
     # grid/cls/test is already log-transformed; grid/cls_raw/test is linear.
     if apply_log:
-        cls_test_dc = np.array(out_dict["grid/cls/test"], dtype=np.float32)
+        cls_test_eval = np.array(out_dict["grid/cls/test"], dtype=np.float32)
     else:
-        cls_test_dc = np.array(out_dict["grid/cls_raw/test"], dtype=np.float32)
+        cls_test_eval = np.array(out_dict["grid/cls_raw/test"], dtype=np.float32)
         if ell_weighting is not None and out_dict.get("ell_weights") is not None:
-            cls_test_dc = cls_test_dc * out_dict["ell_weights"].astype(np.float32)
-    grid_cosmos_dc = np.array(out_dict["grid/cosmos/test"], dtype=np.float32)
-    _n_dc = min(2048, len(cls_test_dc))
-    cls_test_dc_tf = tf.constant(cls_test_dc[:_n_dc])
-    grid_cosmos_dc_tf = tf.constant(grid_cosmos_dc[:_n_dc])
+            cls_test_eval = cls_test_eval * out_dict["ell_weights"].astype(np.float32)
+    grid_cosmos_eval = np.array(out_dict["grid/cosmos/test"], dtype=np.float32)
+    _n_eval = min(2048, len(cls_test_eval))
+    cls_test_eval_tf = tf.constant(cls_test_eval[:_n_eval])
+    grid_cosmos_eval_tf = tf.constant(grid_cosmos_eval[:_n_eval])
 
     train_steps, train_losses = [], []
-    vali_steps, vali_losses_history, vali_dc_history = [], [], []
+    vali_steps, vali_losses_history, vali_mse_history = [], [], []
 
     for i, (cl_batch, cosmo_batch) in tqdm(enumerate(cl_dset_train), total=n_steps + 1):
         if i > n_steps:
@@ -279,17 +278,21 @@ def main():
             vali_loss = np.mean(vali_loss_vals)
             vali_steps.append(i)
             vali_losses_history.append(vali_loss)
-            dc_preds = tf.concat(
-                [model(cls_test_dc_tf[j : j + batch_size], training=False) for j in range(0, _n_dc, batch_size)],
+            vali_preds = tf.concat(
+                [model(cls_test_eval_tf[j : j + batch_size], training=False) for j in range(0, _n_eval, batch_size)],
                 axis=0,
             )
-            dc_val = float(distance_correlation(dc_preds, grid_cosmos_dc_tf, training=False).numpy())
-            vali_dc_history.append(dc_val)
+            if hasattr(model, "vali_posterior_mean_fn"):
+                posterior_mean = model.vali_posterior_mean_fn(vali_preds)
+                mse_val = float(tf.reduce_mean(tf.square(posterior_mean - grid_cosmos_eval_tf)).numpy())
+            else:
+                mse_val = float("nan")
+            vali_mse_history.append(mse_val)
             with tb_writer.as_default():
                 tf.summary.scalar("loss/vali", vali_loss, step=i)
-                tf.summary.scalar("loss/vali_dc", dc_val, step=i)
+                tf.summary.scalar("loss/vali_mse", mse_val, step=i)
             tb_writer.flush()
-            LOGGER.info(f"step {i:>7d}  vali_loss = {vali_loss:.4f}  vali_dc = {dc_val:.4f}")
+            LOGGER.info(f"step {i:>7d}  vali_loss = {vali_loss:.4f}  vali_mse = {mse_val:.4f}")
 
             if early_stopper is not None:
                 improved = early_stopper.update(vali_loss)
@@ -315,14 +318,14 @@ def main():
         train_losses=train_losses,
         vali_steps=vali_steps,
         vali_losses=vali_losses_history,
-        vali_dc=vali_dc_history,
+        vali_mse=vali_mse_history,
         log_every=log_every,
     )
 
     # --- evaluate on test set (directly from out_dict, matching the notebook) ---
     LOGGER.info("Evaluating on test set...")
-    cls_test = cls_test_dc  # already extracted above with correct apply_log/ell_weighting
-    grid_cosmos = grid_cosmos_dc
+    cls_test = cls_test_eval  # already extracted above with correct apply_log/ell_weighting
+    grid_cosmos = grid_cosmos_eval
 
     grid_preds = np.concatenate(
         [
@@ -335,6 +338,9 @@ def main():
     with h5py.File(pred_file, "w") as f:
         f.create_dataset("grid/preds/test", data=grid_preds)
         f.create_dataset("grid/cosmos/test", data=grid_cosmos)
+        f.create_dataset("grid/i_sobol/test", data=out_dict["grid/i_sobol/test"])
+        f.create_dataset("grid/i_signal/test", data=out_dict["grid/i_signal/test"])
+        f.create_dataset("grid/i_noise/test", data=out_dict["grid/i_noise/test"])
 
     LOGGER.info(f"Saved {len(grid_preds)} test predictions to {pred_file}")
 

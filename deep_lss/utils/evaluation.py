@@ -174,21 +174,24 @@ def evaluate_grid(
             inputs=model.network.input, outputs=[last_layer.output, second_to_last_layer.output]
         )
 
+    return_cls = dlss_conf["dset"]["common"].get("return_cls", False)
+
     preds = []
     second_to_last_layer = []
     cosmos = []
     i_sobols = []
     i_signals = []
     i_noises = []
-    for dv_batch, _, cosmo_batch, index_batch in LOGGER.progressbar(
+    for dv_batch, cl_batch, cosmo_batch, index_batch in LOGGER.progressbar(
         dist_dset, at_level="info", total=n_batches, desc="evaluating the grid"
     ):
+        x_batch = (dv_batch, cl_batch) if return_cls else dv_batch
         # DistributedValues of shape (local_batch_size, n_output)
         if save_second_to_last_layer:
-            pred_batch, second_to_last_layer_batch = strategy.run(two_output_model, args=(dv_batch,))
+            pred_batch, second_to_last_layer_batch = strategy.run(two_output_model, args=(x_batch,))
             second_to_last_layer_batch = strategy.gather(second_to_last_layer_batch, axis=0)
         else:
-            pred_batch = strategy.run(model.tf_call, args=(dv_batch,))
+            pred_batch = strategy.run(model.tf_call, args=(x_batch,))
 
         # shape (global_batch_size, n_output)
         pred_batch = strategy.gather(pred_batch, axis=0)
@@ -466,7 +469,7 @@ def evaluate_obs_des(model_fn, pred_file, msfm_conf, dlss_conf):
     gc_map = catalog.build_maglim_map_from_cat(msfm_conf) if with_clustering else None
 
     for apply_sys, label in [(True, "DESy3"), (False, "DESy3_no_sys")]:
-        des_dv, _, _ = observation.forward_model_observation_map(
+        des_dv, des_cls, _ = observation.forward_model_observation_map(
             wl_gamma_map=wl_map,
             gc_count_map=gc_map,
             conf=msfm_conf,
@@ -475,7 +478,7 @@ def evaluate_obs_des(model_fn, pred_file, msfm_conf, dlss_conf):
             nest_in=False,
             apply_maglim_sys_map=apply_sys,
         )
-        pred = model_fn(des_dv[np.newaxis])
+        pred = model_fn(des_dv[np.newaxis], des_cls[np.newaxis])
         append_obs_to_file(pred_file, f"obs/preds/{label}", pred)
 
 
@@ -494,7 +497,7 @@ def evaluate_obs_buzzard(model_fn, pred_file, msfm_conf, dlss_conf, labels):
             continue
         wl_map = buzzard.get_lensing_map(lensing_file) if with_lensing else None
         gc_map = buzzard.get_clustering_map(clustering_file) if with_clustering else None
-        obs_map, _, _ = observation.forward_model_observation_map(
+        obs_map, obs_cls, _ = observation.forward_model_observation_map(
             wl_gamma_map=wl_map,
             gc_count_map=gc_map,
             conf=msfm_conf,
@@ -502,7 +505,7 @@ def evaluate_obs_buzzard(model_fn, pred_file, msfm_conf, dlss_conf, labels):
             with_padding=True,
             nest_in=False,
         )
-        pred = model_fn(obs_map[np.newaxis])
+        pred = model_fn(obs_map[np.newaxis], obs_cls[np.newaxis])
         append_obs_to_file(pred_file, f"obs/preds/{label}", pred)
 
 
@@ -536,6 +539,7 @@ def evaluate_obs_benchmark(model_fn, pred_file, msfm_conf, dlss_conf, data_dir, 
 
         with h5py.File(obs_file, "r") as f:
             obs_maps = f["obs/maps"][:].astype(np.float32)
+            obs_cls_raw = f["obs/cls_raw"][:].astype(np.float32)
 
         # Select and normalise channels based on probe
         n_channels_total = obs_maps.shape[-1]
@@ -551,7 +555,9 @@ def evaluate_obs_benchmark(model_fn, pred_file, msfm_conf, dlss_conf, data_dir, 
             if with_clustering:
                 obs_maps[:, :, n_z_lensing:] /= norm_clustering
 
-        preds = np.concatenate([model_fn(obs_maps[i : i + 1]) for i in range(len(obs_maps))], axis=0)
+        preds = np.concatenate(
+            [model_fn(obs_maps[i : i + 1], obs_cls_raw[i : i + 1]) for i in range(len(obs_maps))], axis=0
+        )
 
         append_obs_to_file(pred_file, f"obs/preds/{out_label}_stack", preds)
         append_obs_to_file(pred_file, f"obs/preds/{out_label}_mean", np.mean(preds, axis=0))

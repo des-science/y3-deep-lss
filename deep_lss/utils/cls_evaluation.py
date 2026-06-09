@@ -18,9 +18,11 @@ from deep_lss.utils import evaluation
 from msi.utils import preprocessing
 
 _OBS_PREPROC_FNS = {
-    "hard":        preprocessing.get_preprocessed_cl_observation_hard_cut,
-    "soft_pruned": partial(preprocessing.get_preprocessed_cl_observation, scale_cut="soft_pruned"),
-    "soft":        preprocessing.get_preprocessed_cl_observation,
+    "hard":             preprocessing.get_preprocessed_cl_observation_hard_cut,
+    "hard_conservative": partial(preprocessing.get_preprocessed_cl_observation_hard_cut, n_extra_bins=1),
+    "none":             preprocessing.get_preprocessed_cl_observation_hard_cut,
+    "soft_pruned":      partial(preprocessing.get_preprocessed_cl_observation, scale_cut="soft_pruned"),
+    "soft":             preprocessing.get_preprocessed_cl_observation,
 }
 
 
@@ -28,12 +30,12 @@ def _obs_preprocessing_fn(scale_cut):
     return _OBS_PREPROC_FNS[scale_cut]
 
 
-def save_loss_curve(pred_dir, pred_file, train_steps, train_losses, vali_steps, vali_losses, log_every, vali_dc=None):
+def save_loss_curve(pred_dir, pred_file, train_steps, train_losses, vali_steps, vali_losses, log_every, vali_mse=None):
     train_steps = np.array(train_steps)
     train_losses = np.array(train_losses)
     vali_steps = np.array(vali_steps)
     vali_losses = np.array(vali_losses)
-    vali_dc = np.array(vali_dc) if vali_dc else np.array([])
+    vali_mse = np.array(vali_mse) if vali_mse else np.array([])
 
     with h5py.File(pred_file, "a") as f:
         for key, arr in [
@@ -41,15 +43,15 @@ def save_loss_curve(pred_dir, pred_file, train_steps, train_losses, vali_steps, 
             ("loss/train_losses", train_losses),
             ("loss/vali_steps", vali_steps),
             ("loss/vali_losses", vali_losses),
-            ("loss/vali_dc", vali_dc),
+            ("loss/vali_mse", vali_mse),
         ]:
             if key in f:
                 del f[key]
             f.create_dataset(key, data=arr)
 
     has_vali = len(vali_steps) > 0
-    has_dc = len(vali_dc) > 0
-    n_panels = 1 + int(has_dc)
+    has_mse = len(vali_mse) > 0
+    n_panels = 1 + int(has_mse)
     fig, axes = plt.subplots(1, n_panels, figsize=(8 * n_panels, 4))
     if n_panels == 1:
         axes = [axes]
@@ -63,11 +65,11 @@ def save_loss_curve(pred_dir, pred_file, train_steps, train_losses, vali_steps, 
     ax.set_ylabel("MI loss")
     ax.legend()
 
-    if has_dc:
+    if has_mse:
         ax2 = axes[1]
-        ax2.plot(vali_steps, vali_dc, lw=1.5, marker="o", ms=3, color="C2", label="vali DC")
+        ax2.plot(vali_steps, vali_mse, lw=1.5, marker="o", ms=3, color="C2", label="vali MSE")
         ax2.set_xlabel("step")
-        ax2.set_ylabel("distance correlation (lower = more correlated)")
+        ax2.set_ylabel("posterior mean MSE")
         ax2.legend()
 
     fig.tight_layout()
