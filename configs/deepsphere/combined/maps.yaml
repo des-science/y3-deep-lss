@@ -2,10 +2,10 @@
 name: deepsphere_default
 
 training:
-  n_steps: 200000
+  n_steps: 50000
   output_every: Null
   checkpoint_every: 10000
-  vali_every: 10000
+  vali_every: 1000
   eval_every: Null
 
 optimization:
@@ -42,8 +42,8 @@ network:
     # misc
     poly_degree: 5
     head_type: "dense"
-    dense_layers: Null
-    dropout_rate: 0.01
+    dense_layers: []
+    dropout_rate: 0.1
 
 dset:
   training:
@@ -51,11 +51,11 @@ dset:
       is_eval: False
       signal_indices: 0.8
       noise_indices: Null
-      n_readers: 64
-      n_prefetch: 8
+      n_readers: 32
+      n_prefetch: 4
       n_workers: Null
     grid:
-      local_batch_size: 20
+      local_batch_size: 24
       file_name_shuffle_buffer: 64
       examples_shuffle_buffer: 256
   validation:

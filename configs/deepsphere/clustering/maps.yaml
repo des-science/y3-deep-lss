@@ -5,7 +5,7 @@ training:
   n_steps: 200000
   output_every: Null
   checkpoint_every: 10000
-  vali_every: 10000
+  vali_every: 1000
   eval_every: Null
 
 optimization:
@@ -42,8 +42,8 @@ network:
     # misc
     poly_degree: 5
     head_type: "dense"
-    dense_layers: Null
-    dropout_rate: 0.01
+    dense_layers: []
+    dropout_rate: 0.1
 
 dset:
   training:

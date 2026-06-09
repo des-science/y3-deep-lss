@@ -41,7 +41,7 @@ network:
     # misc
     poly_degree: 5
     head_type: "dense"
-    second_to_last_features: Null
+    dense_layers: Null
     dropout_rate: 0.01
 
 dset:
@@ -58,7 +58,7 @@ dset:
       file_name_shuffle_buffer: 64
       examples_shuffle_buffer: 128
   validation:
-    n_batches: 1000
+    n_batches: 50
     common:
       is_eval: True
       signal_indices: 0.8

@@ -2,10 +2,10 @@
 name: deepsphere_default
 
 training:
-  n_steps: 200000
+  n_steps: 100000
   output_every: Null
   checkpoint_every: 10000
-  vali_every: 10000
+  vali_every: 1000
   eval_every: Null
 
 optimization:
@@ -33,6 +33,11 @@ network:
   max_checkpoints: 50
   save_second_to_last_layer: False
   z_bank_size: Null
+  # number of ell bins per cross pair
+  cls_n_bins: 16
+  # MLP widths for the Cls embedding branch (Dense→LN per entry); [] to disable
+  cls_embedding_layers: [512, 512, 512, 512]
+  cls_embedding_dropout_rate: 0.5
   kwargs:
     base_channels: 32
     # depth
@@ -42,8 +47,8 @@ network:
     # misc
     poly_degree: 5
     head_type: "dense"
-    dense_layers: Null
-    dropout_rate: 0.01
+    dense_layers: []
+    dropout_rate: 0.1
 
 dset:
   training:
@@ -55,7 +60,7 @@ dset:
       n_prefetch: 8
       n_workers: Null
     grid:
-      local_batch_size: 20
+      local_batch_size: 32
       file_name_shuffle_buffer: 64
       examples_shuffle_buffer: 256
   validation:
