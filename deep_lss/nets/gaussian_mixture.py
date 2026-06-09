@@ -87,3 +87,10 @@ class GaussianMixtureModel:
         theta = tf.cast(theta, tf.float32)
 
         return gmm.log_prob(theta)
+
+    def mean(self, summary):
+        """Posterior mean E[θ|summary] = Σ_k w_k(summary) * μ_k(summary)"""
+        mixture_logits = tf.cast(self.mixture_logits_net(summary), tf.float32)
+        loc = tf.cast(tf.reshape(self.loc_net(summary), [-1, self.num_components, self.dim_theta]), tf.float32)
+        weights = tf.nn.softmax(mixture_logits, axis=-1)  # [B, K]
+        return tf.reduce_sum(weights[:, :, tf.newaxis] * loc, axis=1)  # [B, D]

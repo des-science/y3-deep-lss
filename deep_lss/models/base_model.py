@@ -144,6 +144,11 @@ class BaseModel(object):
         if self.input_shape is not None:
             self.build_network(input_shape=self.input_shape)
             self.print_summary()
+        elif isinstance(self.network, tf.keras.Model) and self.network.built:
+            # MapsPlusCLSNetwork is passed with input_shape=None (tuple inputs don't use the
+            # standard build path), but the caller traces it with dummy inputs beforehand so
+            # network.built is True by the time we arrive here.
+            self.print_summary()
 
         # set the step
         self.train_step = tf.Variable(self.init_step, trainable=False, name="GlobalStep", dtype=tf.int64)

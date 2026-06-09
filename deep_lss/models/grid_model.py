@@ -292,6 +292,7 @@ class GridLossModel(BaseModel):
                 loss_fn = lambda preds, theta, training=True: tf.reduce_mean(
                     self.variational_head([preds, theta], training=training)
                 )
+                self.vali_posterior_mean_fn = self.variational_head.estimator.mean
 
             # see https://arxiv.org/pdf/2010.10079
             elif mutual_info_estimator == "distance_correlation":

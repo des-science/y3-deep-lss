@@ -192,4 +192,6 @@ def get_variational_model_from_summary(
 
     out = -estimator.log_prob(in_theta, in_summary)
 
-    return tf.keras.Model(inputs=[in_summary, in_theta], outputs=out)
+    model = tf.keras.Model(inputs=[in_summary, in_theta], outputs=out)
+    model.estimator = estimator
+    return model
