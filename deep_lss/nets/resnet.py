@@ -29,7 +29,7 @@ class ResNetLayers:
         residual_layers=6,
         # regression head
         head_type="dense",
-        second_to_last_features=None,
+        dense_layers=None,
         dropout_rate=None,
         # misc
         poly_degree=5,
@@ -55,8 +55,6 @@ class ResNetLayers:
                 to 6.
             head_type (str, optional): Type of regression head to be used, allowed are "dense" and "conv. Defaults to
                 "dense".
-            second_to_last_features (int, optional): Number of features in the second to last layer of the regression.
-                Defaults to None, then no dense second to last layer is included.
             dropout_rate (float, optional): Dropout rate within the regression head. Defaults to None, then it's not
                 included.
             poly_degree (int, optional): Degree of the polynomials within the Chebyshev convolutions. Defaults to 5.
@@ -98,17 +96,34 @@ class ResNetLayers:
                 )
             )
 
+        # snapshot conv-only layers before the regression head is appended
+        self._conv_layers = list(self.layers)
+
         # regression head
         regression_head_layers = get_regression_head(
             out_features=out_features,
             head_type=head_type,
-            second_to_last_features=second_to_last_features,
+            dense_layers=dense_layers,
             activation=activation,
             dropout_rate=dropout_rate,
             poly_degree=poly_degree,
             norm_kwargs=norm_kwargs,
         )
+        # head without the leading Flatten — used when Cls are concatenated after flattening
+        self._head_layers_no_flatten = regression_head_layers[1:] if head_type == "dense" else regression_head_layers
         self.layers.extend(regression_head_layers)
 
     def get_layers(self):
         return self.layers
+
+    def get_conv_layers(self):
+        """Return only the graph-convolution layers, without the regression head."""
+        return self._conv_layers
+
+    def get_head_layers_no_flatten(self):
+        """Return the regression head layers without the leading Flatten layer.
+
+        Used by MapsPlusCLSNetwork which performs its own flatten-and-concat step before the head.
+        Only meaningful for head_type='dense'; for 'conv' heads the full head is returned.
+        """
+        return self._head_layers_no_flatten

@@ -26,13 +26,28 @@ def get_regression_head(
     out_features,
     head_type="dense",
     # dense
-    second_to_last_features=None,
+    dense_layers=None,
     activation="relu",
     dropout_rate=None,
     # convolutional
     poly_degree=5,
     norm_kwargs={},
 ):
+    """Build the regression head layers.
+
+    The dense head always starts with [Flatten, LayerNorm, …] so that
+    ``head_layers_no_flatten = head[1:]`` is valid in ResNetLayers.
+
+    Args:
+        out_features: Output dimension.
+        head_type: ``"dense"`` or ``"conv"``.
+        dense_layers: List of hidden layer widths, e.g. ``[512, 128]``.  Each entry adds
+            Dense(hᵢ, activation) → LayerNorm.
+        activation: Activation for hidden dense layers.
+        dropout_rate: Dropout rate applied after hidden layers (mutually exclusive with hidden layers).
+        poly_degree: Chebyshev degree for the convolutional head.
+        norm_kwargs: Extra kwargs for LayerNormalization.
+    """
     layers = []
 
     if head_type == "dense":
@@ -41,23 +56,21 @@ def get_regression_head(
         layers.append(tf.keras.layers.Flatten())
         layers.append(tf.keras.layers.LayerNormalization(axis=-1))
 
-        if second_to_last_features is not None:
-            LOGGER.warning("Including a second to last dense layer in the regression head")
-            # the sliced Wasserstein penalty is easier with this extra dense layer
-            layers.append(tf.keras.layers.Dense(16 * second_to_last_features, activation=activation))
-            layers.append(tf.keras.layers.LayerNormalization(axis=-1))
-            # no activation such that the z_features can be negative for a standard distribution
-            layers.append(tf.keras.layers.Dense(second_to_last_features))
+        if dense_layers is not None:
+            LOGGER.warning(f"Using dense_layers={dense_layers} in the regression head")
+            for h in dense_layers:
+                layers.append(tf.keras.layers.Dense(h, activation=activation))
+                layers.append(tf.keras.layers.LayerNormalization(axis=-1))
 
         if dropout_rate is not None:
-            assert not second_to_last_features, "Dropout and second to last features should not be used together"
+            assert not dense_layers, \
+                "Dropout and hidden dense layers should not be used together"
             LOGGER.warning(f"Using dropout with probability {dropout_rate} in the regression head")
             layers.append(tf.keras.layers.Dropout(dropout_rate))
 
         layers.append(tf.keras.layers.Dense(out_features))
 
     elif head_type == "conv":
-        assert not second_to_last_features, "Second to last features not supported for convolutional head"
         assert dropout_rate is None, "Dropout not supported for convolutional head"
 
         LOGGER.info("Using a convolutional + averaging regression head")
@@ -69,4 +82,27 @@ def get_regression_head(
     else:
         raise ValueError(f"Unknown regression head type: {head_type}")
 
+    return layers
+
+
+def get_cls_embedding_layers(hidden_layers, dropout_rate=None, activation="relu"):
+    """Build an MLP to embed binned Cls before fusion with map features in MapsPlusCLSNetwork.
+
+    Args:
+        hidden_layers: List of int widths, e.g. ``[512, 512, 512, 512]``.
+            ``None`` or empty list → returns ``[]`` (no embedding).
+        dropout_rate: Optional float; a single Dropout appended after all hidden layers.
+        activation: Activation for hidden Dense layers.
+
+    Returns:
+        List of Keras layers: interleaved Dense + LayerNorm, with optional trailing Dropout.
+    """
+    if not hidden_layers:
+        return []
+    layers = []
+    for h in hidden_layers:
+        layers.append(tf.keras.layers.Dense(h, activation=activation))
+        layers.append(tf.keras.layers.LayerNormalization(axis=-1))
+    if dropout_rate is not None:
+        layers.append(tf.keras.layers.Dropout(dropout_rate))
     return layers
