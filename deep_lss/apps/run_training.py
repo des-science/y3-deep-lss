@@ -57,6 +57,8 @@ from deep_lss.models.delta_model import DeltaLossModel
 from deep_lss.models.grid_model import GridLossModel
 from deep_lss.utils.distribute import HorovodStrategy
 from deep_lss.nets import NETWORKS
+from deep_lss.nets.maps_plus_cls_network import MapsPlusCLSNetwork
+from deep_lss.nets.regression_head import get_cls_embedding_layers
 
 LOGGER = logger.get_logger(__file__)
 
@@ -421,6 +423,10 @@ def training():
         # only update the config here instead of in the init so that possible changes by a sweep agent are included
         wandb_run.config.setdefaults({"msfm": msfm_conf, "dlss": dlss_conf, "net": net_conf})
 
+        wandb.define_metric("train_step")
+        for prefix in ("loss/*", "schedule/*", "learning_rate", "global_grad_norm*", "step_time", "data_time", "compute_time", "z_bank/*", "z_invariance/*"):
+            wandb.define_metric(prefix, step_metric="train_step")
+
         LOGGER.info(f"Initialized weights & biases to {dir_model}")
         LOGGER.warning(f"Running with {strategy.num_replicas_in_sync} replicas")
 
@@ -453,6 +459,9 @@ def training():
     with_lensing = dlss_conf["dset"]["common"]["with_lensing"]
     with_clustering = dlss_conf["dset"]["common"]["with_clustering"]
     with_cross = dlss_conf["dset"]["common"].get("with_cross", False)
+    return_cls = dlss_conf["dset"]["common"].get("return_cls", False)
+    if return_cls:
+        LOGGER.warning("return_cls=True detected in probe config — will build MapsPlusCLSNetwork")
 
     # constants: network
     n_steps = net_conf["training"]["n_steps"]
@@ -544,31 +553,83 @@ def training():
 
     # network, create all of the variables within the strategy's scope, such that they are mirrored
     with strategy.scope():
-        network = NETWORKS[net_conf["network"]["name"]](
+        net_spec = NETWORKS[net_conf["network"]["name"]](
             out_features=n_output, smoothing_kwargs=smoothing_kwargs, **net_conf["network"]["kwargs"]
-        ).get_layers()
+        )
         LOGGER.info(f"Loaded a network specification of type {NETWORKS[net_conf['network']['name']]}")
         LOGGER.info(f"Network kwargs including regularization: {net_conf['network']['kwargs']}")
 
         optimizer = optimization.get_optimizer(net_conf, args.loss_function, args.restore_checkpoint)
 
-        model = Model(
-            network=network,
-            n_side=smooth_nside,
-            indices=smooth_indices,
-            n_neighbors=net_conf["network"]["n_neighbors"],
-            z_bank_size=net_conf["network"]["z_bank_size"],
-            max_checkpoints=net_conf["network"]["max_checkpoints"],
-            optimizer=optimizer,
-            input_shape=(None, len(smooth_indices), n_z_bins),
-            max_batch_size=effective_local_batch_size,
-            checkpoint_dir=checkpoint_dir,
-            summary_dir=summary_dir,
-            restore_checkpoint=args.restore_checkpoint,
-            strategy=strategy,
-            xla=args.xla,
-            summary_every=args.summary_every,
-        )
+        if return_cls:
+            # Build a MapsPlusCLSNetwork: HealpyGCNN for maps + binned log-Cls concatenated.
+            # The model is passed pre-built so BaseModel uses it directly without re-wrapping in HealpyGCNN.
+            _, l_min_per_pair, l_max_per_pair = configuration.get_cls_bounds_per_pair(msfm_conf, dlss_conf)
+            n_cls_bins = net_conf["network"].get("cls_n_bins", 16)
+            cls_emb_widths = net_conf["network"].get("cls_embedding_layers", [512, 512, 512, 512])
+            cls_emb_dropout = net_conf["network"].get("cls_embedding_dropout_rate", None)
+            network = MapsPlusCLSNetwork(
+                conv_layers=net_spec.get_conv_layers(),
+                cls_embedding_layers=get_cls_embedding_layers(cls_emb_widths, dropout_rate=cls_emb_dropout),
+                regression_head_layers=net_spec.get_head_layers_no_flatten(),
+                n_side=smooth_nside,
+                tfr_n_side=n_side,
+                indices=smooth_indices,
+                n_neighbors=net_conf["network"]["n_neighbors"],
+                max_batch_size=effective_local_batch_size,
+                initial_Fin=n_z_bins,
+                n_cls_bins=n_cls_bins,
+                l_min_per_pair=l_min_per_pair,
+                l_max_per_pair=l_max_per_pair,
+            )
+            # HealpySmoothing is a tf.keras.Model whose build() must be called before
+            # setup_grid_loss_step accesses trainable_variables. BaseModel skips this
+            # because input_shape=None is passed below (tuple inputs can't use the
+            # standard build path). Build the inner GCNN directly with the map shape.
+            network.gcnn.build((effective_local_batch_size, len(smooth_indices), n_z_bins))
+            # Trace the full MapsPlusCLSNetwork so that network.built=True and BaseModel
+            # can call network.summary(). gcnn.build() only builds the map branch.
+            network(
+                (tf.zeros((2, len(smooth_indices), n_z_bins)),
+                 tf.zeros((2, 3 * n_side, len(l_min_per_pair)))),
+                training=False,
+            )
+            model = Model(
+                network=network,
+                n_side=None,
+                indices=None,
+                n_neighbors=net_conf["network"]["n_neighbors"],
+                z_bank_size=net_conf["network"]["z_bank_size"],
+                max_checkpoints=net_conf["network"]["max_checkpoints"],
+                optimizer=optimizer,
+                input_shape=None,
+                max_batch_size=effective_local_batch_size,
+                checkpoint_dir=checkpoint_dir,
+                summary_dir=summary_dir,
+                restore_checkpoint=args.restore_checkpoint,
+                strategy=strategy,
+                xla=args.xla,
+                summary_every=args.summary_every,
+            )
+        else:
+            network = net_spec.get_layers()
+            model = Model(
+                network=network,
+                n_side=smooth_nside,
+                indices=smooth_indices,
+                n_neighbors=net_conf["network"]["n_neighbors"],
+                z_bank_size=net_conf["network"]["z_bank_size"],
+                max_checkpoints=net_conf["network"]["max_checkpoints"],
+                optimizer=optimizer,
+                input_shape=(None, len(smooth_indices), n_z_bins),
+                max_batch_size=effective_local_batch_size,
+                checkpoint_dir=checkpoint_dir,
+                summary_dir=summary_dir,
+                restore_checkpoint=args.restore_checkpoint,
+                strategy=strategy,
+                xla=args.xla,
+                summary_every=args.summary_every,
+            )
 
         # training step, fiducial pipeline
         if args.loss_function == "delta":
@@ -612,12 +673,14 @@ def training():
             else:
                 mutual_info_kwargs = {}
 
+            # when return_cls=True the network accepts a (maps, cls) tuple input, so no static
+            # input_signature is set (dim_x=None); the tf.function traces dynamically instead.
             model.setup_grid_loss_step(
                 loss=args.loss_function,
                 batch_size=local_batch_size,
                 dim_theta=n_params,
-                dim_x=len(data_vec_pix),
-                dim_channels=n_z_bins,
+                dim_x=None if return_cls else len(data_vec_pix),
+                dim_channels=None if return_cls else n_z_bins,
                 **mutual_info_kwargs,
                 **likelihood_kwargs,
                 **net_conf["optimization"]["gradient_clipping"],
@@ -630,11 +693,26 @@ def training():
         vali_dset_kwargs["drop_remainder"] = True
         n_vali_batches = net_conf["dset"]["validation"]["n_batches"]
 
-        def vali_merge_mean(losses):
-            losses = tf.stack(losses, axis=0)
-            # to ignore NaNs, which can occur if the batch size is too large, such that some workers get empty batches
-            losses = tf.reduce_mean(tf.boolean_mask(losses, ~tf.math.is_nan(losses)))
-            return losses
+        # fall back to the training tfrecords when no explicit validation pattern is given;
+        # the split is fully determined by signal_indices + is_eval in the validation config.
+        grid_vali_tfr = args.grid_vali_tfr_pattern or (args.train_tfr_pattern if training_type == "grid" else None)
+
+        def make_validation_loop(dist_dset, step_fn, n_expected, summary_map):
+            def validation_loop():
+                metrics = [tf.keras.metrics.Mean(), tf.keras.metrics.Mean()]
+                for batch_tuple in LOGGER.progressbar(dist_dset, at_level="debug", desc="validation", total=n_expected):
+                    vals = step_fn(batch_tuple)
+                    for i, v in enumerate(vals):
+                        if not tf.math.is_nan(v):
+                            metrics[i].update_state(v)
+                assert not tf.math.is_nan(
+                    metrics[0].result()
+                ), "Validation loss is NaN, check the validation batch size as this is likely due to partially empty batches"
+                for key, idx in summary_map:
+                    model.write_summary(key, metrics[idx].result())
+                for m in metrics:
+                    m.reset_states()
+            return validation_loop
 
         if args.fidu_vali_tfr_pattern is not None:
             vali_dset_kwargs.update(net_conf["dset"]["validation"]["fiducial"])
@@ -661,15 +739,12 @@ def training():
                     strategy=strategy,
                 )
 
-                # we only want tf.functions in strategy.run
                 @tf.function
                 def vali_loss_fn(batch):
                     preds = model(batch, training=False)
-                    loss = model.vali_loss_fn(preds)
-                    loss_non_regu = non_regularized_loss_fn(preds)
-
-                    # without this, the loss overwrites itself within the summary writer
-                    model.increment_step()
+                    with tf.summary.record_if(False):
+                        loss = model.vali_loss_fn(preds)
+                        loss_non_regu = non_regularized_loss_fn(preds)
                     return loss, loss_non_regu
 
             else:
@@ -686,10 +761,9 @@ def training():
                     @tf.function
                     def vali_loss_fn(batch):
                         preds = model(batch, training=False)
-                        loss = model.vali_loss_fn(preds, labels)
+                        with tf.summary.record_if(False):
+                            loss = model.vali_loss_fn(preds, labels)
                         loss_non_regu = mse(tf.slice(preds, begin=[0, 0], size=[-1, n_params]), labels)
-
-                        model.increment_step()
                         return loss, loss_non_regu
 
                 elif args.loss_function == "mutual_info":
@@ -699,10 +773,9 @@ def training():
                     @tf.function
                     def vali_loss_fn(batch):
                         preds = model(batch, training=False)
-                        loss = model.vali_loss_fn(preds, labels)
+                        with tf.summary.record_if(False):
+                            loss = model.vali_loss_fn(preds, labels)
                         loss_non_regu = loss
-
-                        model.increment_step()
                         return loss, loss_non_regu
 
             LOGGER.warning(f"Fiducial validation set")
@@ -717,110 +790,93 @@ def training():
                     parent_output_idx=parent_output_idx,
                 )
                 if n_vali_batches is not None:
-                    dset = dset.take(n_vali_batches * strategy.num_replicas_in_sync)
+                    dset = dset.take(n_vali_batches * strategy.num_replicas_in_sync).cache()
 
                 return dset
 
             dist_vali_dset = strategy.distribute_datasets_from_function(vali_dset_fn)
 
-            def validation_loop():
-                loss_list = []
-                loss_non_regu_list = []
-                n_steps = 0
-                for vali_batch, _, _ in LOGGER.progressbar(dist_vali_dset, at_level="debug", desc="validation"):
-                    loss, loss_non_regu = strategy.run(vali_loss_fn, args=(vali_batch,))
+            def vali_step_fn(batch_tuple):
+                vali_batch, _, _ = batch_tuple
+                total, main = strategy.run(vali_loss_fn, args=(vali_batch,))
+                return (
+                    strategy.reduce(tf.distribute.ReduceOp.MEAN, total, axis=None),
+                    strategy.reduce(tf.distribute.ReduceOp.MEAN, main, axis=None),
+                )
 
-                    loss_list.append(loss)
-                    loss_non_regu_list.append(loss_non_regu)
-                    n_steps += 1
+            validation_loop = make_validation_loop(
+                dist_vali_dset, vali_step_fn, n_vali_batches,
+                [("loss/vali_total", 0), ("loss/vali_main", 1)],
+            )
 
-                vali_loss = strategy.run(vali_merge_mean, args=(loss_list,))
-                vali_loss_non_regu = strategy.run(vali_merge_mean, args=(loss_non_regu_list,))
-
-                # only reduce over the replicas
-                vali_loss = strategy.reduce(tf.distribute.ReduceOp.MEAN, vali_loss, axis=None)
-                vali_loss_non_regu = strategy.reduce(tf.distribute.ReduceOp.MEAN, vali_loss_non_regu, axis=None)
-
-                assert not tf.math.is_nan(
-                    vali_loss
-                ), f"Validation loss is NaN, check the validation batch size as this is likely due to partially empty batches"
-
-                # reset the summary writer step to what it was before the validation
-                model.change_step(-n_steps)
-
-                model.write_summary("loss/vali_total", vali_loss)
-                model.write_summary("loss/vali_main", vali_loss_non_regu)
-
-                return n_steps
-
-        elif args.grid_vali_tfr_pattern is not None:
+        elif grid_vali_tfr is not None:
             vali_pipe_kwargs["params"] = dlss_conf["dset"]["eval"]["grid"]["params"]
 
             vali_dset_kwargs.update(net_conf["dset"]["validation"]["grid"])
 
             LOGGER.warning(f"Grid validation set")
+            n_vali_examples_per_replica = n_vali_batches * vali_dset_kwargs["local_batch_size"] if n_vali_batches is not None else None
+            LOGGER.info(
+                f"Grid validation: {n_vali_batches} batches × local_batch_size "
+                f"{vali_dset_kwargs['local_batch_size']} = "
+                f"{n_vali_examples_per_replica} examples/replica, every {vali_every} steps"
+            )
             vali_grid_pipe = GridPipeline(conf=msfm_conf, **vali_pipe_kwargs)
 
             def vali_dset_fn(input_context):
                 dset = vali_grid_pipe.get_dset(
-                    tfr_pattern=args.grid_vali_tfr_pattern,
+                    tfr_pattern=grid_vali_tfr,
                     **vali_dset_kwargs,
                     input_context=input_context,
                     downsample_nside=smooth_nside if parent_output_idx is not None else None,
                     parent_output_idx=parent_output_idx,
                 )
                 if n_vali_batches is not None:
-                    dset = dset.take(n_vali_batches * strategy.num_replicas_in_sync)
+                    dset = dset.take(n_vali_batches * strategy.num_replicas_in_sync).cache()
 
                 return dset
 
             if args.loss_function == "mutual_info":
 
                 @tf.function
-                def vali_loss_fn(dv, cosmo):
-                    preds = model(dv, training=False)
-                    loss = model.vali_loss_fn(preds, cosmo)
-
-                    model.increment_step()
-                    return loss
+                def vali_loss_fn(x, cosmo):
+                    preds = model(x, training=False)
+                    with tf.summary.record_if(False):
+                        loss = model.vali_loss_fn(preds, cosmo)
+                    if hasattr(model, "vali_posterior_mean_fn"):
+                        posterior_mean = model.vali_posterior_mean_fn(preds)
+                        rmse = tf.sqrt(tf.reduce_mean(tf.square(posterior_mean - tf.cast(cosmo, tf.float32))))
+                    else:
+                        rmse = tf.constant(float("nan"))
+                    return loss, rmse
 
             else:
                 raise NotImplementedError(f"Validation for the grid dataset is not implemented yet for other losses")
 
             dist_vali_dset = strategy.distribute_datasets_from_function(vali_dset_fn)
 
-            def validation_loop():
-                loss_list = []
-                n_steps = 0
-                for dv_batch, _, cosmo_batch, index_batch in LOGGER.progressbar(
-                    dist_vali_dset, at_level="debug", desc="validation", total=n_vali_batches
-                ):
-                    loss = strategy.run(vali_loss_fn, args=(dv_batch, cosmo_batch))
+            def vali_step_fn(batch_tuple):
+                dv_batch, cl_batch, cosmo_batch, index_batch = batch_tuple
+                x_batch = (dv_batch, cl_batch) if return_cls else dv_batch
+                loss, rmse = strategy.run(vali_loss_fn, args=(x_batch, cosmo_batch))
+                return (
+                    strategy.reduce(tf.distribute.ReduceOp.MEAN, loss, axis=None),
+                    strategy.reduce(tf.distribute.ReduceOp.MEAN, rmse, axis=None),
+                )
 
-                    loss_list.append(loss)
-                    n_steps += 1
-
-                vali_loss = strategy.run(vali_merge_mean, args=(loss_list,))
-
-                # only reduce over the replicas
-                vali_loss = strategy.reduce(tf.distribute.ReduceOp.MEAN, vali_loss, axis=None)
-
-                assert not tf.math.is_nan(
-                    vali_loss
-                ), f"Validation loss is NaN, check the validation batch size as this is likely due to partially empty batches"
-
-                # reset the summary writer step to what it was before the validation
-                model.change_step(-n_steps)
-                model.write_summary("loss/vali_total", vali_loss)
-                # vali_loss_fn has no z-regularization, so total == main; log both keys for
-                # consistency with the fiducial validation path
-                model.write_summary("loss/vali_main", vali_loss)
-
-                return n_steps
+            # vali_loss_fn has no z-regularization, so total == main; log both keys for
+            # consistency with the fiducial validation path
+            validation_loop = make_validation_loop(
+                dist_vali_dset, vali_step_fn, n_vali_batches,
+                [("loss/vali_total", 0), ("loss/vali_rmse", 1)],
+            )
 
     LOGGER.info(f"Starting training")
     LOGGER.timer.start("training")
     t_prev = time()
+    t_accum = 0.0
+    t_data_accum = 0.0
+    t_compute_accum = 0.0
 
     for step in LOGGER.progressbar(range(1, n_steps + 1), at_level="info", total=n_steps, desc="training"):
         # context for profiling like https://www.tensorflow.org/guide/profiler#profiling_custom_training_loops
@@ -833,12 +889,13 @@ def training():
                 t_data_end = time()
                 loss = model.delta_train_step(dv_batch)
             else:
-                dv_batch, _, cosmo_batch, index_batch = next(dist_iter)
+                dv_batch, cl_batch, cosmo_batch, index_batch = next(dist_iter)
                 t_data_end = time()
+                x_batch = (dv_batch, cl_batch) if return_cls else dv_batch
                 if getattr(model, "grid_train_step_uses_pair_ids", False):
-                    loss = model.grid_train_step(dv_batch, cosmo_batch, index_batch[0], index_batch[1])
+                    loss = model.grid_train_step(x_batch, cosmo_batch, index_batch[0], index_batch[1])
                 else:
-                    loss = model.grid_train_step(dv_batch, cosmo_batch)
+                    loss = model.grid_train_step(x_batch, cosmo_batch)
             t_compute_end = time()
 
             # horovod
@@ -873,11 +930,14 @@ def training():
                     LOGGER.info(f"Validating the model every {vali_every} steps")
                     LOGGER.timer.start("vali")
 
-                n_vali_steps = validation_loop()
+                validation_loop()
+                if model.summary_writer is not None:
+                    model.summary_writer.flush()
 
                 if second_vali:
                     LOGGER.info(
-                        f"Finished validating the model after {LOGGER.timer.elapsed('vali')} and {n_vali_steps} steps/batches"
+                        f"Finished validating the model after {LOGGER.timer.elapsed('vali')} and "
+                        f"{n_vali_batches} steps/batches"
                     )
 
             # evaluate
@@ -979,12 +1039,18 @@ def training():
 
             # additional logs
             t_now = time()
-            if step % args.summary_every == 0:
-                model.write_summary("step_time", t_now - t_prev)
-                model.write_summary("data_time", t_data_end - t_data_start)
-                model.write_summary("compute_time", t_compute_end - t_data_end)
-                model.write_summary("global_step", step)
+            t_accum += t_now - t_prev
+            t_data_accum += t_data_end - t_data_start
+            t_compute_accum += t_compute_end - t_data_end
             t_prev = t_now
+            if step % args.summary_every == 0:
+                model.write_summary("step_time", t_accum / args.summary_every)
+                model.write_summary("data_time", t_data_accum / args.summary_every)
+                model.write_summary("compute_time", t_compute_accum / args.summary_every)
+                model.write_summary("global_step", model.get_step())
+                t_accum = 0.0
+                t_data_accum = 0.0
+                t_compute_accum = 0.0
 
     LOGGER.info(f"Finished training after {n_steps} steps and {LOGGER.timer.elapsed('training')}")
 
