@@ -26,7 +26,10 @@ _OBS_PREPROC_FNS = {
 }
 
 
-def _obs_preprocessing_fn(scale_cut):
+def _obs_preprocessing_fn(scale_cut, cls_n_bins=None):
+    if scale_cut == "hard_rebinned":
+        from deep_lss.utils.cls_preprocessing import preprocess_obs_hard_rebinned
+        return partial(preprocess_obs_hard_rebinned, cls_n_bins=cls_n_bins)
     return _OBS_PREPROC_FNS[scale_cut]
 
 
@@ -95,6 +98,7 @@ def evaluate_mock_cls(
     apply_log=True,
     ell_weighting=None,
     scale_cut="hard",
+    cls_n_bins=None,
 ):
     from msfm.utils import parameters as msfm_params
 
@@ -108,7 +112,7 @@ def evaluate_mock_cls(
         obs_cls_raw = f_in["obs/cls_raw"][:]
     print(f"obs_cls_raw.shape = {obs_cls_raw.shape}")
 
-    obs_cl = _obs_preprocessing_fn(scale_cut)(
+    obs_cl = _obs_preprocessing_fn(scale_cut, cls_n_bins=cls_n_bins)(
         obs_cl=obs_cls_raw,
         msfm_conf=msfm_conf,
         dlss_conf=dlss_conf,
@@ -156,32 +160,52 @@ def evaluate_des_y3(
     apply_log=True,
     ell_weighting=None,
     scale_cut="hard",
+    cls_n_bins=None,
 ):
     from msfm.utils import catalog
 
+    use_wl = with_lensing or with_cross_probe
+    use_gc = with_clustering or with_cross_probe
+
+    # Build both maps regardless of probe selection: preprocess_obs_hard_rebinned
+    # rebins the full (lensing+clustering) set of pairs and applies probe
+    # selection afterwards, so obs_cl must cover all pairs just like the grid cache.
     print("Building DES Y3 maps from catalogs...")
     wl_gamma_map, _ = catalog.build_metacal_map_from_cat(msfm_conf)
     gc_count_map = catalog.build_maglim_map_from_cat(msfm_conf)
 
-    print("Computing DES Y3 binned Cls...")
-    des_cl = _obs_preprocessing_fn(scale_cut)(
-        wl_gamma_map=wl_gamma_map,
-        gc_count_map=gc_count_map,
-        msfm_conf=msfm_conf,
-        dlss_conf=dlss_conf,
-        base_dir=data_dir,
-        nest_in=False,
-        with_lensing=with_lensing,
-        with_clustering=with_clustering,
-        with_cross_z=with_cross_z,
-        with_cross_probe=with_cross_probe,
-        ggl_only=ggl_only,
-        apply_log=apply_log,
-        standardize=False,
-        ell_weighting=ell_weighting,
-        make_plot=False,
-        apply_maglim_sys_map=True,
-    )
+    lensing_variants = [(wl_gamma_map, "")]
+    if use_wl:
+        wl_gamma_map_no_psi_rot, _ = catalog.build_metacal_map_from_cat(
+            msfm_conf, apply_shear_rotation=False, debug=False
+        )
+        lensing_variants.append((wl_gamma_map_no_psi_rot, "_no_psi_rot"))
 
-    des_pred = model(tf.constant(des_cl, dtype=tf.float32), training=False).numpy()
-    evaluation.append_obs_to_file(pred_file, "obs/preds/DESy3", des_pred)
+    sys_variants = [(True, "DESy3")]
+    if use_gc:
+        sys_variants.append((False, "DESy3_no_sys"))
+
+    print("Computing DES Y3 binned Cls...")
+    for wl_map, rot_suffix in lensing_variants:
+        for apply_sys, sys_label in sys_variants:
+            des_cl = _obs_preprocessing_fn(scale_cut, cls_n_bins=cls_n_bins)(
+                wl_gamma_map=wl_map,
+                gc_count_map=gc_count_map,
+                msfm_conf=msfm_conf,
+                dlss_conf=dlss_conf,
+                base_dir=data_dir,
+                nest_in=False,
+                with_lensing=with_lensing,
+                with_clustering=with_clustering,
+                with_cross_z=with_cross_z,
+                with_cross_probe=with_cross_probe,
+                ggl_only=ggl_only,
+                apply_log=apply_log,
+                standardize=False,
+                ell_weighting=ell_weighting,
+                make_plot=False,
+                apply_maglim_sys_map=apply_sys,
+            )
+
+            des_pred = model(tf.constant(des_cl, dtype=tf.float32), training=False).numpy()
+            evaluation.append_obs_to_file(pred_file, f"obs/preds/{sys_label}{rot_suffix}", des_pred)
