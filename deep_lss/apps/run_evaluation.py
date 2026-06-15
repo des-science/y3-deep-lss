@@ -194,9 +194,9 @@ if __name__ == "__main__":
     # set up directories
     checkpoint_dir = os.path.abspath(os.path.join(args.dir_model, "checkpoint"))
 
-    return_cls = dlss_conf["dset"]["common"].get("return_cls", False)
+    return_cls = "cls_n_bins" in net_conf["network"]
     if return_cls:
-        LOGGER.warning("return_cls=True in saved config — building MapsPlusCLSNetwork for evaluation")
+        LOGGER.warning("cls_n_bins detected in net_conf['network'] — building MapsPlusCLSNetwork for evaluation")
 
     max_batch_size = net_conf["dset"]["eval"]["grid"]["local_batch_size"]
 

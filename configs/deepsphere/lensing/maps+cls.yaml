@@ -29,7 +29,6 @@ optimization:
 network:
   name: resnet
   n_neighbors: 60
-  smooth_nside: 256
   max_checkpoints: 50
   save_second_to_last_layer: False
   z_bank_size: Null
@@ -41,7 +40,7 @@ network:
   kwargs:
     base_channels: 32
     # depth
-    downsampling_layers: 2
+    downsampling_layers: 3
     cheby_layers: 2
     residual_layers: 5
     # misc

@@ -5,8 +5,6 @@ dset:
     with_cross_z: True
     with_cross_probe: False
     apply_norm: True
-    return_maps: True
-    return_cls: False
   training:
     params: [Om, s8, w0, bg1, bg2, bg3, bg4]
   eval:

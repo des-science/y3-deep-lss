@@ -28,6 +28,10 @@ LOGGER = logger.get_logger(__file__)
 # before constructing GridPipeline / FiducialPipeline (map-based pipelines don't accept them).
 _CLS_ONLY_KEYS = frozenset({"with_cross_z", "with_cross_probe", "ggl_only"})
 
+# Keys in dset.common that some probe configs (e.g. maps+cls) set directly, but which are
+# also passed explicitly below — strip them here to avoid duplicate keyword arguments.
+_EXPLICIT_PIPELINE_KEYS = frozenset({"return_maps", "return_cls"})
+
 # suppress a specific warning
 logging.getLogger("tensorflow").addFilter(
     lambda record: "gather/all_gather with NCCL or HierarchicalCopy is not supported" not in record.getMessage()
@@ -123,10 +127,14 @@ def evaluate_grid(
         smooth_nside = None
         parent_output_idx = None
 
+    return_cls = "cls_n_bins" in net_conf["network"]
+
     grid_pipeline = GridPipeline(
         conf=msfm_conf,
         **{k: v for k, v in {**dlss_conf["dset"]["common"], **dlss_conf["dset"]["eval"]["grid"]}.items()
-           if k not in _CLS_ONLY_KEYS},
+           if k not in _CLS_ONLY_KEYS | _EXPLICIT_PIPELINE_KEYS},
+        return_maps=True,
+        return_cls=return_cls,
     )
 
     local_batch_size = dset_kwargs["local_batch_size"]
@@ -174,8 +182,6 @@ def evaluate_grid(
             inputs=model.network.input, outputs=[last_layer.output, second_to_last_layer.output]
         )
 
-    return_cls = dlss_conf["dset"]["common"].get("return_cls", False)
-
     preds = []
     second_to_last_layer = []
     cosmos = []
@@ -188,7 +194,9 @@ def evaluate_grid(
         x_batch = (dv_batch, cl_batch) if return_cls else dv_batch
         # DistributedValues of shape (local_batch_size, n_output)
         if save_second_to_last_layer:
-            pred_batch, second_to_last_layer_batch = strategy.run(two_output_model, args=(x_batch,))
+            pred_batch, second_to_last_layer_batch = strategy.run(
+                lambda x: two_output_model(x, training=False), args=(x_batch,)
+            )
             second_to_last_layer_batch = strategy.gather(second_to_last_layer_batch, axis=0)
         else:
             pred_batch = strategy.run(model.tf_call, args=(x_batch,))
@@ -324,7 +332,9 @@ def evaluate_fiducial(
     fiducial_pipeline = FiducialPipeline(
         conf=msfm_conf,
         **{k: v for k, v in {**dlss_conf["dset"]["common"], **dlss_conf["dset"]["eval"]["fiducial"]}.items()
-           if k not in _CLS_ONLY_KEYS},
+           if k not in _CLS_ONLY_KEYS | _EXPLICIT_PIPELINE_KEYS},
+        return_maps=True,
+        return_cls="cls_n_bins" in net_conf["network"],
     )
 
     # like https://www.tensorflow.org/tutorials/distribute/input#tfdistributestrategydistribute_datasets_from_function
@@ -360,7 +370,9 @@ def evaluate_fiducial(
     ):
         # DistributedValues of shape (local_batch_size, n_output)
         if save_second_to_last_layer:
-            pred_batch, second_to_last_layer_batch = strategy.run(two_output_model, args=(dv_batch,))
+            pred_batch, second_to_last_layer_batch = strategy.run(
+                lambda x: two_output_model(x, training=False), args=(dv_batch,)
+            )
             second_to_last_layer_batch = strategy.gather(second_to_last_layer_batch, axis=0)
         else:
             pred_batch = strategy.run(model.tf_call, args=(dv_batch,))
@@ -458,28 +470,69 @@ def evaluate_obs_grid(pred_file, grid_preds, grid_cosmos, i_sobols, i_signals, i
         append_obs_to_file(pred_file, f"obs/cosmos/{label}", grid_cosmos[idx])
 
 
+def _get_cls_bin_indices(msfm_conf, dlss_conf):
+    """Indices selecting the probe-configured pairs from a full 36-pair raw Cl tensor,
+    matching configuration.get_cls_bounds_per_pair / ClsBinningAndTransformLayer."""
+    from msfm.utils import cross_statistics
+
+    dset_common = dlss_conf["dset"]["common"]
+    with_lensing = dset_common["with_lensing"]
+    with_clustering = dset_common["with_clustering"]
+    n_z_lensing = len(msfm_conf["survey"]["metacal"]["z_bins"])
+    n_z_clustering = len(msfm_conf["survey"]["maglim"]["z_bins"])
+
+    cls_bin_indices, _ = cross_statistics.get_cross_bin_indices(
+        n_z_lensing,
+        n_z_clustering,
+        with_lensing=with_lensing,
+        with_clustering=with_clustering,
+        with_cross_z=dset_common.get("with_cross_z", True),
+        with_cross_probe=dset_common.get("with_cross_probe", with_lensing and with_clustering),
+        ggl_only=dset_common.get("ggl_only", False),
+    )
+    return cls_bin_indices
+
+
 def evaluate_obs_des(model_fn, pred_file, msfm_conf, dlss_conf):
     """Evaluate real DES Y3 catalogs through the network, with and without systematics."""
     from msfm.utils import catalog, observation
 
     with_lensing = dlss_conf["dset"]["common"]["with_lensing"]
     with_clustering = dlss_conf["dset"]["common"]["with_clustering"]
+    with_cross_probe = dlss_conf["dset"]["common"]["with_cross_probe"]
 
-    wl_map = catalog.build_metacal_map_from_cat(msfm_conf)[0] if with_lensing else None
-    gc_map = catalog.build_maglim_map_from_cat(msfm_conf) if with_clustering else None
+    use_wl = with_lensing or with_cross_probe
+    use_gc = with_clustering or with_cross_probe
 
-    for apply_sys, label in [(True, "DESy3"), (False, "DESy3_no_sys")]:
-        des_dv, des_cls, _ = observation.forward_model_observation_map(
-            wl_gamma_map=wl_map,
-            gc_count_map=gc_map,
-            conf=msfm_conf,
-            apply_norm=True,
-            with_padding=True,
-            nest_in=False,
-            apply_maglim_sys_map=apply_sys,
-        )
-        pred = model_fn(des_dv[np.newaxis], des_cls[np.newaxis])
-        append_obs_to_file(pred_file, f"obs/preds/{label}", pred)
+    cls_bin_indices = _get_cls_bin_indices(msfm_conf, dlss_conf)
+
+    wl_map = catalog.build_metacal_map_from_cat(msfm_conf)[0] if use_wl else None
+    gc_map = catalog.build_maglim_map_from_cat(msfm_conf) if use_gc else None
+
+    lensing_variants = [(wl_map, "")]
+    if use_wl:
+        wl_map_no_psi_rot = catalog.build_metacal_map_from_cat(msfm_conf, apply_shear_rotation=False, debug=False)[0]
+        lensing_variants.append((wl_map_no_psi_rot, "_no_psi_rot"))
+
+    sys_variants = [(True, "DESy3")]
+    if use_gc:
+        sys_variants.append((False, "DESy3_no_sys"))
+
+    for wl, rot_suffix in lensing_variants:
+        for apply_sys, label in sys_variants:
+            des_dv, des_cls, _ = observation.forward_model_observation_map(
+                wl_gamma_map=wl,
+                gc_count_map=gc_map,
+                conf=msfm_conf,
+                apply_norm=True,
+                with_padding=True,
+                nest_in=False,
+                apply_maglim_sys_map=apply_sys,
+            )
+            if des_cls.shape[-1] != len(cls_bin_indices):
+                des_cls = des_cls[:, cls_bin_indices]
+            pred = model_fn(des_dv[np.newaxis], des_cls[np.newaxis])
+            append_obs_to_file(pred_file, f"obs/preds/{label}{rot_suffix}", pred)
 
 
 def evaluate_obs_buzzard(model_fn, pred_file, msfm_conf, dlss_conf, labels):
@@ -488,6 +541,8 @@ def evaluate_obs_buzzard(model_fn, pred_file, msfm_conf, dlss_conf, labels):
 
     with_lensing = dlss_conf["dset"]["common"]["with_lensing"]
     with_clustering = dlss_conf["dset"]["common"]["with_clustering"]
+
+    cls_bin_indices = _get_cls_bin_indices(msfm_conf, dlss_conf)
 
     buzzard_indices, lensing_files, clustering_files = buzzard.get_filenames(msfm_conf)
 
@@ -505,6 +560,8 @@ def evaluate_obs_buzzard(model_fn, pred_file, msfm_conf, dlss_conf, labels):
             with_padding=True,
             nest_in=False,
         )
+        if obs_cls.shape[-1] != len(cls_bin_indices):
+            obs_cls = obs_cls[:, cls_bin_indices]
         pred = model_fn(obs_map[np.newaxis], obs_cls[np.newaxis])
         append_obs_to_file(pred_file, f"obs/preds/{label}", pred)
 
@@ -517,12 +574,19 @@ def evaluate_obs_benchmark(model_fn, pred_file, msfm_conf, dlss_conf, data_dir, 
     """
     from msfm.utils import parameters
 
-    with_lensing = dlss_conf["dset"]["common"]["with_lensing"]
-    with_clustering = dlss_conf["dset"]["common"]["with_clustering"]
-    n_z_lensing = len(msfm_conf["survey"]["metacal"]["z_bins"]) if with_lensing else 0
+    dset_common = dlss_conf["dset"]["common"]
+    with_lensing = dset_common["with_lensing"]
+    with_clustering = dset_common["with_clustering"]
+    n_z_lensing = len(msfm_conf["survey"]["metacal"]["z_bins"])
+    n_z_clustering = len(msfm_conf["survey"]["maglim"]["z_bins"])
 
     norm_lensing = msfm_conf["analysis"]["normalization"]["lensing"]
     norm_clustering = msfm_conf["analysis"]["normalization"]["clustering"]
+
+    # obs/cls_raw in the benchmark file always stores all 36 lensing+clustering cross pairs;
+    # select the subset matching the model's probe configuration (mirrors the TFRecord
+    # parsing in msfm.utils.tfrecords and deep_lss.utils.configuration.get_cls_bounds_per_pair)
+    cls_bin_indices = _get_cls_bin_indices(msfm_conf, dlss_conf)
 
     target_params = dlss_conf["dset"]["training"]["params"]
     fiducial_cosmo = parameters.get_fiducials(target_params, msfm_conf)
@@ -540,6 +604,9 @@ def evaluate_obs_benchmark(model_fn, pred_file, msfm_conf, dlss_conf, data_dir, 
         with h5py.File(obs_file, "r") as f:
             obs_maps = f["obs/maps"][:].astype(np.float32)
             obs_cls_raw = f["obs/cls_raw"][:].astype(np.float32)
+
+        if obs_cls_raw.shape[-1] != len(cls_bin_indices):
+            obs_cls_raw = obs_cls_raw[:, :, cls_bin_indices]
 
         # Select and normalise channels based on probe
         n_channels_total = obs_maps.shape[-1]

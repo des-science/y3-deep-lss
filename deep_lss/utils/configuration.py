@@ -6,42 +6,31 @@ from msfm.utils import input_output, logger, files
 LOGGER = logger.get_logger(__file__)
 
 
-# like https://github.com/des-science/multiprobe-simulation-forward-model/blob/main/msfm/utils/analysis.py#L21,
-# but for this repo instead of the multiprobe-simulation-forward-model one
-def load_deep_lss_config(conf=None):
-    """Loads or passes through a config
+def read_split_configs(probes_config, scales_config=None, loss_config=None):
+    """Build the dlss_conf dict from the orthogonal split configs.
+
+    The split configs define disjoint top-level namespaces: probes provides ``dset.*``,
+    scales provides ``scale_cuts.*``, and loss provides ``loss_function`` plus the
+    ``<loss>_loss`` / ``mutual_info_loss`` blocks. Because the top-level keys do not overlap,
+    a shallow ``dict.update`` is the correct merge.
 
     Args:
-        conf (str, dict, optional): Can be either a string (a config.yaml is read in), a dictionary (the config is
-            passed through) or None (the default config is loaded). Defaults to None.
-
-    Raises:
-        ValueError: When an invalid conf is passed
+        probes_config (str): path to the probes config (required).
+        scales_config (str, optional): path to the scales config. Merged in if given.
+        loss_config (str, optional): path to the loss config. Merged in if given. The maps
+            pipeline folds the loss into dlss_conf this way; the Cls pipeline keeps it separate
+            and so omits this argument.
 
     Returns:
-        dict: A configuration dictionary
+        dict: the merged dlss_conf.
     """
-    # load the default config within this repo
-    if conf is None:
-        file_dir = os.path.dirname(__file__)
-        repo_dir = os.path.abspath(os.path.join(file_dir, "../.."))
-        conf = os.path.join(repo_dir, "configs/dlss_config.yaml")
-        LOGGER.warning(f"Loading the default config from {conf}")
-        conf = input_output.read_yaml(conf)
-
-    # load a config specified by a path
-    elif isinstance(conf, str):
-        conf = input_output.read_yaml(conf)
-
-    # pass through an existing config
-    elif isinstance(conf, dict):
-        pass
-
-    else:
-        raise ValueError(f"conf {conf} must be None, a str specifying the path to the .yaml file, or the read dict")
-
-    LOGGER.info(f"Loaded the config")
-    return conf
+    dlss_conf = input_output.read_yaml(probes_config)
+    if scales_config:
+        dlss_conf.update(input_output.read_yaml(scales_config))
+    if loss_config:
+        dlss_conf.update(input_output.read_yaml(loss_config))
+    LOGGER.info("Loaded the split configs")
+    return dlss_conf
 
 
 def get_smooth_nside_indices(indices_nside_in, nside_in, smooth_nside):
@@ -236,7 +225,8 @@ def get_cls_bounds_per_pair(msfm_conf, dlss_conf):
     with_clustering = dset_common["with_clustering"]
     n_z_lensing = len(msfm_conf["survey"]["metacal"]["z_bins"]) if with_lensing else 0
     n_z_clustering = len(msfm_conf["survey"]["maglim"]["z_bins"]) if with_clustering else 0
-    with_cross_probe = with_lensing and with_clustering
+    with_cross_probe = dset_common.get("with_cross_probe", with_lensing and with_clustering)
+    ggl_only = dset_common.get("ggl_only", False)
 
     _DEFAULT_L_MIN = 30
 
@@ -253,8 +243,9 @@ def get_cls_bounds_per_pair(msfm_conf, dlss_conf):
         n_z_clustering,
         with_lensing=with_lensing,
         with_clustering=with_clustering,
-        with_cross_z=True,
+        with_cross_z=dset_common.get("with_cross_z", True),
         with_cross_probe=with_cross_probe,
+        ggl_only=ggl_only,
     )
     n_z_cross = len(names)
 

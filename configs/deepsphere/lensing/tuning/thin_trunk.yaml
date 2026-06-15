@@ -1,8 +1,18 @@
-# contains the model specific configuration parameters for training and hyperparameter optimization
-name: deepsphere_default
+# Tuning variant of default.yaml: shrink the receptive field to roughly ell ~ 15-20 (vs. the
+# default's ell ~ 1, i.e. full sky) WITHOUT changing the downsampling schedule (still 512 -> 64,
+# same as default.yaml, so the early/cheap layers are unchanged). Instead the graph-conv trunk is
+# drastically thinned (1 residual block = 2 convs total, vs. 12 in default.yaml) and uses a
+# smaller poly_degree/n_neighbors. Estimated ell ~ 17.
+#
+# Cheapest option of the tuning set, and a useful contrast: it shows that hitting ell ~ 20 with
+# the default's aggressive downsampling requires an almost-trivial trunk, which likely costs
+# network capacity (compare against less_downsampling.yaml / moderate_downsampling.yaml to see
+# whether shallow-trunk-but-cheap beats deep-trunk-but-expensive for this task). If capacity
+# turns out to be a problem, raise base_channels to add width without growing the receptive field.
+name: deepsphere_thin_trunk
 
 training:
-  n_steps: 50000
+  n_steps: 100000
   output_every: Null
   checkpoint_every: 10000
   vali_every: 1000
@@ -28,26 +38,21 @@ optimization:
 
 network:
   name: resnet
-  n_neighbors: 60
+  n_neighbors: 8
   max_checkpoints: 50
   save_second_to_last_layer: False
   z_bank_size: Null
-  # number of ell bins per cross pair
-  cls_n_bins: 16
-  # MLP widths for the Cls embedding branch (Dense→LN per entry); [] to disable
-  cls_embedding_layers: [512, 512, 512, 512]
-  cls_embedding_dropout_rate: 0.5
   kwargs:
     base_channels: 32
-    # depth
+    # depth: same downsampling schedule as default.yaml (512 -> 64), but a much thinner trunk
     downsampling_layers: 3
-    cheby_layers: 2
-    residual_layers: 5
+    cheby_layers: 0
+    residual_layers: 1
     # misc
-    poly_degree: 5
+    poly_degree: 2
     head_type: "dense"
-    dense_layers: []
-    dropout_rate: 0.1
+    dense_layers: Null
+    dropout_rate: 0.01
 
 dset:
   training:
@@ -55,11 +60,11 @@ dset:
       is_eval: False
       signal_indices: 0.8
       noise_indices: Null
-      n_readers: 32
-      n_prefetch: 4
+      n_readers: 64
+      n_prefetch: 8
       n_workers: Null
     grid:
-      local_batch_size: 24
+      local_batch_size: 32
       file_name_shuffle_buffer: 64
       examples_shuffle_buffer: 256
   validation:

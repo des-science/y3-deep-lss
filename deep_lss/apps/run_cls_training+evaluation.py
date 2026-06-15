@@ -1,4 +1,6 @@
 import argparse, h5py, os, yaml
+from pathlib import Path
+
 import numpy as np
 import tensorflow as tf
 
@@ -13,7 +15,7 @@ LOGGER = logger.get_logger(__file__)
 
 from deep_lss.models.grid_model import GridLossModel
 from deep_lss.nets.mlp import MultiLayerPerceptron, PCAWhiteningLayer
-from deep_lss.utils import cls_evaluation, evaluation
+from deep_lss.utils import cls_evaluation, configuration, evaluation
 
 from msi.utils import dataset
 
@@ -44,7 +46,6 @@ def setup():
         description="Train an MLP summary network on binned power spectra (Cls) using the mutual information loss."
     )
     parser.add_argument("--msfm_config", required=True)
-    parser.add_argument("--dlss_config", default=None)
     parser.add_argument("--probes_config", default=None)
     parser.add_argument("--scales_config", default=None)
     parser.add_argument("--loss_config", required=True)
@@ -53,6 +54,11 @@ def setup():
     parser.add_argument("--out_dir", required=True)
     parser.add_argument("--model_name", default="model")
     parser.add_argument("--restore_checkpoint", action="store_true")
+    parser.add_argument(
+        "--precache_only",
+        action="store_true",
+        help="Build the hard_rebinned Cls cache then exit (no training). Requires scale_cut=hard_rebinned.",
+    )
 
     # Observation inclusion flags (all default off)
     parser.add_argument("--include_grid", action="store_true")
@@ -62,8 +68,8 @@ def setup():
     parser.add_argument("--mock_labels", nargs="+", default=["fiducial_bench"])
 
     args = parser.parse_args()
-    if not args.dlss_config and not args.probes_config:
-        parser.error("Either --dlss_config or --probes_config is required")
+    if not args.probes_config:
+        parser.error("--probes_config is required")
     return args
 
 
@@ -72,13 +78,9 @@ def main():
     msfm_conf = files.load_config(args.msfm_config)
     from msfm.utils import input_output
 
-    if args.dlss_config:
-        dlss_conf = input_output.read_yaml(args.dlss_config)
-    else:
-        dlss_conf = input_output.read_yaml(args.probes_config)
-        if args.scales_config:
-            dlss_conf.update(input_output.read_yaml(args.scales_config))
+    dlss_conf = configuration.read_split_configs(args.probes_config, args.scales_config)
     mlp_conf = input_output.read_yaml(args.mlp_config)
+    cls_n_bins = mlp_conf.get("cls_n_bins", 16)
     vmim_conf = input_output.read_yaml(args.loss_config)
     mi = vmim_conf["mutual_info_loss"]
 
@@ -100,9 +102,11 @@ def main():
 
     params = dlss_conf["dset"]["training"]["params"]
     n_params = len(params)
-    n_summary = 2 * n_params
+    n_summary = mi.get("dim_summary_fac", 2) * n_params
 
     scale_cut = dlss_conf.get("scale_cut") or mlp_conf.get("scale_cut", "soft_pruned")
+
+    scales_name = Path(args.scales_config).stem if args.scales_config else None
 
     n_steps = mlp_conf["n_steps"]
     batch_size = mlp_conf["batch_size"]
@@ -110,6 +114,10 @@ def main():
     vali_every = mlp_conf["vali_every"]
     signal_indices = mlp_conf.get("signal_indices", None)
     noise_indices = mlp_conf.get("noise_indices", 0.8)
+    regu = mi.get("regu", {})
+    z_weight = regu.get("z_weight", None)
+    z_type = regu.get("z_type", None)
+    z_layer = regu.get("z_layer", "last")
 
     pred_dir = os.path.join(args.out_dir, args.model_name)
     os.makedirs(pred_dir, exist_ok=True)
@@ -123,6 +131,9 @@ def main():
     LOGGER.info(f"n_steps        = {n_steps}")
     LOGGER.info(f"signal_indices = {signal_indices}")
     LOGGER.info(f"noise_indices  = {noise_indices}")
+    LOGGER.info(f"z_type         = {z_type}")
+    LOGGER.info(f"z_weight       = {z_weight}")
+    LOGGER.info(f"z_layer        = {z_layer}")
 
     with open(os.path.join(pred_dir, "configs.yaml"), "w") as f:
         yaml.dump_all([mlp_conf, vmim_conf, dlss_conf, msfm_conf], f)
@@ -130,24 +141,56 @@ def main():
     apply_log = mlp_conf.get("apply_log", True)
     ell_weighting = mlp_conf.get("ell_weighting", None)
 
-    cl_dset_train, cl_dset_test, out_dict = dataset.get_binned_power_spectra_dset_for_scale_cut(
-        scale_cut,
-        base_dir=args.data_dir,
-        msfm_conf=msfm_conf,
-        dlss_conf=dlss_conf,
-        params=params,
-        signal_indices=signal_indices,
-        noise_indices=noise_indices,
-        with_lensing=with_lensing,
-        with_clustering=with_clustering,
-        with_cross_z=with_cross_z,
-        with_cross_probe=with_cross_probe,
-        ggl_only=ggl_only,
-        batch_size=batch_size,
-        apply_log=apply_log,
-        standardize=False,
-        ell_weighting=ell_weighting,
-    )
+    if scale_cut == "hard_rebinned":
+        if scales_name is None:
+            raise ValueError("--scales_config is required when scale_cut=hard_rebinned")
+        from deep_lss.utils import cls_preprocessing
+        if args.precache_only:
+            LOGGER.warning(f"--precache_only: building hard_rebinned cache for scales_name={scales_name}, then exiting.")
+            cls_preprocessing.build_rebinned_cls_cache(
+                data_dir=args.data_dir,
+                msfm_conf=msfm_conf,
+                dlss_conf=dlss_conf,
+                cls_n_bins=cls_n_bins,
+                scales_name=scales_name,
+            )
+            LOGGER.warning("Cache built. Exiting.")
+            return
+        cl_dset_train, cl_dset_test, out_dict = cls_preprocessing.get_rebinned_cls_dsets(
+            data_dir=args.data_dir,
+            msfm_conf=msfm_conf,
+            dlss_conf=dlss_conf,
+            params=params,
+            cls_n_bins=cls_n_bins,
+            scales_name=scales_name,
+            signal_indices=signal_indices,
+            noise_indices=noise_indices,
+            with_lensing=with_lensing,
+            with_clustering=with_clustering,
+            with_cross_z=with_cross_z,
+            with_cross_probe=with_cross_probe,
+            ggl_only=ggl_only,
+            batch_size=batch_size,
+        )
+    else:
+        cl_dset_train, cl_dset_test, out_dict = dataset.get_binned_power_spectra_dset_for_scale_cut(
+            scale_cut,
+            base_dir=args.data_dir,
+            msfm_conf=msfm_conf,
+            dlss_conf=dlss_conf,
+            params=params,
+            signal_indices=signal_indices,
+            noise_indices=noise_indices,
+            with_lensing=with_lensing,
+            with_clustering=with_clustering,
+            with_cross_z=with_cross_z,
+            with_cross_probe=with_cross_probe,
+            ggl_only=ggl_only,
+            batch_size=batch_size,
+            apply_log=apply_log,
+            standardize=False,
+            ell_weighting=ell_weighting,
+        )
 
     n_cls = out_dict["grid/cls/train"].shape[-1]
 
@@ -226,7 +269,16 @@ def main():
             "scale_eps": float(mi["kwargs"].get("scale_eps", 1e-5)),
             "log_scale_clip": float(mi["kwargs"].get("log_scale_clip", 5.0)),
         },
+        z_weight=z_weight,
+        z_type=z_type,
+        z_layer=z_layer,
     )
+
+    if getattr(model, "grid_train_step_uses_pair_ids", False):
+        raise NotImplementedError(
+            "VICReg invariance (z_weight['invariance']) requires the training dataset to yield "
+            "(cl, cosmo, i_sobol, i_signal); not yet supported in this script."
+        )
 
     tb_writer = tf.summary.create_file_writer(summary_dir)
 
@@ -389,6 +441,7 @@ def main():
                     apply_log=apply_log,
                     ell_weighting=ell_weighting,
                     scale_cut=scale_cut,
+                    cls_n_bins=cls_n_bins,
                 )
             except Exception as e:
                 LOGGER.warning(f"mock {label} evaluation failed ({e}), skipping")
@@ -410,6 +463,7 @@ def main():
                 apply_log=apply_log,
                 ell_weighting=ell_weighting,
                 scale_cut=scale_cut,
+                cls_n_bins=cls_n_bins,
             )
         except Exception as e:
             LOGGER.warning(f"DES Y3 evaluation failed ({e}), skipping")

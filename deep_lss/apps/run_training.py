@@ -145,14 +145,6 @@ def setup():
             " the dir_model and restore_checkpoint is true."
         ),
     )
-    parser.add_argument(
-        "--dlss_config",
-        type=str,
-        default=None,
-        help=(
-            "configuration .yaml file of this repo. Mutually exclusive with --probes_config."
-        ),
-    )
     parser.add_argument("--probes_config", type=str, default=None, help="probe/parameter config (configs/probes/)")
     parser.add_argument("--scales_config", type=str, default=None, help="scale-cut config (configs/scales/)")
     parser.add_argument("--loss_config", type=str, default=None, help="loss function config (configs/loss/)")
@@ -270,8 +262,8 @@ def setup():
             f"Could not configure the GPUs to memory growth mode, all available GPU memory is reserved for TensorFlow"
         )
 
-    if not args.restore_checkpoint and not args.dlss_config and not args.probes_config:
-        parser.error("Either --dlss_config or --probes_config is required")
+    if not args.restore_checkpoint and not args.probes_config:
+        parser.error("--probes_config is required")
 
     return args
 
@@ -289,14 +281,7 @@ def training():
     if not args.restore_checkpoint:
         # load the configs
         net_conf = input_output.read_yaml(os.path.join(args.repo_dir, args.net_config))
-        if args.dlss_config:
-            dlss_conf = input_output.read_yaml(os.path.join(args.repo_dir, args.dlss_config))
-        else:
-            dlss_conf = input_output.read_yaml(args.probes_config)
-            if args.scales_config:
-                dlss_conf.update(input_output.read_yaml(args.scales_config))
-            if args.loss_config:
-                dlss_conf.update(input_output.read_yaml(args.loss_config))
+        dlss_conf = configuration.read_split_configs(args.probes_config, args.scales_config, args.loss_config)
         msfm_conf = files.load_config(args.msfm_config)
         if args.loss_function is None:
             args.loss_function = dlss_conf.get("loss_function")
@@ -459,9 +444,9 @@ def training():
     with_lensing = dlss_conf["dset"]["common"]["with_lensing"]
     with_clustering = dlss_conf["dset"]["common"]["with_clustering"]
     with_cross = dlss_conf["dset"]["common"].get("with_cross", False)
-    return_cls = dlss_conf["dset"]["common"].get("return_cls", False)
+    return_cls = "cls_n_bins" in net_conf["network"]
     if return_cls:
-        LOGGER.warning("return_cls=True detected in probe config — will build MapsPlusCLSNetwork")
+        LOGGER.warning("cls_n_bins detected in net_conf['network'] — will build MapsPlusCLSNetwork")
 
     # constants: network
     n_steps = net_conf["training"]["n_steps"]
@@ -532,6 +517,8 @@ def training():
     LOGGER.warning(f"Training set")
     pipe_kwargs = {k: v for k, v in {**dlss_conf["dset"]["common"], **dlss_conf["dset"]["training"], **noise_kwargs}.items()
                    if k not in _CLS_ONLY_KEYS}
+    pipe_kwargs["return_maps"] = True
+    pipe_kwargs["return_cls"] = return_cls
     train_pipeline = Pipeline(conf=msfm_conf, **pipe_kwargs)
 
     # like https://www.tensorflow.org/tutorials/distribute/input#tfdistributestrategydistribute_datasets_from_function
@@ -689,6 +676,8 @@ def training():
     # validation loss
     if vali_every is not None:
         vali_pipe_kwargs = {k: v for k, v in dlss_conf["dset"]["common"].items() if k not in _CLS_ONLY_KEYS}
+        vali_pipe_kwargs["return_maps"] = True
+        vali_pipe_kwargs["return_cls"] = return_cls
         vali_dset_kwargs = net_conf["dset"]["validation"]["common"]
         vali_dset_kwargs["drop_remainder"] = True
         n_vali_batches = net_conf["dset"]["validation"]["n_batches"]
