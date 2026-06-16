@@ -1,6 +1,6 @@
 # Network architecture
 num_hidden_units: 1024
-num_layers: 8
+num_layers: 4
 dropout_rate: 0.5
 normalization: layer
 activation: relu
@@ -21,8 +21,6 @@ early_stopping:
   min_steps: 10000
 
 # Data
-signal_indices: 0.8
-noise_indices: Null
 apply_log: true
 scale_cut: hard_rebinned
 cls_n_bins: 16

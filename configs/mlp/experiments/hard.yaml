@@ -1,7 +1,7 @@
 # Network architecture
 num_hidden_units: 1024
 num_layers: 4
-dropout_rate: 0.1
+dropout_rate: 0.5
 normalization: layer
 activation: relu
 
@@ -13,17 +13,17 @@ pca_whiten: false
 n_steps: 1000000
 batch_size: 1024
 learning_rate: 1e-4
-weight_decay: Null
+weight_decay: 1e-3
 clip_by_global_norm: 1.0
 lr_schedule: constant
 early_stopping:
-  patience: 10
+  patience: 5
   min_delta: 1e-2
   min_steps: 10000
 
 # Data
 apply_log: true
-scale_cut: soft
+scale_cut: hard
 
 # Logging / checkpointing
 log_every: 100

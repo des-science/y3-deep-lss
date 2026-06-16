@@ -22,8 +22,6 @@ early_stopping:
   min_steps: 10000
 
 # Data
-signal_indices: 0.8
-noise_indices: Null
 apply_log: true
 
 # Logging / checkpointing

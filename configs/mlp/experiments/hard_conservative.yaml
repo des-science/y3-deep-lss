@@ -6,7 +6,8 @@ normalization: layer
 activation: relu
 
 # PCA
-pca_components: null
+pca_components: 9999
+pca_whiten: false
 
 # Training
 n_steps: 1000000
@@ -21,11 +22,8 @@ early_stopping:
   min_steps: 10000
 
 # Data
-signal_indices: 0.8
-noise_indices: Null
 apply_log: true
-scale_cut: hard_rebinned
-cls_n_bins: 16
+scale_cut: hard_conservative
 
 # Logging / checkpointing
 log_every: 100

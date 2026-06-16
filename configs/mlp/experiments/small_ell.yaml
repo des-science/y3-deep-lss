@@ -19,8 +19,6 @@ lr_schedule: constant
 # so ell_weighting is only meaningful when apply_log=false.
 apply_log: false
 ell_weighting: ell
-signal_indices: null   # null = all; float 0<x<1 = train on first x fraction, eval on remainder
-noise_indices: 0.8     # 0.8 = train on first 80% of noise realizations, eval on last 20%
 
 # Logging / checkpointing
 log_every: 100
