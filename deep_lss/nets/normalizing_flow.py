@@ -108,3 +108,54 @@ class NormalizingFlowModel:
         shift = out[:, :out_size]
         log_scale = tf.clip_by_value(out[:, out_size:], -self.log_scale_clip, self.log_scale_clip)
         return shift, log_scale
+
+    def inverse(self, z, summary):
+        """Invert the flow: z ~ N(0, I) -> theta ~ p(theta | summary), shape (B, dim_theta)."""
+        z = tf.cast(z, tf.float32)
+        summary = tf.cast(summary, tf.float32)
+
+        theta = z
+        d = self._d
+
+        for i in reversed(range(self.num_layers)):
+            net = self.coupling_nets[i]
+            if i % 2 == 0:
+                # even layer transformed the lower half conditioned on the (untouched) upper half
+                theta_up = theta[:, d:]
+                z_low = theta[:, :d]
+                context = tf.concat([theta_up, summary], axis=-1)
+                shift, log_scale = self._shift_log_scale(net, context, d)
+                scale = tf.exp(log_scale) + self.scale_eps
+                theta_low = z_low * scale + shift
+                theta = tf.concat([theta_low, theta_up], axis=-1)
+            else:
+                # odd layer transformed the upper half conditioned on the (untouched) lower half
+                theta_low = theta[:, :d]
+                z_up = theta[:, d:]
+                context = tf.concat([theta_low, summary], axis=-1)
+                shift, log_scale = self._shift_log_scale(net, context, self.dim_theta - d)
+                scale = tf.exp(log_scale) + self.scale_eps
+                theta_up = z_up * scale + shift
+                theta = tf.concat([theta_low, theta_up], axis=-1)
+
+        return theta
+
+    def mean(self, summary, n_samples=256):
+        """Monte Carlo estimate of the posterior mean E[theta | summary], shape (B, dim_theta).
+
+        The flow has no closed-form mean, so it is estimated by sampling z ~ N(0, I), inverting
+        the flow to get theta samples, and averaging.
+        """
+        summary = tf.cast(summary, tf.float32)
+        batch_size = tf.shape(summary)[0]
+
+        z = tf.random.normal((batch_size, n_samples, self.dim_theta), dtype=tf.float32)
+        summary_tiled = tf.repeat(summary[:, tf.newaxis, :], n_samples, axis=1)
+
+        z_flat = tf.reshape(z, [-1, self.dim_theta])
+        summary_flat = tf.reshape(summary_tiled, [-1, self.dim_summary])
+
+        theta_flat = self.inverse(z_flat, summary_flat)
+        theta = tf.reshape(theta_flat, [batch_size, n_samples, self.dim_theta])
+
+        return tf.reduce_mean(theta, axis=1)
