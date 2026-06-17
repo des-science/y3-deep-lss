@@ -127,16 +127,20 @@ if __name__ == "__main__":
     _, _ = distribute.check_devices()
     strategy = distribute.get_strategy(args.dist_strategy)
 
-    # load the configs
-    with open(os.path.join(args.dir_model, "configs.yaml"), "r") as f:
-        net_conf, dlss_conf, msfm_conf = list(yaml.load_all(f, Loader=yaml.FullLoader))
+    # load the configs (migrates a legacy multi-document stream if needed)
+    conf = configuration.load_run_configs(os.path.join(args.dir_model, "configs.yaml"))
+    net_conf = conf["net"]
+    dlss_conf = conf["dlss"]
+    loss_conf = conf["loss"]
+    data_conf = conf["data"]
+    msfm_conf = conf["msfm"]
 
     LOGGER.info(f"Loaded configs from the model directory")
 
     # general constants
     all_params = msfm_conf["analysis"]["params"]
     target_params = dlss_conf["dset"]["training"]["params"]
-    loss_func = net_conf["run"]["loss_func"]
+    loss_func = conf["run"]["loss_func"]
     n_params = len(target_params)
     LOGGER.info(f"The networks have output shape {n_params} and target {target_params}")
 
@@ -187,7 +191,7 @@ if __name__ == "__main__":
     if loss_func == "likelihood":
         n_output = n_params + n_params * (n_params + 1) // 2
     elif loss_func == "mutual_info":
-        n_output = dlss_conf["mutual_info_loss"]["dim_summary_fac"] * n_params
+        n_output = loss_conf["mutual_info_loss"]["dim_summary_fac"] * n_params
     elif loss_func == "delta" or loss_func == "mse":
         n_output = n_params
 
@@ -313,6 +317,7 @@ if __name__ == "__main__":
                 msfm_conf=msfm_conf,
                 dlss_conf=dlss_conf,
                 net_conf=net_conf,
+                data_conf=data_conf,
                 dir_out=args.dir_model,
                 file_label=file_label,
                 training_set=True,
@@ -328,6 +333,7 @@ if __name__ == "__main__":
                 msfm_conf=msfm_conf,
                 dlss_conf=dlss_conf,
                 net_conf=net_conf,
+                data_conf=data_conf,
                 dir_out=args.dir_model,
                 file_label=file_label,
                 training_set=False,
@@ -343,6 +349,7 @@ if __name__ == "__main__":
                 msfm_conf=msfm_conf,
                 dlss_conf=dlss_conf,
                 net_conf=net_conf,
+                data_conf=data_conf,
                 dir_out=args.dir_model,
                 file_label=file_label,
                 debug=args.debug,

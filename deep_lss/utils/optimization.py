@@ -85,11 +85,21 @@ def get_optimizer(net_conf, loss_function="delta_loss", restore_checkpoint=False
 
     # set up optimizer
     optimizer_name = net_conf["optimization"]["optimizer"]
+    ema_momentum = net_conf["optimization"][loss_function].get("ema_momentum", None)
     if optimizer_name == "adam":
-        optimizer = tf.keras.optimizers.legacy.Adam(
-            learning_rate=learning_rate_schedule, **net_conf["optimization"][loss_function]["optimizer_kwargs"]
-        )
-        LOGGER.info(f"Using Adam optimizer")
+        if ema_momentum is not None:
+            optimizer = tf.keras.optimizers.Adam(
+                learning_rate=learning_rate_schedule,
+                use_ema=True,
+                ema_momentum=float(ema_momentum),
+                **net_conf["optimization"][loss_function]["optimizer_kwargs"],
+            )
+            LOGGER.info(f"Using Adam optimizer (non-legacy, EMA momentum={ema_momentum})")
+        else:
+            optimizer = tf.keras.optimizers.legacy.Adam(
+                learning_rate=learning_rate_schedule, **net_conf["optimization"][loss_function]["optimizer_kwargs"]
+            )
+            LOGGER.info(f"Using Adam optimizer")
     elif optimizer_name == "sgd":
         optimizer = tf.keras.optimizers.SGD(
             learning_rate=learning_rate_schedule, **net_conf["optimization"][loss_function]["optimizer_kwargs"]

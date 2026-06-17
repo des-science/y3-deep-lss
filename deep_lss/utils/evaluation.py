@@ -95,7 +95,7 @@ def _remove_example_axis(array):
 
 
 def evaluate_grid(
-    model, tfr_pattern, msfm_conf, dlss_conf, net_conf, dir_out, file_label=None, wandb_run=None, debug=False
+    model, tfr_pattern, msfm_conf, dlss_conf, net_conf, data_conf, dir_out, file_label=None, wandb_run=None, debug=False
 ):
     """Evaluate the model on the grid part of the CosmoGrid.
 
@@ -104,13 +104,14 @@ def evaluate_grid(
         tfr_pattern (str): Glob pattern of the .tfrecord files containing the data.
         msfm_conf (dict): Configuration file of the msfm pipeline.
         net_conf (dict): Configuration file of the specific model.
+        data_conf (dict): Train/test split config (signal_indices / noise_indices).
         dir_out (str): Output directory, this is where the evaluations will be saved.
         file_label (str, optional): Optional suffix to append to the output file names. Defaults to None.
     """
     print("\n")
     LOGGER.info(f"Starting evaluation of the grid")
 
-    dset_kwargs = {**net_conf["dset"]["eval"]["common"], **net_conf["dset"]["eval"]["grid"]}
+    dset_kwargs = {**net_conf["dset"]["eval"]["common"], **data_conf, **net_conf["dset"]["eval"]["grid"]}
     dset_kwargs["drop_remainder"] = True
 
     # network constants
@@ -273,7 +274,7 @@ def evaluate_grid(
 
 
 def evaluate_fiducial(
-    model, tfr_pattern, msfm_conf, dlss_conf, net_conf, dir_out, training_set=True, file_label=None, wandb_run=None
+    model, tfr_pattern, msfm_conf, dlss_conf, net_conf, data_conf, dir_out, training_set=True, file_label=None, wandb_run=None
 ):
     """Evaluate the model on the fiducial part of the CosmoGrid.
 
@@ -283,6 +284,7 @@ def evaluate_fiducial(
         tfr_pattern (str): Glob pattern of the .tfrecord files containing the data.
         msfm_conf (dict): Configuration file of the msfm pipeline.
         net_conf (dict): Configuration file of the specific model.
+        data_conf (dict): Train/test split config (signal_indices / noise_indices).
         dir_out (str): Output directory, this is where the evaluations will be saved.
         i_noise (int, str): Noise index. The string "all" is also allowed, then the multi noise dataset is used.
         file_label (str, optional): Optional suffix to append to the output file names. Defaults to None.
@@ -292,7 +294,7 @@ def evaluate_fiducial(
     print("\n")
     LOGGER.info(f"Starting evaluation of the fiducial")
 
-    dset_kwargs = {**net_conf["dset"]["eval"]["common"], **net_conf["dset"]["eval"]["fiducial"]}
+    dset_kwargs = {**net_conf["dset"]["eval"]["common"], **data_conf, **net_conf["dset"]["eval"]["fiducial"]}
 
     # pipeline constants
     n_cosmos = 1  # only the true fiducial

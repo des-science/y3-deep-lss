@@ -1,0 +1,5 @@
+# Train/test split of the CosmoGrid realizations. Analysis-wide and shared across all
+# probes and models, so it lives in one place. A float in (0,1) splits along that axis
+# (train = first fraction, eval = remainder); Null uses all realizations on both sides.
+signal_indices: 0.8   # hold out 20% of cosmology realizations for testing
+noise_indices: Null   # use all noise realizations on both sides

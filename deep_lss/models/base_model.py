@@ -289,7 +289,16 @@ class BaseModel(object):
         if len(self.checkpoint_manager.checkpoints) == 0:
             raise ValueError(f"A non empty checkpoint_dir {self.checkpoint_dir} has to be passed")
 
-        restore_dir = self.checkpoint_manager.restore_or_initialize()
+        try:
+            restore_dir = self.checkpoint_manager.restore_or_initialize()
+        except ValueError as e:
+            if "legacy TF-Keras optimizer into a v2.11+ Optimizer" not in str(e):
+                raise
+            # the checkpoint was saved by a different optimizer class (e.g. legacy Adam), whose slot
+            # variables are incompatible with the current optimizer; only restore the network weights
+            # and the global step, letting the optimizer state start fresh
+            restore_dir = self.checkpoint_manager.latest_checkpoint
+            tf.train.Checkpoint(network=self.network, train_step=self.train_step).restore(restore_dir).expect_partial()
         LOGGER.info(f"Network successfully restored from checkpoint {restore_dir}.")
 
     def restore_model_from_checkpoint_path(self, checkpoint_path):

@@ -25,6 +25,8 @@ optimization:
     warmup_steps: 5000
     warmup_init_learning_rate: 1.0e-5
     decay_alpha: 0.0
+    # EMA weight averaging (optional)
+    ema_momentum: null
 
 network:
   name: resnet
@@ -54,8 +56,6 @@ dset:
   training:
     common:
       is_eval: False
-      signal_indices: 0.8
-      noise_indices: Null
       n_readers: 64
       n_prefetch: 8
       n_workers: Null
@@ -67,8 +67,6 @@ dset:
     n_batches: 50
     common:
       is_eval: True
-      signal_indices: 0.8
-      noise_indices: Null
       n_readers: 8
       n_prefetch: 2
       n_workers: 16
@@ -77,8 +75,6 @@ dset:
   eval:
     common:
       is_eval: True
-      signal_indices: 0.8
-      noise_indices: Null
       n_readers: 64
       n_prefetch: 2
       n_workers: Null

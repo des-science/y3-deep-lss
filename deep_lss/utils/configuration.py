@@ -1,36 +1,77 @@
 import os
 import numpy as np
+import yaml
 
 from msfm.utils import input_output, logger, files
 
 LOGGER = logger.get_logger(__file__)
 
+# the loss-block keys that the legacy maps configs.yaml stream folded into dlss_conf
+_LEGACY_LOSS_KEYS = ("loss_function", "delta_loss", "likelihood_loss", "mutual_info_loss")
 
-def read_split_configs(probes_config, scales_config=None, loss_config=None):
+
+def read_split_configs(probes_config, scales_config=None):
     """Build the dlss_conf dict from the orthogonal split configs.
 
-    The split configs define disjoint top-level namespaces: probes provides ``dset.*``,
-    scales provides ``scale_cuts.*``, and loss provides ``loss_function`` plus the
-    ``<loss>_loss`` / ``mutual_info_loss`` blocks. Because the top-level keys do not overlap,
-    a shallow ``dict.update`` is the correct merge.
+    The split configs define disjoint top-level namespaces: probes provides ``dset.*`` and
+    scales provides ``scale_cuts.*``. Because the top-level keys do not overlap, a shallow
+    ``dict.update`` is the correct merge. The loss config is kept separate (loaded as its own
+    ``loss_conf``) in both apps and is intentionally not merged here.
 
     Args:
         probes_config (str): path to the probes config (required).
         scales_config (str, optional): path to the scales config. Merged in if given.
-        loss_config (str, optional): path to the loss config. Merged in if given. The maps
-            pipeline folds the loss into dlss_conf this way; the Cls pipeline keeps it separate
-            and so omits this argument.
 
     Returns:
-        dict: the merged dlss_conf.
+        dict: the merged dlss_conf (``dset`` + ``scale_cuts``).
     """
     dlss_conf = input_output.read_yaml(probes_config)
     if scales_config:
         dlss_conf.update(input_output.read_yaml(scales_config))
-    if loss_config:
-        dlss_conf.update(input_output.read_yaml(loss_config))
     LOGGER.info("Loaded the split configs")
     return dlss_conf
+
+
+def load_run_configs(path):
+    """Load a saved run's ``configs.yaml`` into the nested layout, migrating legacy streams.
+
+    The current format is a single nested mapping with keys
+    ``{net|mlp, dlss, loss, data, msfm, run}``. Older maps runs saved a positional 3-document
+    stream ``[net (+run), dlss (loss merged in), msfm]`` with the train/test split living inside
+    ``net["dset"]`` rather than in a separate ``data`` block. This loader normalizes that legacy
+    shape so the restore/eval code only ever sees the nested layout. (Legacy 4-document cls
+    streams are never reloaded, so they are not handled here.)
+
+    Args:
+        path (str): path to the saved ``configs.yaml``.
+
+    Returns:
+        dict: the nested config mapping.
+    """
+    with open(path, "r") as f:
+        docs = list(yaml.safe_load_all(f))
+
+    if len(docs) == 1 and isinstance(docs[0], dict) and "dlss" in docs[0]:
+        return docs[0]
+
+    # legacy 3-document maps stream
+    net_conf, dlss_conf, msfm_conf = docs
+    run_conf = net_conf.pop("run", {})
+    loss_conf = {k: dlss_conf.pop(k) for k in _LEGACY_LOSS_KEYS if k in dlss_conf}
+    eval_common = net_conf["dset"]["eval"]["common"]
+    data_conf = {
+        "signal_indices": eval_common.get("signal_indices", 0.8),
+        "noise_indices": eval_common.get("noise_indices", None),
+    }
+    LOGGER.warning("Migrated a legacy 3-document configs.yaml to the nested layout")
+    return {
+        "net": net_conf,
+        "dlss": dlss_conf,
+        "loss": loss_conf,
+        "data": data_conf,
+        "msfm": msfm_conf,
+        "run": run_conf,
+    }
 
 
 def get_smooth_nside_indices(indices_nside_in, nside_in, smooth_nside):

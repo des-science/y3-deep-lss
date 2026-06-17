@@ -1,4 +1,4 @@
-import argparse, h5py, os, yaml
+import argparse, h5py, os, random, yaml
 from pathlib import Path
 
 import numpy as np
@@ -50,6 +50,7 @@ def setup():
     parser.add_argument("--scales_config", default=None)
     parser.add_argument("--loss_config", required=True)
     parser.add_argument("--mlp_config", required=True)
+    parser.add_argument("--data_config", required=True, help="train/test split config (configs/data/)")
     parser.add_argument("--data_dir", required=True)
     parser.add_argument("--out_dir", required=True)
     parser.add_argument("--model_name", default="model")
@@ -81,8 +82,22 @@ def main():
     dlss_conf = configuration.read_split_configs(args.probes_config, args.scales_config)
     mlp_conf = input_output.read_yaml(args.mlp_config)
     cls_n_bins = mlp_conf.get("cls_n_bins", 16)
-    vmim_conf = input_output.read_yaml(args.loss_config)
-    mi = vmim_conf["mutual_info_loss"]
+
+    seed = mlp_conf.get("seed", 42)
+    random.seed(seed)
+    np.random.seed(seed)
+    tf.random.set_seed(seed)
+    if mlp_conf.get("deterministic_ops", False):
+        tf.config.experimental.enable_op_determinism()
+        LOGGER.info("Enabled tf.config.experimental.enable_op_determinism()")
+    LOGGER.info(f"seed           = {seed}")
+
+    ema_momentum = mlp_conf.get("ema_momentum", None)
+    LOGGER.info(f"ema_momentum   = {ema_momentum}")
+
+    loss_conf = input_output.read_yaml(args.loss_config)
+    data_conf = input_output.read_yaml(args.data_config)
+    mi = loss_conf["mutual_info_loss"]
 
     common = dlss_conf["dset"]["common"]
     with_lensing = common["with_lensing"]
@@ -112,8 +127,8 @@ def main():
     batch_size = mlp_conf["batch_size"]
     log_every = mlp_conf["log_every"]
     vali_every = mlp_conf["vali_every"]
-    signal_indices = mlp_conf.get("signal_indices", None)
-    noise_indices = mlp_conf.get("noise_indices", 0.8)
+    signal_indices = data_conf["signal_indices"]
+    noise_indices = data_conf["noise_indices"]
     regu = mi.get("regu", {})
     z_weight = regu.get("z_weight", None)
     z_type = regu.get("z_type", None)
@@ -135,8 +150,19 @@ def main():
     LOGGER.info(f"z_weight       = {z_weight}")
     LOGGER.info(f"z_layer        = {z_layer}")
 
+    # provenance only: the cls app always re-reads from CLI flags, never reloads this file
     with open(os.path.join(pred_dir, "configs.yaml"), "w") as f:
-        yaml.dump_all([mlp_conf, vmim_conf, dlss_conf, msfm_conf], f)
+        yaml.dump(
+            {
+                "mlp": mlp_conf,
+                "dlss": dlss_conf,
+                "loss": loss_conf,
+                "data": data_conf,
+                "msfm": msfm_conf,
+                "run": {"model_name": args.model_name, "scale_cut": scale_cut},
+            },
+            f,
+        )
 
     apply_log = mlp_conf.get("apply_log", True)
     ell_weighting = mlp_conf.get("ell_weighting", None)
@@ -171,6 +197,7 @@ def main():
             with_cross_probe=with_cross_probe,
             ggl_only=ggl_only,
             batch_size=batch_size,
+            seed=seed,
         )
     else:
         cl_dset_train, cl_dset_test, out_dict = dataset.get_binned_power_spectra_dset_for_scale_cut(
@@ -233,10 +260,11 @@ def main():
             warmup_steps=warmup_steps,
         )
     weight_decay = mlp_conf.get("weight_decay", None)
+    ema_kwargs = {"use_ema": True, "ema_momentum": float(ema_momentum)} if ema_momentum is not None else {}
     if weight_decay is not None:
-        optimizer = tf.keras.optimizers.AdamW(lr_schedule, weight_decay=float(weight_decay))
+        optimizer = tf.keras.optimizers.AdamW(lr_schedule, weight_decay=float(weight_decay), **ema_kwargs)
     else:
-        optimizer = tf.keras.optimizers.Adam(lr_schedule)
+        optimizer = tf.keras.optimizers.Adam(lr_schedule, **ema_kwargs)
 
     summary_dir = os.path.join(pred_dir, "network/history")
     model = GridLossModel(
@@ -358,7 +386,14 @@ def main():
                     )
                     break
 
-    if early_stopper is None:
+    if ema_momentum is not None:
+        # Overwrite live weights with their EMA average (in place), then save/evaluate with those.
+        # This supersedes the early-stopping "best vali" restore as the final-weight selector;
+        # early stopping still controls *when* the loop stops.
+        optimizer.finalize_variable_values(model.trainable_variables)
+        LOGGER.info(f"Finalized EMA weights (momentum={ema_momentum})")
+        model.save_model()
+    elif early_stopper is None:
         model.save_model()
     else:
         model.restore_model()

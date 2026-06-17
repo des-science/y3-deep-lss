@@ -148,6 +148,7 @@ def setup():
     parser.add_argument("--probes_config", type=str, default=None, help="probe/parameter config (configs/probes/)")
     parser.add_argument("--scales_config", type=str, default=None, help="scale-cut config (configs/scales/)")
     parser.add_argument("--loss_config", type=str, default=None, help="loss function config (configs/loss/)")
+    parser.add_argument("--data_config", type=str, default=None, help="train/test split config (configs/data/)")
     parser.add_argument(
         "--msfm_config",
         type=str,
@@ -262,8 +263,10 @@ def setup():
             f"Could not configure the GPUs to memory growth mode, all available GPU memory is reserved for TensorFlow"
         )
 
-    if not args.restore_checkpoint and not args.probes_config:
-        parser.error("--probes_config is required")
+    if not args.restore_checkpoint:
+        for flag in ("probes_config", "loss_config", "data_config"):
+            if getattr(args, flag) is None:
+                parser.error(f"--{flag} is required for a fresh run")
 
     return args
 
@@ -281,10 +284,12 @@ def training():
     if not args.restore_checkpoint:
         # load the configs
         net_conf = input_output.read_yaml(os.path.join(args.repo_dir, args.net_config))
-        dlss_conf = configuration.read_split_configs(args.probes_config, args.scales_config, args.loss_config)
+        dlss_conf = configuration.read_split_configs(args.probes_config, args.scales_config)
+        loss_conf = input_output.read_yaml(args.loss_config)
+        data_conf = input_output.read_yaml(args.data_config)
         msfm_conf = files.load_config(args.msfm_config)
         if args.loss_function is None:
-            args.loss_function = dlss_conf.get("loss_function")
+            args.loss_function = loss_conf.get("loss_function")
         if args.loss_function is None:
             raise ValueError("loss_function not set; either pass --loss_function or use a --loss_config with a loss_function key")
         LOGGER.info(f"Loaded configs from the provided paths")
@@ -300,16 +305,27 @@ def training():
         os.makedirs(dir_model, exist_ok=True)
         LOGGER.info(f"Created output directory {dir_model}")
 
-        # additions to the configs
-        net_conf["run"] = {}
-        net_conf["run"]["dir_model"] = dir_model
-        net_conf["run"]["dir_log"] = args.slurm_output
-        net_conf["run"]["loss_func"] = args.loss_function
-        net_conf["run"]["dist_strategy"] = args.dist_strategy
+        # runtime metadata (kept as its own top-level block in the saved config)
+        run_conf = {
+            "dir_model": dir_model,
+            "dir_log": args.slurm_output,
+            "loss_func": args.loss_function,
+            "dist_strategy": args.dist_strategy,
+        }
 
-        # save the configs
+        # save the configs as a single nested mapping
         with open(os.path.join(dir_model, "configs.yaml"), "w") as f:
-            yaml.dump_all([net_conf, dlss_conf, msfm_conf], f)
+            yaml.dump(
+                {
+                    "net": net_conf,
+                    "dlss": dlss_conf,
+                    "loss": loss_conf,
+                    "data": data_conf,
+                    "msfm": msfm_conf,
+                    "run": run_conf,
+                },
+                f,
+            )
 
     # restore a saved model
     elif args.restore_checkpoint and (args.dir_model is not None):
@@ -318,12 +334,16 @@ def training():
         os.makedirs(dir_model, exist_ok=True)
         LOGGER.info(f"Created output directory {dir_model}")
 
-        # load the configs
-        with open(os.path.join(dir_model, "configs.yaml"), "r") as f:
-            net_conf, dlss_conf, msfm_conf = list(yaml.load_all(f, Loader=yaml.FullLoader))
+        # load the configs (migrates a legacy multi-document stream if needed)
+        conf = configuration.load_run_configs(os.path.join(dir_model, "configs.yaml"))
+        net_conf = conf["net"]
+        dlss_conf = conf["dlss"]
+        loss_conf = conf["loss"]
+        data_conf = conf["data"]
+        msfm_conf = conf["msfm"]
 
         if args.loss_function is None:
-            args.loss_function = net_conf["run"]["loss_func"]
+            args.loss_function = conf["run"]["loss_func"]
         LOGGER.info(f"Loaded configs from the model directory")
 
     else:
@@ -465,7 +485,7 @@ def training():
         args.loss_function, msfm_conf, dlss_conf, net_conf, dir_base=dir_model
     )
 
-    dset_kwargs = net_conf["dset"]["training"]["common"]
+    dset_kwargs = {**net_conf["dset"]["training"]["common"], **data_conf}
     noise_kwargs = {}
     if args.loss_function == "delta":
         Pipeline = FiducialPipeline
@@ -495,7 +515,7 @@ def training():
         elif args.loss_function == "mse":
             n_output = n_params
         elif args.loss_function == "mutual_info":
-            n_output = dlss_conf["mutual_info_loss"]["dim_summary_fac"] * n_params
+            n_output = loss_conf["mutual_info_loss"]["dim_summary_fac"] * n_params
         Pipeline = GridPipeline
         Model = GridLossModel
         dset_kwargs.update(net_conf["dset"]["training"]["grid"])
@@ -628,7 +648,7 @@ def training():
                 local_batch_size,
                 perts,
                 dim_channels=n_z_bins,
-                **dlss_conf["delta_loss"],
+                **loss_conf["delta_loss"],
                 **net_conf["optimization"]["gradient_clipping"],
             )
         # grid pipeline
@@ -636,8 +656,8 @@ def training():
             if args.loss_function == "likelihood":
                 if not args.restore_checkpoint:
                     lambda_tikhonov_schedule = tf.keras.optimizers.schedules.CosineDecay(
-                        dlss_conf["likelihood_loss"]["lambda_tikhonov_init"],
-                        dlss_conf["likelihood_loss"]["lambda_tikhonov_decay_steps"],
+                        loss_conf["likelihood_loss"]["lambda_tikhonov_init"],
+                        loss_conf["likelihood_loss"]["lambda_tikhonov_decay_steps"],
                         alpha=0.0,
                     )
                     lambda_tikhonov = tf.Variable(lambda_tikhonov_schedule(0), trainable=False, dtype=tf.float32)
@@ -645,7 +665,7 @@ def training():
                     lambda_tikhonov = tf.Variable(0.0, trainable=False, dtype=tf.float32)
                 likelihood_kwargs = {
                     "lambda_tikhonov": lambda_tikhonov,
-                    "img_summary": dlss_conf["likelihood_loss"]["img_summary"],
+                    "img_summary": loss_conf["likelihood_loss"]["img_summary"],
                 }
             else:
                 likelihood_kwargs = {}
@@ -653,9 +673,9 @@ def training():
             if args.loss_function == "mutual_info":
                 mutual_info_kwargs = {
                     "dim_summary": n_output,
-                    **dlss_conf["mutual_info_loss"]["regu"],
-                    "mutual_info_estimator": dlss_conf["mutual_info_loss"]["estimator"],
-                    "mutual_info_kwargs": dlss_conf["mutual_info_loss"]["kwargs"],
+                    **loss_conf["mutual_info_loss"]["regu"],
+                    "mutual_info_estimator": loss_conf["mutual_info_loss"]["estimator"],
+                    "mutual_info_kwargs": loss_conf["mutual_info_loss"]["kwargs"],
                 }
             else:
                 mutual_info_kwargs = {}
@@ -678,7 +698,7 @@ def training():
         vali_pipe_kwargs = {k: v for k, v in dlss_conf["dset"]["common"].items() if k not in _CLS_ONLY_KEYS}
         vali_pipe_kwargs["return_maps"] = True
         vali_pipe_kwargs["return_cls"] = return_cls
-        vali_dset_kwargs = net_conf["dset"]["validation"]["common"]
+        vali_dset_kwargs = {**net_conf["dset"]["validation"]["common"], **data_conf}
         vali_dset_kwargs["drop_remainder"] = True
         n_vali_batches = net_conf["dset"]["validation"]["n_batches"]
 
@@ -945,6 +965,7 @@ def training():
                             msfm_conf=msfm_conf,
                             dlss_conf=dlss_conf,
                             net_conf=net_conf,
+                            data_conf=data_conf,
                             dir_out=dir_model,
                             file_label=train_step,
                             training_set=True,
@@ -956,6 +977,7 @@ def training():
                             msfm_conf=msfm_conf,
                             dlss_conf=dlss_conf,
                             net_conf=net_conf,
+                            data_conf=data_conf,
                             dir_out=dir_model,
                             file_label=train_step,
                         )
@@ -970,6 +992,7 @@ def training():
                         msfm_conf=msfm_conf,
                         dlss_conf=dlss_conf,
                         net_conf=net_conf,
+                        data_conf=data_conf,
                         dir_out=dir_model,
                         file_label=train_step,
                         training_set=False,
@@ -985,6 +1008,7 @@ def training():
                         msfm_conf=msfm_conf,
                         dlss_conf=dlss_conf,
                         net_conf=net_conf,
+                        data_conf=data_conf,
                         dir_out=dir_model,
                         file_label=train_step,
                     )
@@ -1043,8 +1067,15 @@ def training():
 
     LOGGER.info(f"Finished training after {n_steps} steps and {LOGGER.timer.elapsed('training')}")
 
+    # finalize EMA weight averaging, if enabled
+    inner_optimizer = getattr(optimizer, "inner_optimizer", optimizer)
+    ema_finalized = getattr(inner_optimizer, "use_ema", False)
+    if ema_finalized:
+        LOGGER.info(f"Finalizing EMA weights")
+        inner_optimizer.finalize_variable_values(model.trainable_variables)
+
     # save everything at the end if necessary
-    if (checkpoint_every is not None) and (step % checkpoint_every != 0):
+    if ema_finalized or ((checkpoint_every is not None) and (step % checkpoint_every != 0)):
         LOGGER.info(f"Creating a final checkpoint")
         model.save_model()
     elif checkpoint_every is not None:
