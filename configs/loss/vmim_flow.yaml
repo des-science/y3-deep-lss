@@ -1,3 +1,5 @@
+# Generally less stable than training with GMMs
+
 loss_function: mutual_info
 
 mutual_info_loss:

@@ -11,4 +11,9 @@ mutual_info_loss:
     activation: relu
     full_covariance: true
   regu:
-    z_weight: null
+    z_layer: last
+    z_type: vicreg
+    z_weight:
+      variance: null
+      covariance: null
+      invariance: 1.0

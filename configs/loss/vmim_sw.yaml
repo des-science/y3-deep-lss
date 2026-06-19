@@ -3,7 +3,7 @@ loss_function: mutual_info
 mutual_info_loss:
   estimator: variational
   density_estimator: gmm
-  dim_summary_fac: 2
+  dim_summary_fac: 1
   kwargs:
     num_components: 4
     num_hidden_layers: 2
@@ -11,6 +11,6 @@ mutual_info_loss:
     activation: relu
     full_covariance: true
   regu:
-    z_weight: 0.1
+    z_weight: 1.0
     z_type: sw
     z_layer: last

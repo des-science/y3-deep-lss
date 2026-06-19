@@ -14,6 +14,6 @@ mutual_info_loss:
     z_layer: last
     z_type: vicreg
     z_weight:
-      variance: null
-      covariance: null
+      variance: 1.0
+      covariance: 1.0
       invariance: 1.0

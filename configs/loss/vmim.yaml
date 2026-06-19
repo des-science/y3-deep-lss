@@ -2,8 +2,8 @@ loss_function: mutual_info
 
 mutual_info_loss:
   estimator: variational
-  density_estimator: gmm      # Cls pipeline: selects backend
-  dim_summary_fac: 2          # Map pipeline: summary_dim = dim_summary_fac x n_params
+  density_estimator: gmm
+  dim_summary_fac: 1
   kwargs:
     num_components: 4
     num_hidden_layers: 2
