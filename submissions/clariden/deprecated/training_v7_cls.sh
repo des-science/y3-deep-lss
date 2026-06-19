@@ -18,12 +18,8 @@ export WANDB_API_KEY=$(awk '/password/ {print $2}' ~/.netrc)
 export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK}
 export TF_NUM_INTRAOP_THREADS=${SLURM_CPUS_PER_TASK}
 
-RUN_NUM=${RUN_NUM:-1}
-# add --restore_checkpoint only for RUN_NUM > 1
-RESTORE_FLAG=""
-if [ "$RUN_NUM" -gt 1 ]; then
-    RESTORE_FLAG="--restore_checkpoint"
-fi
+# v7_cls always continues training from a seeded v6_cls checkpoint
+RESTORE_FLAG="--restore_checkpoint"
 
 REPOS="/users/athomsen/dlss/repos"
 MYSCRATCH="/iopsstor/scratch/cscs/athomsen"
@@ -37,9 +33,7 @@ SCALES="8wl,32gc"
 # SCALES="unsmoothed"
 DATA="default"
 
-PROBE="lensing"
-# PROBE="clustering"
-# PROBE="combined"
+PROBE="${PROBE:?set PROBE=lensing|clustering|combined}"
 
 MAPS_PLUS_CLS="true"
 # MAPS_PLUS_CLS="false"
@@ -51,13 +45,11 @@ else
     NET_CONFIG="$REPOS/y3-deep-lss/configs/deepsphere/${PROBE}/maps.yaml"
 fi
 
-MODEL="v6_cls"
-# MODEL="v6"
+MODEL="v7_cls"
 
 INPUT="$MYSCRATCH/deep_lss/data/$VERSION/$SUBVERSION"
 OUTPUT="$MYSCRATCH/deep_lss/runs/$VERSION/$SUBVERSION/maps/$PROBE"
-LOG="$OUTPUT/$MODEL/logs/"$RUN_NUM"_"$STRATEGY"_"$SLURM_JOB_ID""
-mkdir -p "$(dirname "$LOG")"
+LOG="$OUTPUT/$MODEL/logs/"$STRATEGY"_"$SLURM_JOB_ID""
 
 TRAIN_TFR="$INPUT/tfrecords/grid/DESy3_grid_dmb_????.tfrecord"
 
@@ -90,7 +82,7 @@ srun --environment=tensorflow --gpu-bind=none --output=""$LOG"_evaluation.log" \
 
 sleep 30
 
-FLOW_CONFIG="$REPOS/multiprobe-simulation-inference/configs/flow/maf.yaml"
+FLOW_CONFIG="$REPOS/multiprobe-simulation-inference/configs/flow/default.yaml"
 
 srun -N1 --ntasks-per-node=1 --gpus-per-task=1 --cpus-per-task=72 --mem=110G \
     --uenv=pytorch/v2.9.1:v2 --view=default \
@@ -99,7 +91,6 @@ srun -N1 --ntasks-per-node=1 --gpus-per-task=1 --cpus-per-task=72 --mem=110G \
         --out_dir=\"$OUTPUT\" \
         --model_name=\"$MODEL\" \
         --flow_config=\"$FLOW_CONFIG\" \
-        --sample_posterior \
         --include_grid \
         --include_des \
         --include_mocks"

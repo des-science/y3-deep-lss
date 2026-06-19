@@ -14,20 +14,16 @@ REPOS="/users/athomsen/dlss/repos"
 MYSCRATCH="/iopsstor/scratch/cscs/athomsen"
 
 VERSION="v16"
-# SUBVERSION="default"
-# SUBVERSION="no_sc"
 SUBVERSION="rot_in_place"
 
-MODEL="v1"
-# MODEL="v5"
-# MODEL="40Mpc"
+# MODEL="v6"
+MODEL="v6_cls"
 
 PROBE="lensing"
 # PROBE="clustering"
-# PROBE="cross"
 # PROBE="combined"
 
-FLOW_CONFIG="$REPOS/multiprobe-simulation-inference/configs/flow/default.yaml"
+FLOW_CONFIG="$REPOS/multiprobe-simulation-inference/configs/flow/maf.yaml"
 
 OUTPUT="$MYSCRATCH/deep_lss/runs/$VERSION/$SUBVERSION/maps/$PROBE"
 LOG="$OUTPUT/$MODEL/logs/${SLURM_JOB_ID}"
@@ -40,6 +36,7 @@ srun -N1 --ntasks-per-node=1 --gpus-per-task=1 --cpus-per-task=72 --mem=110G \
         --out_dir=\"$OUTPUT\" \
         --model_name=\"$MODEL\" \
         --flow_config=\"$FLOW_CONFIG\" \
+        --sample_posterior \
         --include_grid \
         --include_des \
         --include_mocks"
