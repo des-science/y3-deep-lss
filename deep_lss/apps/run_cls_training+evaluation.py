@@ -134,6 +134,13 @@ def main():
     z_type = regu.get("z_type", None)
     z_layer = regu.get("z_layer", "last")
 
+    # The VICReg invariance term needs per-sample (i_sobol, i_signal) ids in the train dataset.
+    # Derive the flag up front (same conditions as GridLossModel.setup_grid_loss_step) because the
+    # dataset is built before the model; we assert it matches the model attribute after setup.
+    uses_invariance = (
+        z_type == "vicreg" and isinstance(z_weight, dict) and z_weight.get("invariance") is not None
+    )
+
     pred_dir = os.path.join(args.out_dir, args.model_name)
     os.makedirs(pred_dir, exist_ok=True)
 
@@ -198,8 +205,14 @@ def main():
             ggl_only=ggl_only,
             batch_size=batch_size,
             seed=seed,
+            return_pair_ids=uses_invariance,
         )
     else:
+        if uses_invariance:
+            raise NotImplementedError(
+                f"VICReg invariance (z_weight['invariance']) is only wired up for scale_cut=hard_rebinned; "
+                f"got scale_cut={scale_cut!r}."
+            )
         cl_dset_train, cl_dset_test, out_dict = dataset.get_binned_power_spectra_dset_for_scale_cut(
             scale_cut,
             base_dir=args.data_dir,
@@ -302,11 +315,11 @@ def main():
         z_layer=z_layer,
     )
 
-    if getattr(model, "grid_train_step_uses_pair_ids", False):
-        raise NotImplementedError(
-            "VICReg invariance (z_weight['invariance']) requires the training dataset to yield "
-            "(cl, cosmo, i_sobol, i_signal); not yet supported in this script."
-        )
+    assert getattr(model, "grid_train_step_uses_pair_ids", False) == uses_invariance, (
+        f"uses_invariance derived from the loss config ({uses_invariance}) disagrees with the model's "
+        f"grid_train_step_uses_pair_ids ({getattr(model, 'grid_train_step_uses_pair_ids', False)}); the "
+        f"dataset would not match the train-step signature."
+    )
 
     tb_writer = tf.summary.create_file_writer(summary_dir)
 
@@ -337,10 +350,15 @@ def main():
     train_steps, train_losses = [], []
     vali_steps, vali_losses_history, vali_mse_history = [], [], []
 
-    for i, (cl_batch, cosmo_batch) in tqdm(enumerate(cl_dset_train), total=n_steps + 1):
+    for i, batch in tqdm(enumerate(cl_dset_train), total=n_steps + 1):
         if i > n_steps:
             break
-        loss = model.grid_train_step(cl_batch, cosmo_batch)
+        if uses_invariance:
+            cl_batch, cosmo_batch, i_sobol_batch, i_signal_batch = batch
+            loss = model.grid_train_step(cl_batch, cosmo_batch, i_sobol_batch, i_signal_batch)
+        else:
+            cl_batch, cosmo_batch = batch
+            loss = model.grid_train_step(cl_batch, cosmo_batch)
 
         if i % log_every == 0:
             train_loss_val = float(loss.numpy())

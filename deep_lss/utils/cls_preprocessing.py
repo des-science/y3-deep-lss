@@ -204,6 +204,8 @@ def get_rebinned_cls_dsets(
     prefetch=3,
     num_parallel_calls=tf.data.AUTOTUNE,
     float_type=np.float32,
+    seed=None,
+    return_pair_ids=False,
 ):
     """Load rebinned Cls from cache (building it if needed) and return TF datasets.
 
@@ -222,6 +224,10 @@ def get_rebinned_cls_dsets(
         with_lensing, with_clustering, with_cross_z, with_cross_probe, ggl_only:
             Probe selection flags (same as existing pipeline).
         batch_size: TF dataset batch size.
+        seed: Optional int seed for dset_train.shuffle(); None means unseeded (legacy behavior).
+        return_pair_ids: If True, dset_train yields (cl, cosmo, i_sobol, i_signal) 4-tuples so the
+            VICReg invariance term can identify positive pairs (same i_sobol/i_signal, different noise)
+            within a batch. dset_test always stays a (cl, cosmo) 2-tuple. Defaults to False.
     """
     from msfm.utils import files
     from msfm.utils import cross_statistics
@@ -327,6 +333,9 @@ def get_rebinned_cls_dsets(
     grid_i_signal_test = _concat(grid_i_signals[:, eval_mask])
     grid_i_noise_test = _concat(grid_i_noises[:, eval_mask])
 
+    grid_i_sobol_train = _concat(grid_i_sobols_sorted[:, train_mask]).astype(np.int64)
+    grid_i_signal_train = _concat(grid_i_signals[:, train_mask]).astype(np.int64)
+
     LOGGER.info(f"Train: {grid_cls_train.shape[0]} examples, Test: {grid_cls_test.shape[0]} examples")
 
     # Build TF datasets. Sign-log is applied as an augmentation (not baked into cache),
@@ -338,15 +347,34 @@ def get_rebinned_cls_dsets(
         signal = tf.math.sign(signal) * tf.math.log(tf.abs(signal) + 1e-10)
         return signal, label
 
-    dset_train = (
-        tf.data.Dataset.from_tensor_slices((grid_cls_train, grid_cosmos_train))
-        .cache()
-        .shuffle(shuffle_buffer)
-        .repeat()
-        .batch(batch_size)
-        .map(_sign_log, num_parallel_calls=num_parallel_calls, deterministic=False)
-        .prefetch(prefetch)
-    )
+    if return_pair_ids:
+        # yield the per-sample (i_sobol, i_signal) ids alongside (cl, cosmo) so the VICReg
+        # invariance term can find positive pairs within a batch; the sign-log only touches the signal.
+        def _sign_log_with_ids(signal, label, i_sobol, i_signal):
+            signal = tf.math.sign(signal) * tf.math.log(tf.abs(signal) + 1e-10)
+            return signal, label, i_sobol, i_signal
+
+        dset_train = (
+            tf.data.Dataset.from_tensor_slices(
+                (grid_cls_train, grid_cosmos_train, grid_i_sobol_train, grid_i_signal_train)
+            )
+            .cache()
+            .shuffle(shuffle_buffer, seed=seed)
+            .repeat()
+            .batch(batch_size)
+            .map(_sign_log_with_ids, num_parallel_calls=num_parallel_calls, deterministic=False)
+            .prefetch(prefetch)
+        )
+    else:
+        dset_train = (
+            tf.data.Dataset.from_tensor_slices((grid_cls_train, grid_cosmos_train))
+            .cache()
+            .shuffle(shuffle_buffer, seed=seed)
+            .repeat()
+            .batch(batch_size)
+            .map(_sign_log, num_parallel_calls=num_parallel_calls, deterministic=False)
+            .prefetch(prefetch)
+        )
 
     dset_test = (
         tf.data.Dataset.from_tensor_slices((grid_cls_test, grid_cosmos_test))
@@ -370,6 +398,8 @@ def get_rebinned_cls_dsets(
         "grid/i_sobol/test": grid_i_sobol_test,
         "grid/i_signal/test": grid_i_signal_test,
         "grid/i_noise/test": grid_i_noise_test,
+        "grid/i_sobol/train": grid_i_sobol_train,
+        "grid/i_signal/train": grid_i_signal_train,
         "noise/cls": None,
         "grid/i_sobols": grid_i_sobols,
         "ell_weights": None,
