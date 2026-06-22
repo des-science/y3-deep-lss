@@ -568,6 +568,20 @@ def evaluate_obs_buzzard(model_fn, pred_file, msfm_conf, dlss_conf, labels):
         append_obs_to_file(pred_file, f"obs/preds/{label}", pred)
 
 
+def discover_mock_labels(data_dir):
+    """Return sorted labels for every {label}_obs_maps.h5 in data_dir/obs/.
+
+    A label is the file stem with the '_obs_maps.h5' suffix removed; passing one of
+    these labels to evaluate_obs_benchmark / evaluate_mock_cls resolves back to the file.
+    """
+    import glob
+
+    suffix = "_obs_maps.h5"
+    obs_dir = os.path.join(data_dir, "obs")
+    files = sorted(glob.glob(os.path.join(obs_dir, f"*{suffix}")))
+    return [os.path.basename(f)[: -len(suffix)] for f in files]
+
+
 def evaluate_obs_benchmark(model_fn, pred_file, msfm_conf, dlss_conf, data_dir, obs_labels):
     """Evaluate benchmark simulations from data_dir/obs/.
 
@@ -638,7 +652,7 @@ def plot_summary_space_prior_predictive(grid_preds, obs_pred, n_rand=1_000, np_s
 
     i_rand = rng.integers(0, grid_preds.shape[0], n_rand)
 
-    tri = TriangleChain(size=2)
+    tri = TriangleChain(size=2, progress_bar=False)
     tri.scatter(np.array(grid_preds)[i_rand], scatter_kwargs={"s": 10, "marker": "o"})
     tri.scatter(
         np.atleast_2d(obs_pred),

@@ -90,7 +90,12 @@ def setup():
     parser.add_argument("--include_buzzard", action="store_true", help="evaluate Buzzard N-body realizations")
     parser.add_argument("--buzzard_labels", nargs="+", default=["Buzzard_mean"])
     parser.add_argument("--include_mocks", action="store_true", help="evaluate mock observations from data_dir/obs/")
-    parser.add_argument("--mock_labels", nargs="+", default=["fiducial_bench"])
+    parser.add_argument(
+        "--mock_labels",
+        nargs="+",
+        default=None,
+        help="mock labels to evaluate; if omitted, every *_obs_maps.h5 in data_dir/obs/ is evaluated",
+    )
     parser.add_argument("--data_dir", type=str, default=None, help="base data directory (needed for --include_mocks)")
 
     args, _ = parser.parse_known_args()
@@ -381,8 +386,14 @@ if __name__ == "__main__":
                 evaluation.evaluate_obs_buzzard(model_fn, out_file, msfm_conf, dlss_conf, args.buzzard_labels)
 
             if args.include_mocks:
+                mock_labels = args.mock_labels
+                if mock_labels is None:
+                    mock_labels = evaluation.discover_mock_labels(args.data_dir)
+                    LOGGER.info(
+                        f"Auto-discovered {len(mock_labels)} mock(s) in {args.data_dir}/obs: {mock_labels}"
+                    )
                 evaluation.evaluate_obs_benchmark(
-                    model_fn, out_file, msfm_conf, dlss_conf, args.data_dir, args.mock_labels
+                    model_fn, out_file, msfm_conf, dlss_conf, args.data_dir, mock_labels
                 )
 
         if args.wandb and out_file is not None:

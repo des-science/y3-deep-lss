@@ -15,7 +15,10 @@ import numpy as np
 import tensorflow as tf
 
 from deep_lss.utils import evaluation
+from msfm.utils import logger
 from msi.utils import preprocessing
+
+LOGGER = logger.get_logger(__file__)
 
 _OBS_PREPROC_FNS = {
     "hard":             preprocessing.get_preprocessed_cl_observation_hard_cut,
@@ -78,7 +81,7 @@ def save_loss_curve(pred_dir, pred_file, train_steps, train_losses, vali_steps, 
     fig.tight_layout()
     fig.savefig(os.path.join(pred_dir, "loss_curve.png"), dpi=150)
     plt.close(fig)
-    print(f"Saved loss curve to {pred_dir}/loss_curve.png")
+    LOGGER.info(f"Saved loss curve to {pred_dir}/loss_curve.png")
 
 
 def evaluate_mock_cls(

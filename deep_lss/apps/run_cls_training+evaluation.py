@@ -7,8 +7,6 @@ import tensorflow as tf
 for gpu in tf.config.list_physical_devices(device_type="GPU"):
     tf.config.experimental.set_memory_growth(gpu, True)
 
-from tqdm import tqdm
-
 from msfm.utils import files, logger
 
 LOGGER = logger.get_logger(__file__)
@@ -66,7 +64,12 @@ def setup():
     parser.add_argument("--n_grid_examples", type=int, default=4)
     parser.add_argument("--include_des", action="store_true")
     parser.add_argument("--include_mocks", action="store_true", help="evaluate mock observations from data_dir/obs/")
-    parser.add_argument("--mock_labels", nargs="+", default=["fiducial_bench"])
+    parser.add_argument(
+        "--mock_labels",
+        nargs="+",
+        default=None,
+        help="mock labels to evaluate; if omitted, every *_obs_maps.h5 in data_dir/obs/ is evaluated",
+    )
 
     args = parser.parse_args()
     if not args.probes_config:
@@ -350,7 +353,7 @@ def main():
     train_steps, train_losses = [], []
     vali_steps, vali_losses_history, vali_mse_history = [], [], []
 
-    for i, batch in tqdm(enumerate(cl_dset_train), total=n_steps + 1):
+    for i, batch in LOGGER.progressbar(enumerate(cl_dset_train), at_level="info", total=n_steps + 1, desc="training"):
         if i > n_steps:
             break
         if uses_invariance:
@@ -475,7 +478,11 @@ def main():
 
     # --- mock observations ---
     if args.include_mocks:
-        for label in args.mock_labels:
+        mock_labels = args.mock_labels
+        if mock_labels is None:
+            mock_labels = evaluation.discover_mock_labels(args.data_dir)
+            LOGGER.info(f"Auto-discovered {len(mock_labels)} mock(s) in {args.data_dir}/obs: {mock_labels}")
+        for label in mock_labels:
             try:
                 cls_evaluation.evaluate_mock_cls(
                     label=label,
