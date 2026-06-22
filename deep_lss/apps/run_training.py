@@ -271,10 +271,11 @@ def setup():
     return args
 
 
-def training():
+def training(args=None):
     LOGGER.timer.start("main")
 
-    args = setup()
+    if args is None:
+        args = setup()
 
     # hardware and distribution
     _, _ = distribute.check_devices()
@@ -433,7 +434,7 @@ def training():
             wandb.define_metric(prefix, step_metric="train_step")
 
         LOGGER.info(f"Initialized weights & biases to {dir_model}")
-        LOGGER.warning(f"Running with {strategy.num_replicas_in_sync} replicas")
+        LOGGER.info(f"Running with {strategy.num_replicas_in_sync} replicas")
 
     LOGGER.info(f"TensorFlow version {tf.__version__}")
 
@@ -534,7 +535,7 @@ def training():
             n_z_bins += len(msfm_conf["survey"]["metacal"]["z_bins"]) * len(msfm_conf["survey"]["maglim"]["z_bins"])
 
     # dataset
-    LOGGER.warning(f"Training set")
+    LOGGER.info(f"Training set")
     pipe_kwargs = {k: v for k, v in {**dlss_conf["dset"]["common"], **dlss_conf["dset"]["training"], **noise_kwargs}.items()
                    if k not in _CLS_ONLY_KEYS}
     pipe_kwargs["return_maps"] = True
@@ -787,7 +788,7 @@ def training():
                         loss_non_regu = loss
                         return loss, loss_non_regu
 
-            LOGGER.warning(f"Fiducial validation set")
+            LOGGER.info(f"Fiducial validation set")
             vali_fidu_pipe = FiducialPipeline(conf=msfm_conf, **vali_pipe_kwargs)
 
             def vali_dset_fn(input_context):
@@ -823,7 +824,7 @@ def training():
 
             vali_dset_kwargs.update(net_conf["dset"]["validation"]["grid"])
 
-            LOGGER.warning(f"Grid validation set")
+            LOGGER.info(f"Grid validation set")
             n_vali_examples_per_replica = n_vali_batches * vali_dset_kwargs["local_batch_size"] if n_vali_batches is not None else None
             LOGGER.info(
                 f"Grid validation: {n_vali_batches} batches × local_batch_size "
@@ -1104,7 +1105,7 @@ if __name__ == "__main__":
     args = setup()
 
     if args.wandb_sweep_id is None:
-        training()
+        training(args)
     else:
         if args.dist_strategy == "horovod":
             # it doesn't hurt to initialize horovod more than once

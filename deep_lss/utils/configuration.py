@@ -74,6 +74,26 @@ def load_run_configs(path):
     }
 
 
+def load_deep_lss_config(conf):
+    """Return a dlss_conf dict from either an already-loaded dict or a path.
+
+    Compatibility shim for callers (e.g. ``msi`` Cls preprocessing) that accept a dlss_conf
+    as ``dset`` + ``scale_cuts``. After the config split, the merged dict is produced by
+    ``read_split_configs`` or pulled from a saved run's ``configs.yaml`` via
+    ``load_run_configs(...)["dlss"]``; both yield a dict, which is passed through unchanged.
+    A string/path is read as a single YAML document (legacy monolithic dlss config).
+
+    Args:
+        conf (dict | str): an already-merged dlss_conf dict, or a path to a YAML config.
+
+    Returns:
+        dict: the dlss_conf mapping.
+    """
+    if isinstance(conf, dict):
+        return conf
+    return input_output.read_yaml(conf)
+
+
 def get_smooth_nside_indices(indices_nside_in, nside_in, smooth_nside):
     """Derive footprint pixel indices and a parent-mapping array at smooth_nside from nside_in indices.
 

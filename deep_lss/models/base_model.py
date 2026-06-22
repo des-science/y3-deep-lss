@@ -935,10 +935,13 @@ class BaseModel(object):
             "params/global_norm", tf.linalg.global_norm(self.network.trainable_variables), skip=self.xla
         )
 
-        # update the step — skip inside strategy.run() because each replica would increment
-        # independently, making train_step grow N× per global step. distributed_train_step
-        # calls increment_step() once after strategy.run() returns.
-        if tf.distribute.get_replica_context() is None:
+        # update the step — skip inside strategy.run() (a non-default strategy is in scope there)
+        # because each replica would increment independently, making train_step grow N× per global
+        # step; distributed_train_step calls increment_step() once after strategy.run() returns.
+        # Outside a strategy (local or Horovod) get_replica_context() returns the *default*
+        # ReplicaContext (not None), so the old `is None` guard never fired and train_step stayed
+        # pinned at init_step — which collapsed every write_summary scalar onto step 0.
+        if not tf.distribute.has_strategy():
             self.increment_step()
 
         # log the learning rate
