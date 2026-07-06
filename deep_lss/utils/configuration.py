@@ -122,6 +122,189 @@ def get_smooth_nside_indices(indices_nside_in, nside_in, smooth_nside):
     return smooth_indices, parent_output_idx
 
 
+def resolve_probe_smooth_nsides(net_conf, dlss_conf, n_side):
+    """Resolve the per-probe smoothing nside from ``network.smooth_nside``.
+
+    ``smooth_nside`` may be absent/None (native n_side for all probes), a scalar (one nside for
+    all probes, the legacy form), or a mapping ``{probe: nside}`` where a missing or None entry
+    means the native n_side. Values are clamped to n_side. When all active probes resolve to the
+    same nside, the downstream code lowers to the single-kernel path (with pipeline downsampling),
+    so the mapping form is pure config sugar in that case; only genuinely mixed nsides use the
+    per-probe smoothing path.
+
+    Args:
+        net_conf (dict): Network architecture config.
+        dlss_conf (dict): Deep-LSS training config (``dset.common`` probe flags).
+        n_side (int): Native map resolution from the msfm config.
+
+    Returns:
+        dict: ``{probe: nside}`` for the active map probes, in channel order.
+    """
+    dset_common = dlss_conf["dset"]["common"]
+    probes = [
+        probe
+        for probe, flag in [("lensing", "with_lensing"), ("clustering", "with_clustering")]
+        if dset_common[flag]
+    ]
+    smooth_nside = net_conf["network"].get("smooth_nside", None)
+    if not probes:
+        if dset_common.get("with_cross", False):
+            # cross-probe maps only: single-kernel path with the scalar smooth_nside
+            if isinstance(smooth_nside, dict):
+                raise ValueError("Per-probe smooth_nside requires the with_lensing/with_clustering map probes")
+            return {"cross": min(smooth_nside or n_side, n_side)}
+        raise ValueError("At least one of with_lensing, with_clustering, or with_cross must be True")
+
+    if isinstance(smooth_nside, dict):
+        probe_nsides = {probe: min(smooth_nside.get(probe) or n_side, n_side) for probe in probes}
+        if dset_common.get("with_cross", False) and len(set(probe_nsides.values())) > 1:
+            raise ValueError(
+                "Per-probe smooth_nside with mixed nsides is not supported together with the "
+                "cross-probe map channels (with_cross), since those mix both probes"
+            )
+    else:
+        probe_nsides = {probe: min(smooth_nside or n_side, n_side) for probe in probes}
+    return probe_nsides
+
+
+def resolve_smooth_nside(net_conf, dlss_conf, msfm_conf):
+    """Resolve the network-input geometry implied by ``network.smooth_nside``.
+
+    The network (and the data pipeline downsampling) runs at the finest per-probe smoothing nside;
+    probes below it are handled inside the smoothing layer (``PerProbeSmoothing``).
+
+    Args:
+        net_conf (dict): Network architecture config.
+        dlss_conf (dict): Deep-LSS training config.
+        msfm_conf (dict): Multiprobe-simulation-forward-model config.
+
+    Returns:
+        tuple: ``(smooth_nside, smooth_indices, parent_output_idx)`` where ``parent_output_idx``
+            is the pipeline downsampling map (None when the network runs at the native n_side).
+    """
+    n_side = msfm_conf["analysis"]["n_side"]
+    data_vec_pix, _, _, _ = files.load_pixel_file(msfm_conf)
+
+    probe_nsides = resolve_probe_smooth_nsides(net_conf, dlss_conf, n_side)
+    smooth_nside = max(probe_nsides.values())
+    if smooth_nside < n_side:
+        smooth_indices, parent_output_idx = get_smooth_nside_indices(data_vec_pix, n_side, smooth_nside)
+        LOGGER.info(f"Using smooth_nside={smooth_nside}: {len(data_vec_pix)} → {len(smooth_indices)} pixels")
+    else:
+        smooth_indices = data_vec_pix
+        parent_output_idx = None
+    return smooth_nside, smooth_indices, parent_output_idx
+
+
+def _downsample_mask(mask, parent_output_idx, n_pix_out):
+    """Downsample a per-channel (n_pix, n_channels) mask by per-parent averaging."""
+    counts = np.bincount(parent_output_idx, minlength=n_pix_out).astype(np.float32)
+    return np.stack(
+        [
+            np.bincount(parent_output_idx, weights=mask[:, c].astype(np.float32), minlength=n_pix_out) / counts
+            for c in range(mask.shape[1])
+        ],
+        axis=1,
+    ).astype(np.float32)
+
+
+def _get_effective_local_batch_size(loss_function, net_conf, mode, n_params):
+    """The largest map batch the smoothing layer has to handle (sets the sparse matmul splits)."""
+    if mode == "training":
+        if loss_function == "delta":
+            local_batch_size = net_conf["dset"][mode]["fiducial"]["local_batch_size"]
+            return local_batch_size * (2 * n_params + 1)
+        return net_conf["dset"][mode]["grid"]["local_batch_size"]
+    if loss_function == "delta":
+        return net_conf["dset"]["eval"]["fiducial"]["local_batch_size"]
+    return net_conf["dset"]["eval"]["grid"]["local_batch_size"]
+
+
+def _get_split_probe_specs(
+    loss_function, msfm_conf, dlss_conf, net_conf, probe_nsides, n_side, data_vec_pix, mask_dict, dir_base, mode
+):
+    """Build the per-probe smoothing spec consumed by ``deep_lss.nets.split_smoothing.PerProbeSmoothing``.
+
+    One ``HealpySmoothing`` kwargs dict per active probe at that probe's nside, following the same
+    conventions as the single-kernel path: white noise sigma scaled by (probe_nside / n_side) and
+    divided by the map normalization, masks downsampled by per-parent averaging. A probe below the
+    output (finest) nside additionally carries the ``parent_output_idx`` that maps the output
+    footprint to its coarse footprint, driving the in-network down/upsampling.
+    """
+    _PROBE_SURVEYS = {"lensing": "metacal", "clustering": "maglim"}
+
+    output_nside = max(probe_nsides.values())
+    if output_nside < n_side:
+        output_indices, _ = get_smooth_nside_indices(data_vec_pix, n_side, output_nside)
+    else:
+        output_indices = data_vec_pix
+
+    arcmin = dlss_conf["scale_cuts"]["arcmin"]
+    n_sigma_support = dlss_conf["scale_cuts"]["n_sigma_support"]
+    apply_norm = dlss_conf["dset"]["common"]["apply_norm"]
+    n_params = len(dlss_conf["dset"]["training"]["params"])
+    effective_local_batch_size = _get_effective_local_batch_size(loss_function, net_conf, mode, n_params)
+
+    probe_specs = []
+    for probe, probe_nside in probe_nsides.items():
+        scale_conf = dlss_conf["scale_cuts"][probe]
+        fwhm = list(scale_conf["theta_fwhm"])
+        fwhm_base = scale_conf.get("theta_fwhm_base", None)
+        mask = mask_dict[_PROBE_SURVEYS[probe]]
+
+        white_noise_sigma = np.array(scale_conf["white_noise_sigma"], dtype=float)
+        if apply_norm:
+            white_noise_sigma = white_noise_sigma / np.array(msfm_conf["analysis"]["normalization"][probe])
+        # scale white noise for lower nside: sigma ∝ 1/sqrt(pixel_area) ∝ nside
+        white_noise_sigma = white_noise_sigma * (probe_nside / n_side)
+
+        if probe_nside < n_side:
+            probe_indices, parent_from_full = get_smooth_nside_indices(data_vec_pix, n_side, probe_nside)
+            mask = _downsample_mask(mask, parent_from_full, len(probe_indices))
+        else:
+            probe_indices = data_vec_pix
+
+        if probe_nside < output_nside:
+            # maps the output footprint (what the network and pipeline run at) to this probe's
+            # coarse footprint, for the in-network down/upsampling around the smoothing
+            probe_indices_out, parent_output_idx = get_smooth_nside_indices(
+                output_indices, output_nside, probe_nside
+            )
+            assert np.array_equal(probe_indices_out, probe_indices)
+        else:
+            parent_output_idx = None
+
+        smoothing_kwargs = {
+            "nside": probe_nside,
+            "indices": probe_indices,
+            "nest": True,
+            "mask": mask,
+            "fwhm": fwhm,
+            "fwhm_base": fwhm_base,
+            "arcmin": arcmin,
+            "n_sigma_support": n_sigma_support,
+            "max_batch_size": effective_local_batch_size,
+            "white_noise_sigma": white_noise_sigma,
+        }
+        if dir_base is not None:
+            smoothing_kwargs["data_path"] = os.path.join(dir_base, "smoothing")
+
+        LOGGER.info(
+            f"Split smoothing for {probe}: nside={probe_nside} (output nside={output_nside}), "
+            f"fwhm={fwhm}, fwhm_base={fwhm_base}"
+        )
+        probe_specs.append(
+            {
+                "probe": probe,
+                "n_channels": len(fwhm),
+                "smoothing_kwargs": smoothing_kwargs,
+                "parent_output_idx": parent_output_idx,
+            }
+        )
+
+    return {"split_probes": probe_specs}
+
+
 def get_smoothing_kwargs(loss_function, msfm_conf, dlss_conf, net_conf, dir_base=None, mode="training"):
     """Build a dictionary of keyword arguments for the deepsphere.healpy_layers.HealpySmoothing layer.
 
@@ -133,7 +316,9 @@ def get_smoothing_kwargs(loss_function, msfm_conf, dlss_conf, net_conf, dir_base
         dir_base (str, optional): Directory to store the smoothing kernel. Defaults to None.
 
     Returns:
-        dict: keyword arguments for deepsphere.healpy_layers.HealpySmoothing
+        dict: keyword arguments for deepsphere.healpy_layers.HealpySmoothing, or — when
+            ``network.smooth_nside`` requests mixed per-probe nsides — a ``{"split_probes": [...]}``
+            spec for ``deep_lss.nets.split_smoothing.PerProbeSmoothing``.
     """
     # msfm
     n_side = msfm_conf["analysis"]["n_side"]
@@ -144,6 +329,15 @@ def get_smoothing_kwargs(loss_function, msfm_conf, dlss_conf, net_conf, dir_base
     with_lensing = dlss_conf["dset"]["common"]["with_lensing"]
     with_clustering = dlss_conf["dset"]["common"]["with_clustering"]
     with_cross = dlss_conf["dset"]["common"].get("with_cross", False)
+
+    # per-probe smoothing nsides; mixed values take the split-kernel path (one HealpySmoothing per
+    # probe at its own nside), uniform values fall through to the single-kernel path below
+    probe_nsides = resolve_probe_smooth_nsides(net_conf, dlss_conf, n_side)
+    if len(set(probe_nsides.values())) > 1:
+        return _get_split_probe_specs(
+            loss_function, msfm_conf, dlss_conf, net_conf, probe_nsides, n_side, data_vec_pix, mask_dict,
+            dir_base, mode,
+        )
 
     if with_cross:
         # mirrors the per-pixel mask used in msfm.grid_pipeline._augmentations for the cross maps:
@@ -160,21 +354,14 @@ def get_smoothing_kwargs(loss_function, msfm_conf, dlss_conf, net_conf, dir_base
     else:
         raise ValueError("At least one of with_lensing, with_clustering, or with_cross must be True")
 
-    smooth_nside = net_conf["network"].get("smooth_nside", None)
-    if smooth_nside is not None and smooth_nside < n_side:
+    smooth_nside = max(probe_nsides.values())  # uniform across probes on this path
+    if smooth_nside < n_side:
         smooth_indices, parent_output_idx = get_smooth_nside_indices(data_vec_pix, n_side, smooth_nside)
         # downsample the per-channel mask to smooth_nside using per-parent averaging
-        n_pix_out = len(smooth_indices)
-        counts = np.bincount(parent_output_idx, minlength=n_pix_out).astype(np.float32)
-        mask_smooth = np.stack(
-            [np.bincount(parent_output_idx, weights=mask[:, c].astype(np.float32), minlength=n_pix_out) / counts
-             for c in range(mask.shape[1])],
-            axis=1,
-        ).astype(np.float32)
+        mask_smooth = _downsample_mask(mask, parent_output_idx, len(smooth_indices))
         LOGGER.info(f"Downsampling smoothing from nside={n_side} to smooth_nside={smooth_nside}: "
-                    f"{len(data_vec_pix)} → {n_pix_out} pixels")
+                    f"{len(data_vec_pix)} → {len(smooth_indices)} pixels")
     else:
-        smooth_nside = n_side
         smooth_indices = data_vec_pix
         mask_smooth = mask
 
@@ -287,7 +474,7 @@ def get_cls_bounds_per_pair(msfm_conf, dlss_conf):
     n_z_lensing = len(msfm_conf["survey"]["metacal"]["z_bins"]) if with_lensing else 0
     n_z_clustering = len(msfm_conf["survey"]["maglim"]["z_bins"]) if with_clustering else 0
     with_cross_probe = dset_common.get("with_cross_probe", with_lensing and with_clustering)
-    ggl_only = dset_common.get("ggl_only", False)
+    lenses_before_sources = dset_common.get("lenses_before_sources", dset_common.get("ggl_only", False))
 
     _DEFAULT_L_MIN = 30
 
@@ -306,7 +493,7 @@ def get_cls_bounds_per_pair(msfm_conf, dlss_conf):
         with_clustering=with_clustering,
         with_cross_z=dset_common.get("with_cross_z", True),
         with_cross_probe=with_cross_probe,
-        ggl_only=ggl_only,
+        lenses_before_sources=lenses_before_sources,
     )
     n_z_cross = len(names)
 

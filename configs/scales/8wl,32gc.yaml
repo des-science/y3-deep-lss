@@ -11,6 +11,11 @@ scale_cuts:
   clustering:
     # 32 Mpc/h transverse comoving scale -> arcmin
     theta_fwhm: [130.2, 88.9, 68.1, 57.0]
+    # base kernel FWHM when clustering gets its own kernel (per-probe smooth_nside): just above
+    # 57/sqrt(2) so the last ratio stays below 2 under the ceil. reps = ceil((theta_fwhm/base)^2)
+    # = [11, 5, 3, 2] -> effective fwhm [134.0, 90.3, 70.0, 57.1], <= 2.9% off the single-kernel
+    # effective scales [130.3, 89.1, 69.0, 57.7]. Ignored by the uniform-nside smoothing path.
+    theta_fwhm_base: 40.4
     # 1 % noise threshold, l_maxs = [133, 195, 255, 305]
     white_noise_sigma: [9.8554e-01, 4.3463e-01, 4.2418e-01, 4.4286e-01]
     l_max: [133, 195, 255, 305]

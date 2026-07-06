@@ -66,6 +66,10 @@ class ViTLayers:
         self.layers = []
 
         if smoothing_kwargs is not None:
+            if "split_probes" in smoothing_kwargs:
+                raise ValueError(
+                    "Per-probe smooth_nside (split smoothing) is only supported by the nested transformer networks"
+                )
             self.layers.append(healpy_layers.HealpySmoothing(**smoothing_kwargs))
 
         # downsampling
@@ -157,6 +161,10 @@ class GTLayers:
         self.layers = []
 
         if smoothing_kwargs is not None:
+            if "split_probes" in smoothing_kwargs:
+                raise ValueError(
+                    "Per-probe smooth_nside (split smoothing) is only supported by the nested transformer networks"
+                )
             self.layers.append(healpy_layers.HealpySmoothing(**smoothing_kwargs))
 
         # downsampling

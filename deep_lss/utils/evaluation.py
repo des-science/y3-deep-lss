@@ -26,7 +26,7 @@ LOGGER = logger.get_logger(__file__)
 
 # Keys in dset.common that are only used by Cls-based pipelines and must be stripped
 # before constructing GridPipeline / FiducialPipeline (map-based pipelines don't accept them).
-_CLS_ONLY_KEYS = frozenset({"with_cross_z", "with_cross_probe", "ggl_only"})
+_CLS_ONLY_KEYS = frozenset({"with_cross_z", "with_cross_probe", "lenses_before_sources", "ggl_only"})
 
 # Keys in dset.common that some probe configs (e.g. maps+cls) set directly, but which are
 # also passed explicitly below — strip them here to avoid duplicate keyword arguments.
@@ -115,20 +115,19 @@ def evaluate_grid(
     dset_kwargs["drop_remainder"] = True
 
     # network constants
-    save_second_to_last_layer = net_conf["network"]["save_second_to_last_layer"]
+    # GCNN/ResNet-era option (save the penultimate embedding); not applicable to the
+    # transformer, whose output is the summary itself, so default to False when absent.
+    save_second_to_last_layer = net_conf["network"].get("save_second_to_last_layer", False)
 
     strategy = model.strategy
 
-    n_side = msfm_conf["analysis"]["n_side"]
-    smooth_nside = net_conf["network"].get("smooth_nside", None)
-    if smooth_nside is not None and smooth_nside < n_side:
-        data_vec_pix, _, _, _ = files.load_pixel_file(msfm_conf)
-        _, parent_output_idx = configuration.get_smooth_nside_indices(data_vec_pix, n_side, smooth_nside)
-    else:
+    # pipeline downsampling only applies when all probes share one smooth_nside below n_side;
+    # mixed per-probe nsides are handled inside the network (PerProbeSmoothing)
+    smooth_nside, _, parent_output_idx = configuration.resolve_smooth_nside(net_conf, dlss_conf, msfm_conf)
+    if parent_output_idx is None:
         smooth_nside = None
-        parent_output_idx = None
 
-    return_cls = "cls_n_bins" in net_conf["network"]
+    return_cls = "cls" in net_conf["network"]
 
     grid_pipeline = GridPipeline(
         conf=msfm_conf,
@@ -309,7 +308,9 @@ def evaluate_fiducial(
     LOGGER.info(f"There's a total of {n_examples} data vectors to be evaluated")
 
     # network constants
-    save_second_to_last_layer = net_conf["network"]["save_second_to_last_layer"]
+    # GCNN/ResNet-era option (save the penultimate embedding); not applicable to the
+    # transformer, whose output is the summary itself, so default to False when absent.
+    save_second_to_last_layer = net_conf["network"].get("save_second_to_last_layer", False)
 
     strategy = model.strategy
     local_batch_size = dset_kwargs["local_batch_size"]
@@ -322,21 +323,18 @@ def evaluate_fiducial(
             f"{strategy.num_replicas_in_sync} times the local batch size {local_batch_size}"
         )
 
-    n_side = msfm_conf["analysis"]["n_side"]
-    smooth_nside = net_conf["network"].get("smooth_nside", None)
-    if smooth_nside is not None and smooth_nside < n_side:
-        data_vec_pix, _, _, _ = files.load_pixel_file(msfm_conf)
-        _, parent_output_idx = configuration.get_smooth_nside_indices(data_vec_pix, n_side, smooth_nside)
-    else:
+    # pipeline downsampling only applies when all probes share one smooth_nside below n_side;
+    # mixed per-probe nsides are handled inside the network (PerProbeSmoothing)
+    smooth_nside, _, parent_output_idx = configuration.resolve_smooth_nside(net_conf, dlss_conf, msfm_conf)
+    if parent_output_idx is None:
         smooth_nside = None
-        parent_output_idx = None
 
     fiducial_pipeline = FiducialPipeline(
         conf=msfm_conf,
         **{k: v for k, v in {**dlss_conf["dset"]["common"], **dlss_conf["dset"]["eval"]["fiducial"]}.items()
            if k not in _CLS_ONLY_KEYS | _EXPLICIT_PIPELINE_KEYS},
         return_maps=True,
-        return_cls="cls_n_bins" in net_conf["network"],
+        return_cls="cls" in net_conf["network"],
     )
 
     # like https://www.tensorflow.org/tutorials/distribute/input#tfdistributestrategydistribute_datasets_from_function
@@ -490,7 +488,7 @@ def _get_cls_bin_indices(msfm_conf, dlss_conf):
         with_clustering=with_clustering,
         with_cross_z=dset_common.get("with_cross_z", True),
         with_cross_probe=dset_common.get("with_cross_probe", with_lensing and with_clustering),
-        ggl_only=dset_common.get("ggl_only", False),
+        lenses_before_sources=dset_common.get("lenses_before_sources", dset_common.get("ggl_only", False)),
     )
     return cls_bin_indices
 
