@@ -1,0 +1,10 @@
+{"config": "maps.yaml", "batch_size": 16, "n_tokens": 448, "pix_per_token": 1024, "params_M": 8.133, "peak_gb": 38.51, "step_ms": 306.7, "throughput": 52.2, "status": "OK"}
+{"config": "maps.yaml", "batch_size": 32, "n_tokens": "-", "pix_per_token": "-", "params_M": "-", "peak_gb": "-", "step_ms": "-", "throughput": "-", "status": "KERNEL"}
+{"config": "maps.yaml", "batch_size": 64, "n_tokens": "-", "pix_per_token": "-", "params_M": "-", "peak_gb": "-", "step_ms": "-", "throughput": "-", "status": "ERROR"}
+{"config": "maps_constant.yaml", "batch_size": 16, "n_tokens": 448, "pix_per_token": 1024, "params_M": 0.502, "peak_gb": 83.75, "step_ms": 522.8, "throughput": 30.6, "status": "OK"}
+{"config": "maps_deep.yaml", "batch_size": 16, "n_tokens": 448, "pix_per_token": 1024, "params_M": 15.492, "peak_gb": 73.13, "step_ms": 560.8, "throughput": 28.5, "status": "OK"}
+{"config": "maps_deep.yaml", "batch_size": 32, "n_tokens": "-", "pix_per_token": "-", "params_M": "-", "peak_gb": "-", "step_ms": "-", "throughput": "-", "status": "KERNEL"}
+{"config": "maps_deep.yaml", "batch_size": 64, "n_tokens": "-", "pix_per_token": "-", "params_M": "-", "peak_gb": "-", "step_ms": "-", "throughput": "-", "status": "OOM"}
+{"config": "maps_growth128.yaml", "batch_size": 16, "n_tokens": 448, "pix_per_token": 1024, "params_M": 19.684, "peak_gb": 78.68, "step_ms": 559.8, "throughput": 28.6, "status": "OK"}
+{"config": "maps_growth128.yaml", "batch_size": 32, "n_tokens": "-", "pix_per_token": "-", "params_M": "-", "peak_gb": "-", "step_ms": "-", "throughput": "-", "status": "KERNEL"}
+{"config": "maps_window_full.yaml", "batch_size": 64, "n_tokens": "-", "pix_per_token": "-", "params_M": "-", "peak_gb": "-", "step_ms": "-", "throughput": "-", "status": "KERNEL"}
