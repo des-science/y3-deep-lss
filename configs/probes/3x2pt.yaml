@@ -1,10 +1,13 @@
 dset:
   common:
-    with_lensing: False
+    with_lensing: True
     with_clustering: True
-    lenses_before_sources: True
-    with_cross_z: False
+    # cosmic shear keeps its cross-z bins; galaxy clustering is auto-z only (DES Y3 3x2pt)
+    with_cross_z:
+      lensing: True
+      clustering: False
     with_cross_probe: True
+    lenses_before_sources: True
     apply_norm: True
   training:
     params: [Om, s8, w0, Aia, n_Aia, bta, bg1, bg2, bg3, bg4]
