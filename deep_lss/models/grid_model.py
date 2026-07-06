@@ -128,6 +128,8 @@ class GridLossModel(BaseModel):
         dim_summary=None,
         mutual_info_estimator="variational",
         mutual_info_kwargs={},
+        # mse loss
+        label_std=None,
         # likelihood loss
         lambda_tikhonov=None,
         # gradient clipping + regularization
@@ -157,6 +159,11 @@ class GridLossModel(BaseModel):
                 "variational", which produced the best results on tests on the Cls.
             mutual_info_kwargs (dict, optional): Additional keyword arguments for the mutual information estimator like
                 makeup of the Gaussian Mixture Model. Defaults to {}.
+            label_std (np.ndarray | tf.Tensor, optional): Per-parameter standard deviation of the labels, of
+                shape (dim_theta,). Only used by the "mse" loss to weight each parameter's squared error by
+                1/std**2, which standardizes the loss across parameters that live on different scales (this is
+                equivalent at the optimum to standardizing the labels while keeping predictions in physical
+                units). Defaults to None, then an unweighted MSE is used.
             lambda_tikhonov (float, optional): Regularization parameter for the Tikhonov regularization in the
                 likelihood loss. Defaults to None, then no regularization is applied.
             clip_by_value (tf.tensor, optional): Clip the gradients by given 1d array of values into the interval
@@ -182,7 +189,9 @@ class GridLossModel(BaseModel):
             ValueError: If an invalid strategy is passed.
 
         Note:
-            - If the loss type is "mse", the labels should be normalized.
+            - If the loss type is "mse", pass ``label_std`` so the per-parameter squared errors are weighted
+              by 1/std**2 (the cosmological parameters live on different scales); otherwise the loss is
+              dominated by the large-scale parameters.
             - If the loss type is "likelihood", the number of parameters (dim_theta) must be passed.
         """
 
@@ -221,17 +230,43 @@ class GridLossModel(BaseModel):
 
         vali_loss_kwargs = {}
         if loss == "mse":
-            if isinstance(self.strategy, (tf.distribute.MirroredStrategy, tf.distribute.MultiWorkerMirroredStrategy)):
-                # to be compatible with the delta loss, the loss is averaged per replica
-                loss_fn = lambda preds, theta, training=True: (1.0 / batch_size) * tf.keras.losses.MeanSquaredError(
-                    reduction=tf.keras.losses.Reduction.SUM
-                )(preds, theta)
-            else:
-                loss_fn = lambda preds, theta, training=True: tf.keras.losses.MeanSquaredError(
-                    reduction=tf.keras.losses.Reduction.AUTO
-                )(preds, theta)
+            distributed = isinstance(
+                self.strategy, (tf.distribute.MirroredStrategy, tf.distribute.MultiWorkerMirroredStrategy)
+            )
 
-            LOGGER.warning(f"Using the Mean Squared Error. Note that the labels should be normalized!")
+            if label_std is not None:
+                # weight each parameter's squared error by 1/std**2 so parameters on different scales
+                # contribute equally; equivalent at the optimum to standardizing the labels while keeping
+                # predictions in physical units. Guard against zero-variance (fixed) parameters.
+                std = tf.constant(label_std, dtype=get_backend_floatx())
+                std = tf.where(tf.equal(std, 0.0), tf.ones_like(std), std)
+                w = 1.0 / std
+
+                if distributed:
+                    # to be compatible with the delta loss, the loss is averaged per replica
+                    loss_fn = lambda preds, theta, training=True: (1.0 / batch_size) * tf.reduce_sum(
+                        tf.reduce_mean(tf.square(w * (preds - theta)), axis=-1)
+                    )
+                else:
+                    loss_fn = lambda preds, theta, training=True: tf.reduce_mean(tf.square(w * (preds - theta)))
+
+                LOGGER.warning(f"Using the Mean Squared Error, label-std-weighted (label_std={label_std})")
+            else:
+                if distributed:
+                    # to be compatible with the delta loss, the loss is averaged per replica
+                    loss_fn = lambda preds, theta, training=True: (1.0 / batch_size) * tf.keras.losses.MeanSquaredError(
+                        reduction=tf.keras.losses.Reduction.SUM
+                    )(preds, theta)
+                else:
+                    loss_fn = lambda preds, theta, training=True: tf.keras.losses.MeanSquaredError(
+                        reduction=tf.keras.losses.Reduction.AUTO
+                    )(preds, theta)
+
+                LOGGER.warning(f"Using the Mean Squared Error. Note that the labels should be normalized!")
+
+            # for MSE the network predictions are the point estimates of the parameters, so the app's
+            # vali_mse metric (preds vs cosmos, physical units) just needs the identity here.
+            self.vali_posterior_mean_fn = lambda preds: preds
 
         elif loss == "likelihood":
             assert dim_theta is not None, f"n_theta must be passed for the likelihood loss"
