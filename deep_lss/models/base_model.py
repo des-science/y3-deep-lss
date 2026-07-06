@@ -290,7 +290,14 @@ class BaseModel(object):
             raise ValueError(f"A non empty checkpoint_dir {self.checkpoint_dir} has to be passed")
 
         try:
-            restore_dir = self.checkpoint_manager.restore_or_initialize()
+            restore_dir = self.checkpoint_manager.latest_checkpoint
+            status = self.checkpoint.restore(restore_dir)
+            # Hard-fail if any already-built variable has no counterpart in the checkpoint
+            # (e.g. the network gained new layers since the checkpoint was saved); otherwise the
+            # new variables silently keep their init values and the restored model computes a
+            # different function than the one that was saved. Lazily-created variables (fresh
+            # optimizer slots) are exempt — they restore deferred as usual.
+            status.assert_existing_objects_matched()
         except ValueError as e:
             if "legacy TF-Keras optimizer into a v2.11+ Optimizer" not in str(e):
                 raise
@@ -298,7 +305,9 @@ class BaseModel(object):
             # variables are incompatible with the current optimizer; only restore the network weights
             # and the global step, letting the optimizer state start fresh
             restore_dir = self.checkpoint_manager.latest_checkpoint
-            tf.train.Checkpoint(network=self.network, train_step=self.train_step).restore(restore_dir).expect_partial()
+            tf.train.Checkpoint(network=self.network, train_step=self.train_step).restore(
+                restore_dir
+            ).expect_partial().assert_existing_objects_matched()
         LOGGER.info(f"Network successfully restored from checkpoint {restore_dir}.")
 
     def restore_model_from_checkpoint_path(self, checkpoint_path):
@@ -312,7 +321,11 @@ class BaseModel(object):
         if self.checkpoint_dir is None:
             raise ValueError(f"No checkpoint directory was given, the network can not be restored.")
 
-        self.checkpoint.restore(checkpoint_path)
+        # expect_partial: evaluation restores from training checkpoints that contain optimizer
+        # slots this Checkpoint object doesn't track; the assert still hard-fails if any
+        # already-built model variable (e.g. a layer added after the checkpoint was saved) has
+        # no counterpart in the checkpoint, instead of silently keeping its init value.
+        self.checkpoint.restore(checkpoint_path).expect_partial().assert_existing_objects_matched()
         LOGGER.info(f"Network successfully restored from checkpoint {checkpoint_path}.")
 
     def build_network(self, input_shape):
