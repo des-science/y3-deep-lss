@@ -8,6 +8,11 @@ activation: relu
 # Data
 scale_cut: hard_rebinned
 cls_n_bins: 16
+
+# Cls transform: per-feature asinh(x / s), s = median(|C_l|) per (pair, l-bin) from the training
+# split. Applied inside the model (AsinhScaleLayer), scale stored in the checkpoint -> identical
+# transform across training, grid/mock/DES evaluation, and any later reload. Data-grounded,
+# sign-preserving, invertible (x = s*sinh(y)). Replaces the arbitrary fixed 1e-10 knee.
 cls_transform: asinh_per_feature
 
 # PCA
@@ -25,7 +30,7 @@ lr_schedule: constant
 lr_warmup_steps: 5000
 
 early_stopping:
-  patience: 15 # must exceed plateau patience so the LR drops first
+  patience: 12 # must exceed plateau patience so the LR drops first
   min_delta: 5e-2
   min_steps: 10000
 

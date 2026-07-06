@@ -1,3 +1,6 @@
+# Identical to default.yaml except cls_n_bins: 16 -> 32 (see finebins24.yaml for rationale).
+# Points at a new cache rebinned_nb32_<scales>.h5, built once automatically.
+
 # Network architecture
 num_hidden_units: 1024
 num_layers: 4
@@ -6,13 +9,12 @@ normalization: layer
 activation: relu
 
 # Data
+apply_log: true
 scale_cut: hard_rebinned
-cls_n_bins: 16
-cls_transform: asinh_per_feature
+cls_n_bins: 32
 
 # PCA
 pca_components: null
-pca_whiten: false
 
 # Training
 n_steps: 1000000
@@ -20,13 +22,10 @@ batch_size: 1024
 learning_rate: 1e-4
 weight_decay: 1e-2
 clip_by_global_norm: 1.0
-
 lr_schedule: constant
-lr_warmup_steps: 5000
-
 early_stopping:
-  patience: 15 # must exceed plateau patience so the LR drops first
-  min_delta: 5e-2
+  patience: 5
+  min_delta: 1e-2
   min_steps: 10000
 
 # EMA weight averaging

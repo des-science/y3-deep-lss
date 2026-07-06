@@ -6,9 +6,9 @@ normalization: layer
 activation: relu
 
 # Data
+cls_transform: log1p_fixed  # fixed signed-log: sign(x)*log1p(|x|/1e-10)
 scale_cut: hard_rebinned
 cls_n_bins: 16
-cls_transform: asinh_per_feature
 
 # PCA
 pca_components: null
@@ -25,7 +25,7 @@ lr_schedule: constant
 lr_warmup_steps: 5000
 
 early_stopping:
-  patience: 15 # must exceed plateau patience so the LR drops first
+  patience: 12 # must exceed plateau patience so the LR drops first
   min_delta: 5e-2
   min_steps: 10000
 

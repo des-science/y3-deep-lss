@@ -11,7 +11,7 @@ cls_n_bins: 16
 cls_transform: asinh_per_feature
 
 # PCA
-pca_components: null
+pca_components: 9999
 pca_whiten: false
 
 # Training

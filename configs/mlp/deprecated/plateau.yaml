@@ -6,12 +6,12 @@ normalization: layer
 activation: relu
 
 # Data
+apply_log: true
 scale_cut: hard_rebinned
 cls_n_bins: 16
-cls_transform: asinh_per_feature
 
 # PCA
-pca_components: null
+pca_components: 9999
 pca_whiten: false
 
 # Training
@@ -21,12 +21,18 @@ learning_rate: 1e-4
 weight_decay: 1e-2
 clip_by_global_norm: 1.0
 
-lr_schedule: constant
+lr_schedule: plateau
 lr_warmup_steps: 5000
+reduce_lr_on_plateau:
+  factor: 0.5
+  patience: 3        # vali plateaus (x vali_every=5000 steps) before halving
+  min_delta: 1e-2
+  cooldown: 2
+  min_lr: 1e-6
 
 early_stopping:
-  patience: 15 # must exceed plateau patience so the LR drops first
-  min_delta: 5e-2
+  patience: 8        # must exceed plateau patience so the LR drops first
+  min_delta: 1e-2
   min_steps: 10000
 
 # EMA weight averaging
