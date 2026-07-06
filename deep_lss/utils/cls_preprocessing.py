@@ -90,6 +90,94 @@ def _cache_path(data_dir, cls_n_bins, scales_name):
     return os.path.join(data_dir, "cls", f"rebinned_nb{cls_n_bins}_{scales_name}.h5")
 
 
+def compute_asinh_scale_from_cache(
+    data_dir,
+    msfm_conf,
+    cls_n_bins,
+    scales_name,
+    with_lensing,
+    with_clustering,
+    with_cross_z,
+    with_cross_probe,
+    lenses_before_sources,
+    default_scale=None,
+    floor=1e-30,
+    max_samples=200_000,
+):
+    """Per-feature asinh scale ``s = median(|C_l|)`` from the cached binned Cls.
+
+    Returns a ``(cls_n_bins * n_selected_pairs,)`` float32 array whose ordering
+    (bin-major, pairs selected via ``get_cross_bin_indices``) matches the output of
+    ``ClsBinningAndTransformLayer`` exactly, and reproduces the statistic used by the
+    Cls-only ``AsinhScaleLayer.fit`` (same median|x|, floor and subsampling).
+
+    Behaviour when the cache file is absent (no calibration available) depends on
+    ``default_scale`` (config key ``cls.asinh_default_scale``):
+      * ``default_scale is None`` (the strict default): raise, since the per-feature
+        calibration cannot be produced and no fallback was requested.
+      * ``default_scale`` is a float: log a warning and return a uniform ``default_scale``
+        vector so the asinh transform degrades to a fixed-knee form.
+
+    Args:
+        data_dir: Input dir holding ``cls/rebinned_nb{cls_n_bins}_{scales_name}.h5``.
+        msfm_conf (dict): Parsed msfm config (for the tomographic bin counts).
+        cls_n_bins, scales_name: Identify the cache file.
+        with_lensing, with_clustering, with_cross_z, with_cross_probe, lenses_before_sources: Probe
+            selection flags (must match the training probes config so the selected pairs
+            align with the network's Cls branch).
+    """
+    from msfm.utils import cross_statistics
+
+    n_z_lensing = len(msfm_conf["survey"]["metacal"]["z_bins"])
+    n_z_clustering = len(msfm_conf["survey"]["maglim"]["z_bins"])
+
+    bin_indices, _ = cross_statistics.get_cross_bin_indices(
+        n_z_lensing=n_z_lensing,
+        n_z_clustering=n_z_clustering,
+        with_lensing=with_lensing,
+        with_clustering=with_clustering,
+        with_cross_z=with_cross_z,
+        with_cross_probe=with_cross_probe,
+        lenses_before_sources=lenses_before_sources,
+    )
+    n_flat = cls_n_bins * len(bin_indices)
+
+    cache_file = _cache_path(data_dir, cls_n_bins, scales_name)
+    if not os.path.exists(cache_file):
+        if default_scale is None:
+            raise FileNotFoundError(
+                f"asinh_per_feature calibration requires the binned-Cls cache at {cache_file}, but it "
+                f"is absent and cls.asinh_default_scale is null. Build the cache (run the Cls precache "
+                f"for scales={scales_name}) or set cls.asinh_default_scale to a float fallback."
+            )
+        LOGGER.warning(
+            f"asinh_per_feature: binned-Cls cache not found at {cache_file}; falling back to a "
+            f"uniform scale s={default_scale:.1e} for all {n_flat} features. Build the cache (e.g. "
+            f"run the Cls precache for this scales config) for a data-grounded per-feature scale."
+        )
+        return np.full(n_flat, default_scale, dtype=np.float32)
+
+    LOGGER.warning(f"asinh_per_feature: fitting per-feature scale from cache: {cache_file}")
+    with h5py.File(cache_file, "r") as f:
+        grid_cls_all = f["grid/cls"][:]  # (n_cosmos, n_examples, n_bins, n_total_pairs)
+
+    # Select pairs, then flatten (bins, pairs) bin-major — identical layout to the layer output.
+    grid_cls = grid_cls_all[:, :, :, bin_indices]  # (n_cosmos, n_examples, n_bins, n_selected)
+    grid_cls = grid_cls.reshape(-1, grid_cls.shape[2] * grid_cls.shape[3])  # (N, n_bins*n_selected)
+
+    # Same statistic as AsinhScaleLayer.fit: seeded subsample, median(|x|), floor.
+    rng = np.random.default_rng(0)
+    if grid_cls.shape[0] > max_samples:
+        idx = rng.choice(grid_cls.shape[0], size=max_samples, replace=False)
+        grid_cls = grid_cls[idx]
+    scale = np.median(np.abs(grid_cls.astype(np.float64)), axis=0)
+    scale = np.maximum(scale, floor).astype(np.float32)
+    LOGGER.warning(
+        f"asinh_per_feature: fitted {n_flat} per-feature scales, range [{scale.min():.2e}, {scale.max():.2e}]"
+    )
+    return scale
+
+
 def build_rebinned_cls_cache(data_dir, msfm_conf, dlss_conf, cls_n_bins, scales_name):
     """Rebin raw per-ell Cls to cls_n_bins bins per pair and cache to disk.
 
@@ -198,7 +286,7 @@ def get_rebinned_cls_dsets(
     with_clustering=True,
     with_cross_z=True,
     with_cross_probe=None,
-    ggl_only=False,
+    lenses_before_sources=False,
     batch_size=1024,
     shuffle_buffer="full",
     prefetch=3,
@@ -206,6 +294,7 @@ def get_rebinned_cls_dsets(
     float_type=np.float32,
     seed=None,
     return_pair_ids=False,
+    apply_log=True,
 ):
     """Load rebinned Cls from cache (building it if needed) and return TF datasets.
 
@@ -221,13 +310,17 @@ def get_rebinned_cls_dsets(
         scales_name: Stem of the scales config filename (e.g. "8wl,32gc").
         signal_indices: Fraction or list for train/eval split on cosmologies.
         noise_indices: Fraction or list for train/eval split on noise realizations.
-        with_lensing, with_clustering, with_cross_z, with_cross_probe, ggl_only:
+        with_lensing, with_clustering, with_cross_z, with_cross_probe, lenses_before_sources:
             Probe selection flags (same as existing pipeline).
         batch_size: TF dataset batch size.
         seed: Optional int seed for dset_train.shuffle(); None means unseeded (legacy behavior).
         return_pair_ids: If True, dset_train yields (cl, cosmo, i_sobol, i_signal) 4-tuples so the
             VICReg invariance term can identify positive pairs (same i_sobol/i_signal, different noise)
             within a batch. dset_test always stays a (cl, cosmo) 2-tuple. Defaults to False.
+        apply_log: If True (default), apply the fixed signed-log transform sign(x)*log1p(|x|/1e-10)
+            to the datasets and the "grid/cls" / "grid/obs/cls" arrays. If False, leave them raw
+            (e.g. for the per-feature asinh transform, which is applied inside the model instead).
+            The "grid/cls_raw" arrays are always raw regardless of this flag.
     """
     from msfm.utils import files
     from msfm.utils import cross_statistics
@@ -255,7 +348,7 @@ def get_rebinned_cls_dsets(
         with_clustering=with_clustering,
         with_cross_z=with_cross_z,
         with_cross_probe=with_cross_probe,
-        ggl_only=ggl_only,
+        lenses_before_sources=lenses_before_sources,
     )
     LOGGER.info(f"Probe selection: {len(bin_indices)} pairs out of {grid_cls_all.shape[-1]} total")
 
@@ -344,14 +437,16 @@ def get_rebinned_cls_dsets(
         shuffle_buffer = grid_cls_train.shape[0]
 
     def _sign_log(signal, label):
-        signal = tf.math.sign(signal) * tf.math.log(tf.abs(signal) + 1e-10)
+        if apply_log:
+            signal = tf.math.sign(signal) * tf.math.log1p(tf.abs(signal) / 1e-10)
         return signal, label
 
     if return_pair_ids:
         # yield the per-sample (i_sobol, i_signal) ids alongside (cl, cosmo) so the VICReg
         # invariance term can find positive pairs within a batch; the sign-log only touches the signal.
         def _sign_log_with_ids(signal, label, i_sobol, i_signal):
-            signal = tf.math.sign(signal) * tf.math.log(tf.abs(signal) + 1e-10)
+            if apply_log:
+                signal = tf.math.sign(signal) * tf.math.log1p(tf.abs(signal) / 1e-10)
             return signal, label, i_sobol, i_signal
 
         dset_train = (
@@ -384,9 +479,11 @@ def get_rebinned_cls_dsets(
         .prefetch(prefetch)
     )
 
-    # Apply sign-log to the static eval arrays and obs Cls.
+    # Apply sign-log to the static eval arrays and obs Cls (identity if apply_log is False).
     def _np_sign_log(x):
-        return np.sign(x) * np.log(np.abs(x) + 1e-10)
+        if not apply_log:
+            return np.asarray(x).copy()
+        return np.sign(x) * np.log1p(np.abs(x) / 1e-10)
 
     out_dict = {
         "grid/cls_raw/train": grid_cls_train.copy(),
@@ -424,11 +521,12 @@ def preprocess_obs_hard_rebinned(
     with_clustering=True,
     with_cross_z=True,
     with_cross_probe=None,
-    ggl_only=False,
+    lenses_before_sources=False,
     apply_maglim_sys_map=True,
+    apply_log=True,
     **ignored_kwargs,
 ):
-    """Apply rebinning + sign-log to a single observation for mock/DES evaluation.
+    """Apply rebinning (+ optional sign-log) to a single observation for mock/DES evaluation.
 
     Mirrors the training preprocessing so model inputs are consistent.
 
@@ -438,6 +536,10 @@ def preprocess_obs_hard_rebinned(
         wl_gamma_map, gc_count_map: HEALPix maps; per-ell Cls are computed from them.
         msfm_conf, dlss_conf: Config dicts (already loaded or file paths).
         cls_n_bins: Must match the training configuration.
+        apply_log: If True (default, the network input), apply the signed-log transform
+            ``sign(x)*log1p(|x|/1e-10)``. This is sign-preserving and invertible
+            (``x = sign(y)*1e-10*expm1(|y|)``). If False, return the linear rebinned Cls
+            (for plotting / diagnostics).
     """
     from msfm.utils import files, cross_statistics
     from msfm.utils.power_spectra import get_cl_bins
@@ -492,10 +594,163 @@ def preprocess_obs_hard_rebinned(
         with_clustering=with_clustering,
         with_cross_z=with_cross_z,
         with_cross_probe=with_cross_probe,
-        ggl_only=ggl_only,
+        lenses_before_sources=lenses_before_sources,
     )
     obs_selected = obs_binned[..., :, bin_indices]  # (..., n_bins, n_selected_pairs)
     obs_flat = obs_selected.reshape(obs_selected.shape[:-2] + (-1,))  # (..., n_bins*n_selected)
 
-    result = np.sign(obs_flat) * np.log(np.abs(obs_flat) + 1e-10)
-    return np.atleast_2d(result)
+    if apply_log:
+        obs_flat = np.sign(obs_flat) * np.log1p(np.abs(obs_flat) / 1e-10)
+    return np.atleast_2d(obs_flat)
+
+
+def _l_min_max_z(dlss_conf, n_z_lensing, n_z_clustering):
+    """Per-z-bin (l_min, l_max) lists from a dlss_conf's scale_cuts (lensing then clustering).
+
+    Mirrors the extraction in build_rebinned_cls_cache / preprocess_obs_hard_rebinned so the
+    rebinning, the obs preprocessing and the plot axis all derive their scale cuts the same way.
+    """
+    scale_cuts = dlss_conf.get("scale_cuts", {})
+    l_min_lensing = list(scale_cuts.get("lensing", {}).get("l_min", [_DEFAULT_L_MIN] * n_z_lensing))
+    l_min_clustering = list(scale_cuts.get("clustering", {}).get("l_min", [_DEFAULT_L_MIN] * n_z_clustering))
+    l_max_lensing = list(scale_cuts.get("lensing", {}).get("l_max", []))
+    l_max_clustering = list(scale_cuts.get("clustering", {}).get("l_max", []))
+    return l_min_lensing + l_min_clustering, l_max_lensing + l_max_clustering
+
+
+def load_rebinned_cls_grid(
+    data_dir,
+    msfm_conf,
+    dlss_conf,
+    cls_n_bins,
+    scales_name,
+    with_lensing=True,
+    with_clustering=True,
+    with_cross_z=True,
+    with_cross_probe=None,
+    lenses_before_sources=False,
+):
+    """Load the full rebinned Cls grid (linear, all examples) for a probe selection.
+
+    Lightweight numpy-only counterpart of get_rebinned_cls_dsets that skips the train/test split,
+    the sign-log transform and the TF dataset construction. Intended for diagnostics (e.g. the PPC
+    Cls-space posterior predictive) that need every example keyed by its sky realization.
+
+    Returns:
+        cls_flat: (n_cosmos * n_examples, cls_n_bins * n_selected_pairs) linear rebinned Cls, in the
+            same bin-major / pair-minor flatten order as get_rebinned_cls_dsets and
+            preprocess_obs_hard_rebinned.
+        real_idx: (n_cosmos * n_examples, 3) per-row (i_sobol, i_signal, i_noise), row-aligned with
+            cls_flat (same C-order flatten of the (n_cosmos, n_examples) grid).
+        cosmos: (n_cosmos * n_examples, n_params_all) the FULL stored parameter vector per row
+            (cosmology + per-signal Latin-hypercube astro nuisances), row-aligned with cls_flat.
+        cosmo_params: list of the n_params_all parameter names, giving the column order of ``cosmos``
+            (so a caller can select the subset a flow was trained on).
+    """
+    from msfm.utils import files, cross_statistics
+    from msfm.utils import parameters as msfm_params
+    from msi.utils import input_output
+
+    msfm_conf = files.load_config(msfm_conf)
+    n_z_lensing = len(msfm_conf["survey"]["metacal"]["z_bins"])
+    n_z_clustering = len(msfm_conf["survey"]["maglim"]["z_bins"])
+
+    build_rebinned_cls_cache(data_dir, msfm_conf, dlss_conf, cls_n_bins, scales_name)
+
+    cache_file = _cache_path(data_dir, cls_n_bins, scales_name)
+    LOGGER.info(f"Loading rebinned Cls grid from cache: {cache_file}")
+    with h5py.File(cache_file, "r") as f:
+        grid_cls_all = f["grid/cls"][:]  # (n_cosmos, n_examples, n_bins, n_total_pairs)
+
+    bin_indices, _ = cross_statistics.get_cross_bin_indices(
+        n_z_lensing=n_z_lensing,
+        n_z_clustering=n_z_clustering,
+        with_lensing=with_lensing,
+        with_clustering=with_clustering,
+        with_cross_z=with_cross_z,
+        with_cross_probe=with_cross_probe,
+        lenses_before_sources=lenses_before_sources,
+    )
+    grid_cls = grid_cls_all[:, :, :, bin_indices]
+    cls_flat = grid_cls.reshape(grid_cls.shape[0] * grid_cls.shape[1], -1)
+
+    meta = input_output.load_human_summaries(
+        data_dir, "cls", return_raw_cls=False, return_fiducial=False, return_grid=True
+    )
+    real_idx = np.stack(
+        [meta["grid/i_sobol"], meta["grid/i_signal"], meta["grid/i_noise"]], axis=-1
+    ).reshape(-1, 3)
+
+    cosmo_params = msfm_params.get_parameters(None, msfm_conf)  # column order of grid/cosmo
+    cosmos = meta["grid/cosmo"].reshape(-1, meta["grid/cosmo"].shape[-1]).astype(np.float32)
+
+    assert real_idx.shape[0] == cls_flat.shape[0] == cosmos.shape[0], (
+        f"metadata rows ({real_idx.shape[0]}/{cosmos.shape[0]}) do not match cache rows "
+        f"({cls_flat.shape[0]}); the rebinned cache and the grid HDF5 are out of sync."
+    )
+    assert cosmos.shape[1] == len(cosmo_params), (
+        f"stored cosmo has {cosmos.shape[1]} columns but get_parameters lists {len(cosmo_params)}."
+    )
+    return cls_flat, real_idx, cosmos, cosmo_params
+
+
+def get_rebinned_pair_info(
+    msfm_conf,
+    dlss_conf,
+    cls_n_bins,
+    with_lensing=True,
+    with_clustering=True,
+    with_cross_z=True,
+    with_cross_probe=None,
+    lenses_before_sources=False,
+):
+    """Per-pair plotting metadata for the selected probe, in data-vector flatten order.
+
+    Returns (labels, ell_centers, ell_ranges):
+        labels: list of LaTeX strings, one per selected tomographic pair.
+        ell_centers: (n_selected_pairs, cls_n_bins) bin-edge midpoints of the per-pair sqrt-spaced
+            scale cut (the ell axis used for the ℓ·Cl panel and tick placement).
+        ell_ranges: (n_selected_pairs, 2) the per-pair (lmin_pair, lmax_pair) scale-cut bounds
+            (for annotating each pair's ell coverage on the plot).
+    """
+    from msfm.utils import files, cross_statistics
+    from msfm.utils.power_spectra import get_cl_bins
+
+    msfm_conf = files.load_config(msfm_conf)
+    n_z_lensing = len(msfm_conf["survey"]["metacal"]["z_bins"])
+    n_z_clustering = len(msfm_conf["survey"]["maglim"]["z_bins"])
+    n_z = n_z_lensing + n_z_clustering
+
+    l_min_z, l_max_z = _l_min_max_z(dlss_conf, n_z_lensing, n_z_clustering)
+
+    def _sym(idx):
+        return rf"\kappa^{{{idx + 1}}}" if idx < n_z_lensing else rf"\delta_g^{{{idx - n_z_lensing + 1}}}"
+
+    # Enumerate all (i<=j) pairs in the same k order as get_cross_bin_indices, recording each pair's
+    # bin centers, ell range and a symbolic label, then select the requested pairs.
+    all_centers = []
+    all_labels = []
+    all_ranges = []
+    for i in range(n_z):
+        for j in range(n_z):
+            if i <= j:
+                lmin_pair = max(l_min_z[i], l_min_z[j])
+                lmax_pair = min(l_max_z[i], l_max_z[j])
+                edges = get_cl_bins(lmin_pair, lmax_pair, cls_n_bins + 1)
+                all_centers.append((edges[:-1] + edges[1:]) / 2.0)
+                all_ranges.append((lmin_pair, lmax_pair))
+                all_labels.append(rf"${_sym(i)}\times{_sym(j)}$")
+
+    bin_indices, _ = cross_statistics.get_cross_bin_indices(
+        n_z_lensing=n_z_lensing,
+        n_z_clustering=n_z_clustering,
+        with_lensing=with_lensing,
+        with_clustering=with_clustering,
+        with_cross_z=with_cross_z,
+        with_cross_probe=with_cross_probe,
+        lenses_before_sources=lenses_before_sources,
+    )
+    labels = [all_labels[k] for k in bin_indices]
+    ell_centers = np.stack([all_centers[k] for k in bin_indices], axis=0)
+    ell_ranges = np.array([all_ranges[k] for k in bin_indices], dtype=float)
+    return labels, ell_centers, ell_ranges

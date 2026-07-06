@@ -1,11 +1,11 @@
 #!/bin/bash
 #SBATCH --account=a0158
 #SBATCH --partition=normal
-#SBATCH --time=02:00:00
+#SBATCH --time=01:00:00
 #SBATCH --nodes=1
 #SBATCH --exclusive
 #SBATCH --mem=450G
-#SBATCH --job-name=cls_training
+#SBATCH --job-name=cls_loss
 #SBATCH --output=/users/athomsen/dlss/repos/y3-deep-lss/submissions/clariden/slurm/slurm-%j.out
 
 export SLURM_CPUS_PER_TASK=72
@@ -17,39 +17,25 @@ MYSCRATCH="/iopsstor/scratch/cscs/athomsen"
 
 VERSION="v16"
 SUBVERSION="rot_in_place"
-INPUT="$MYSCRATCH/deep_lss/data/$VERSION/$SUBVERSION"
+PROBE="lensing"
+# PROBE="clustering"
+# PROBE="combined"
 
-PROBES=("lensing" "clustering" "2x2pt" "combined")
-# PROBES=("combined" "3x2pt" "clustering" "clustering_auto")
-
-MLP="default"
-# MLP="pca"
-# MLP="plateau"
-# MLP="asinh"
-
-LOSS="vmim"
-# LOSS="vmim_vicreg_inv"
-# LOSS="vmim_vicreg_inv_10"
-# LOSS="vmim_vicreg"
-
+MLP="pca"
 SCALES="8wl,32gc"
-# SCALES="8wl,40gc"
-# SCALES="unsmoothed"
-# SCALES="lmax_1024"
-
 DATA="default"
-# MODEL_NAME="v35"
-# MODEL_NAME="v35_lmax_1024"
-# MODEL_NAME="lmax_1024_pca"
-# MODEL_NAME="v35_lmax_1024_plateau"
-MODEL_NAME="v37_no_pca"
-# MODEL_NAME="debug1"
+BASE_MODEL_NAME="v31_pca"
 
 FLOW_CONFIG="$REPOS/multiprobe-simulation-inference/configs/flow/maf.yaml"
+# LOSS_CONFIGS=("vmim" "vmim_vicreg" "vmim_vicreg_var_cov" "vmim_vicreg_inv")
+LOSS_CONFIGS=("vmim" "vmim_fac2" "vmim_flow" "mse")
 
-# For hard_rebinned: pre-compute the shared Cls cache with full-node resources
-# before the per-GPU training workers start.  Runs once for all probes since the
-# cache is probe-independent (covers all pairs; probe selection happens at load time).
+INPUT="$MYSCRATCH/deep_lss/data/$VERSION/$SUBVERSION"
+OUTPUT="$MYSCRATCH/deep_lss/runs/$VERSION/$SUBVERSION/cls/$PROBE"
+
+# Pre-compute the shared hard_rebinned Cls cache with full-node resources before
+# the per-GPU training workers start. The cache is loss-config-independent, so
+# any loss config satisfies the required CLI argument.
 SCALE_CUT=$(srun -N1 --ntasks-per-node=1 --environment=tensorflow python -c "
 import yaml
 with open('$REPOS/y3-deep-lss/configs/mlp/${MLP}.yaml') as f:
@@ -57,16 +43,16 @@ with open('$REPOS/y3-deep-lss/configs/mlp/${MLP}.yaml') as f:
 ")
 
 if [ "$SCALE_CUT" = "hard_rebinned" ]; then
-    LOG_PRECACHE="$MYSCRATCH/deep_lss/runs/$VERSION/$SUBVERSION/cls/lensing/$MODEL_NAME/logs/${SLURM_JOB_ID}_precache"
+    LOG_PRECACHE="$OUTPUT/precache/logs/${SLURM_JOB_ID}_precache"
     mkdir -p "$(dirname "$LOG_PRECACHE")"
     srun -N1 --ntasks-per-node=1 --exclusive --cpus-per-task=288 --mem=450G \
         --environment=tensorflow \
         --output="${LOG_PRECACHE}.log" \
         python "$REPOS/y3-deep-lss/deep_lss/apps/run_cls_training+evaluation.py" \
             --msfm_config="$REPOS/multiprobe-simulation-forward-model/configs/$VERSION/$SUBVERSION.yaml" \
-            --probes_config="$REPOS/y3-deep-lss/configs/probes/combined.yaml" \
+            --probes_config="$REPOS/y3-deep-lss/configs/probes/${PROBE}.yaml" \
             --scales_config="$REPOS/y3-deep-lss/configs/scales/${SCALES}.yaml" \
-            --loss_config="$REPOS/y3-deep-lss/configs/loss/${LOSS}.yaml" \
+            --loss_config="$REPOS/y3-deep-lss/configs/loss/cls/${LOSS_CONFIGS[0]}.yaml" \
             --mlp_config="$REPOS/y3-deep-lss/configs/mlp/${MLP}.yaml" \
             --data_config="$REPOS/y3-deep-lss/configs/data/${DATA}.yaml" \
             --data_dir="$INPUT" \
@@ -75,8 +61,8 @@ if [ "$SCALE_CUT" = "hard_rebinned" ]; then
             --precache_only
 fi
 
-for PROBE in "${PROBES[@]}"; do
-    OUTPUT="$MYSCRATCH/deep_lss/runs/$VERSION/$SUBVERSION/cls/$PROBE"
+for LOSS in "${LOSS_CONFIGS[@]}"; do
+    MODEL_NAME="${BASE_MODEL_NAME}_${LOSS}"
     LOG="$OUTPUT/$MODEL_NAME/logs/${SLURM_JOB_ID}"
     mkdir -p "$(dirname "$LOG")"
 
@@ -88,15 +74,13 @@ for PROBE in "${PROBES[@]}"; do
                 --msfm_config="$REPOS/multiprobe-simulation-forward-model/configs/$VERSION/$SUBVERSION.yaml" \
                 --probes_config="$REPOS/y3-deep-lss/configs/probes/${PROBE}.yaml" \
                 --scales_config="$REPOS/y3-deep-lss/configs/scales/${SCALES}.yaml" \
-                --loss_config="$REPOS/y3-deep-lss/configs/loss/${LOSS}.yaml" \
+                --loss_config="$REPOS/y3-deep-lss/configs/loss/cls/${LOSS}.yaml" \
                 --mlp_config="$REPOS/y3-deep-lss/configs/mlp/${MLP}.yaml" \
                 --data_config="$REPOS/y3-deep-lss/configs/data/${DATA}.yaml" \
                 --data_dir="$INPUT" \
                 --out_dir="$OUTPUT" \
                 --model_name="$MODEL_NAME" \
-                --include_grid \
-                --include_des \
-                --include_mocks
+                --include_grid
 
         srun -N1 --ntasks-per-node=1 --exclusive --gpus-per-task=1 --cpus-per-gpu=72 --mem=110G \
             --uenv=pytorch/v2.9.1:v2 --view=default \
@@ -105,11 +89,9 @@ for PROBE in "${PROBES[@]}"; do
                 --out_dir=\"$OUTPUT\" \
                 --model_name=\"$MODEL_NAME\" \
                 --flow_config=\"$FLOW_CONFIG\" \
-                --n_flows=4 \
                 --sample_posterior \
-                --include_grid \
-                --include_des \
-                --include_mocks"
+                --n_flows=4 \
+                --include_grid"
     ) &
 done
 

@@ -12,7 +12,7 @@ from msfm.utils import files, logger
 LOGGER = logger.get_logger(__file__)
 
 from deep_lss.models.grid_model import GridLossModel
-from deep_lss.nets.mlp import MultiLayerPerceptron, PCAWhiteningLayer
+from deep_lss.nets.mlp import AsinhScaleLayer, MultiLayerPerceptron, PCAWhiteningLayer
 from deep_lss.utils import cls_evaluation, configuration, evaluation
 
 from msi.utils import dataset
@@ -39,6 +39,36 @@ class EarlyStopper:
         return step >= self.min_steps and self.wait >= self.patience
 
 
+class ReduceLROnPlateau:
+    def __init__(self, factor, patience, min_delta=0.0, cooldown=0, min_lr=0.0):
+        self.factor = factor
+        self.patience = patience
+        self.min_delta = min_delta
+        self.cooldown = cooldown
+        self.min_lr = min_lr
+        self.best_loss = float("inf")
+        self.wait = 0
+        self.cooldown_counter = 0
+
+    def update(self, loss, current_lr):
+        """Return the (possibly reduced) LR given the latest vali loss."""
+        if loss < self.best_loss - self.min_delta:
+            self.best_loss = loss
+            self.wait = 0
+            return current_lr
+        if self.cooldown_counter > 0:
+            self.cooldown_counter -= 1
+            self.wait = 0
+            return current_lr
+        self.wait += 1
+        if self.wait >= self.patience:
+            new_lr = max(current_lr * self.factor, self.min_lr)
+            self.wait = 0
+            self.cooldown_counter = self.cooldown
+            return new_lr
+        return current_lr
+
+
 def setup():
     parser = argparse.ArgumentParser(
         description="Train an MLP summary network on binned power spectra (Cls) using the mutual information loss."
@@ -61,7 +91,7 @@ def setup():
 
     # Observation inclusion flags (all default off)
     parser.add_argument("--include_grid", action="store_true")
-    parser.add_argument("--n_grid_examples", type=int, default=4)
+    parser.add_argument("--n_grid_examples", type=int, default=16)
     parser.add_argument("--include_des", action="store_true")
     parser.add_argument("--include_mocks", action="store_true", help="evaluate mock observations from data_dir/obs/")
     parser.add_argument(
@@ -100,14 +130,15 @@ def main():
 
     loss_conf = input_output.read_yaml(args.loss_config)
     data_conf = input_output.read_yaml(args.data_config)
-    mi = loss_conf["mutual_info_loss"]
+    loss_function = loss_conf.get("loss_function", "mutual_info")
+    mi = loss_conf.get("mutual_info_loss", {})
 
     common = dlss_conf["dset"]["common"]
     with_lensing = common["with_lensing"]
     with_clustering = common["with_clustering"]
     with_cross_z = common["with_cross_z"]
     with_cross_probe = common["with_cross_probe"]
-    ggl_only = common.get("ggl_only", False)
+    lenses_before_sources = common.get("lenses_before_sources", common.get("ggl_only", False))
 
     if with_lensing and not with_clustering:
         probe = "lensing"
@@ -120,9 +151,10 @@ def main():
 
     params = dlss_conf["dset"]["training"]["params"]
     n_params = len(params)
-    n_summary = mi.get("dim_summary_fac", 2) * n_params
+    # the MSE loss regresses one physical value per parameter; the mutual-info summary is wider
+    n_summary = n_params if loss_function == "mse" else mi.get("dim_summary_fac", 2) * n_params
 
-    scale_cut = dlss_conf.get("scale_cut") or mlp_conf.get("scale_cut", "soft_pruned")
+    scale_cut = dlss_conf.get("scale_cut") or mlp_conf.get("scale_cut", "hard_rebinned")
 
     scales_name = Path(args.scales_config).stem if args.scales_config else None
 
@@ -132,7 +164,8 @@ def main():
     vali_every = mlp_conf["vali_every"]
     signal_indices = data_conf["signal_indices"]
     noise_indices = data_conf["noise_indices"]
-    regu = mi.get("regu", {})
+    # the MSE loss has no z-feature regularization; mutual-info reads it from the loss config's regu block
+    regu = {} if loss_function == "mse" else mi.get("regu", {})
     z_weight = regu.get("z_weight", None)
     z_type = regu.get("z_type", None)
     z_layer = regu.get("z_layer", "last")
@@ -140,9 +173,7 @@ def main():
     # The VICReg invariance term needs per-sample (i_sobol, i_signal) ids in the train dataset.
     # Derive the flag up front (same conditions as GridLossModel.setup_grid_loss_step) because the
     # dataset is built before the model; we assert it matches the model attribute after setup.
-    uses_invariance = (
-        z_type == "vicreg" and isinstance(z_weight, dict) and z_weight.get("invariance") is not None
-    )
+    uses_invariance = z_type == "vicreg" and isinstance(z_weight, dict) and z_weight.get("invariance") is not None
 
     pred_dir = os.path.join(args.out_dir, args.model_name)
     os.makedirs(pred_dir, exist_ok=True)
@@ -174,15 +205,38 @@ def main():
             f,
         )
 
-    apply_log = mlp_conf.get("apply_log", True)
+    # cls_transform selects how the binned Cls are transformed before the network:
+    #   "asinh_per_feature":     per-feature asinh(x/s), applied INSIDE the model via an
+    #                            AsinhScaleLayer whose scale is fit from the training Cls and
+    #                            stored in the checkpoint. The preprocessing feeds raw Cls.
+    #   "log1p_fixed":           external sign(x)*log1p(|x|/1e-10), applied in preprocessing.
+    #   "none":                  no transform (raw Cls fed to the network).
+    # asinh is only wired for hard_rebinned (it fits its scale from the raw Cls, which only that
+    # branch provides), so default to it there and to the signed-log otherwise.
+    default_transform = "asinh_per_feature" if scale_cut == "hard_rebinned" else "log1p_fixed"
+    cls_transform = mlp_conf.get("cls_transform", default_transform)
+    if cls_transform not in ("log1p_fixed", "none", "asinh_per_feature"):
+        raise ValueError(f"Unknown cls_transform={cls_transform!r}")
+    use_asinh = cls_transform == "asinh_per_feature"
+    # Whether the external (preprocessing) signed-log is applied. With asinh the model owns the
+    # transform, so the preprocessing must feed raw Cls everywhere (dataset + static eval + obs).
+    apply_log = cls_transform == "log1p_fixed"
     ell_weighting = mlp_conf.get("ell_weighting", None)
+    if use_asinh and ell_weighting is not None:
+        raise NotImplementedError(
+            "cls_transform=asinh_per_feature with ell_weighting is not supported: the per-feature "
+            "scale would need to be computed on the ell-weighted Cls. Set ell_weighting: null."
+        )
 
     if scale_cut == "hard_rebinned":
         if scales_name is None:
             raise ValueError("--scales_config is required when scale_cut=hard_rebinned")
         from deep_lss.utils import cls_preprocessing
+
         if args.precache_only:
-            LOGGER.warning(f"--precache_only: building hard_rebinned cache for scales_name={scales_name}, then exiting.")
+            LOGGER.warning(
+                f"--precache_only: building hard_rebinned cache for scales_name={scales_name}, then exiting."
+            )
             cls_preprocessing.build_rebinned_cls_cache(
                 data_dir=args.data_dir,
                 msfm_conf=msfm_conf,
@@ -205,16 +259,22 @@ def main():
             with_clustering=with_clustering,
             with_cross_z=with_cross_z,
             with_cross_probe=with_cross_probe,
-            ggl_only=ggl_only,
+            lenses_before_sources=lenses_before_sources,
             batch_size=batch_size,
             seed=seed,
             return_pair_ids=uses_invariance,
+            apply_log=apply_log,
         )
     else:
         if uses_invariance:
             raise NotImplementedError(
                 f"VICReg invariance (z_weight['invariance']) is only wired up for scale_cut=hard_rebinned; "
                 f"got scale_cut={scale_cut!r}."
+            )
+        if use_asinh:
+            raise NotImplementedError(
+                f"cls_transform=asinh_per_feature is only wired for scale_cut=hard_rebinned (it fits its "
+                f"per-feature scale from the raw Cls); got scale_cut={scale_cut!r}."
             )
         cl_dset_train, cl_dset_test, out_dict = dataset.get_binned_power_spectra_dset_for_scale_cut(
             scale_cut,
@@ -228,7 +288,7 @@ def main():
             with_clustering=with_clustering,
             with_cross_z=with_cross_z,
             with_cross_probe=with_cross_probe,
-            ggl_only=ggl_only,
+            lenses_before_sources=lenses_before_sources,
             batch_size=batch_size,
             apply_log=apply_log,
             standardize=False,
@@ -236,6 +296,25 @@ def main():
         )
 
     n_cls = out_dict["grid/cls/train"].shape[-1]
+
+    # per-parameter label std for the MSE loss (parameters live on different scales); computed from the
+    # physical training labels (grid/cosmos is never standardized in the pipeline).
+    label_std = None
+    if loss_function == "mse":
+        mse_conf = loss_conf.get("mse_loss", {})
+        if mse_conf.get("standardize_labels", True):
+            _cosmos_train = np.asarray(out_dict["grid/cosmos/train"], dtype=np.float32)
+            label_std = _cosmos_train.std(axis=0)
+            LOGGER.info(f"MSE label_std = {label_std}")
+
+    # Per-feature asinh transform applied inside the model. Its scale is fit on the raw training
+    # Cls (median|x| per feature) and stored as a checkpoint weight, so the same transform is
+    # reused at evaluation / inference time. Applied before whitening (see MultiLayerPerceptron).
+    if use_asinh:
+        input_transform = AsinhScaleLayer()
+        input_transform.fit(out_dict["grid/cls_raw/train"])
+    else:
+        input_transform = None
 
     n_pca = mlp_conf.get("pca_components", None)
     if n_pca is not None:
@@ -247,6 +326,9 @@ def main():
             pca_fit_data = out_dict["grid/cls_raw/train"].copy()
             if ell_weighting is not None and out_dict.get("ell_weights") is not None:
                 pca_fit_data = pca_fit_data * out_dict["ell_weights"].astype(pca_fit_data.dtype)
+        if use_asinh:
+            # Whiten the asinh-transformed features (matches the runtime transform -> whiten order).
+            pca_fit_data = input_transform(tf.constant(pca_fit_data, dtype=tf.float32)).numpy()
         whitening_layer.fit(pca_fit_data)
     else:
         whitening_layer = None
@@ -259,15 +341,20 @@ def main():
         normalization=mlp_conf.get("normalization", "layer"),
         activation=mlp_conf.get("activation", "relu"),
         whitening=whitening_layer,
+        residual=mlp_conf.get("residual", False),
+        input_transform=input_transform,
     )
     summary_net.build((None, n_cls))
     summary_net.summary()
 
     lr = float(mlp_conf["learning_rate"])
-    if mlp_conf.get("lr_schedule", "cosine") == "constant":
+    sched = mlp_conf.get("lr_schedule", "cosine")
+    warmup_steps = int(mlp_conf.get("lr_warmup_steps", 0))
+    if sched in ("constant", "plateau"):
+        # Pass a scalar so optimizer.learning_rate is an assignable Variable
+        # (a schedule object would be immutable, blocking warmup / plateau updates).
         lr_schedule = lr
     else:
-        warmup_steps = mlp_conf.get("lr_warmup_steps", 0)
         lr_alpha = mlp_conf.get("lr_alpha", 0.0)
         lr_schedule = tf.keras.optimizers.schedules.CosineDecay(
             initial_learning_rate=lr,
@@ -294,29 +381,40 @@ def main():
         xla=mlp_conf.get("xla", False),
     )
 
-    model.setup_grid_loss_step(
-        batch_size=batch_size,
-        dim_theta=n_params,
-        loss="mutual_info",
-        dim_x=n_cls,
-        dim_summary=n_summary,
-        mutual_info_estimator=mi["estimator"],
-        clip_by_global_norm=mlp_conf.get("clip_by_global_norm", 1.0),
-        mutual_info_kwargs={
-            "density_estimator": mi["density_estimator"],
-            "num_hidden_layers": mi["kwargs"].get("num_hidden_layers", 2),
-            "num_hidden_units": mi["kwargs"].get("num_hidden_units", 128),
-            "activation": mi["kwargs"].get("activation", "relu"),
-            "full_covariance": mi["kwargs"].get("full_covariance", True),
-            "num_components": mi["kwargs"].get("num_components", 4),
-            "num_layers": mi["kwargs"].get("num_layers", 4),
-            "scale_eps": float(mi["kwargs"].get("scale_eps", 1e-5)),
-            "log_scale_clip": float(mi["kwargs"].get("log_scale_clip", 5.0)),
-        },
-        z_weight=z_weight,
-        z_type=z_type,
-        z_layer=z_layer,
-    )
+    if loss_function == "mse":
+        model.setup_grid_loss_step(
+            batch_size=batch_size,
+            dim_theta=n_params,
+            loss="mse",
+            dim_x=n_cls,
+            dim_summary=n_summary,
+            clip_by_global_norm=mlp_conf.get("clip_by_global_norm", 1.0),
+            label_std=label_std,
+        )
+    else:
+        model.setup_grid_loss_step(
+            batch_size=batch_size,
+            dim_theta=n_params,
+            loss="mutual_info",
+            dim_x=n_cls,
+            dim_summary=n_summary,
+            mutual_info_estimator=mi["estimator"],
+            clip_by_global_norm=mlp_conf.get("clip_by_global_norm", 1.0),
+            mutual_info_kwargs={
+                "density_estimator": mi["density_estimator"],
+                "num_hidden_layers": mi["kwargs"].get("num_hidden_layers", 2),
+                "num_hidden_units": mi["kwargs"].get("num_hidden_units", 128),
+                "activation": mi["kwargs"].get("activation", "relu"),
+                "full_covariance": mi["kwargs"].get("full_covariance", True),
+                "num_components": mi["kwargs"].get("num_components", 4),
+                "num_layers": mi["kwargs"].get("num_layers", 4),
+                "scale_eps": float(mi["kwargs"].get("scale_eps", 1e-5)),
+                "log_scale_clip": float(mi["kwargs"].get("log_scale_clip", 5.0)),
+            },
+            z_weight=z_weight,
+            z_type=z_type,
+            z_layer=z_layer,
+        )
 
     assert getattr(model, "grid_train_step_uses_pair_ids", False) == uses_invariance, (
         f"uses_invariance derived from the loss config ({uses_invariance}) disagrees with the model's "
@@ -334,6 +432,19 @@ def main():
             min_steps=es_conf.get("min_steps", 0),
         )
         if es_conf
+        else None
+    )
+
+    rlrop_conf = mlp_conf.get("reduce_lr_on_plateau", {})
+    reduce_lr = (
+        ReduceLROnPlateau(
+            factor=float(rlrop_conf.get("factor", 0.5)),
+            patience=rlrop_conf.get("patience", 3),
+            min_delta=float(rlrop_conf.get("min_delta", 0.0)),
+            cooldown=rlrop_conf.get("cooldown", 0),
+            min_lr=float(rlrop_conf.get("min_lr", 0.0)),
+        )
+        if (sched == "plateau" and rlrop_conf)
         else None
     )
 
@@ -356,6 +467,11 @@ def main():
     for i, batch in LOGGER.progressbar(enumerate(cl_dset_train), at_level="info", total=n_steps + 1, desc="training"):
         if i > n_steps:
             break
+
+        # Linear warmup for the scalar-LR modes; after warmup the plateau reducer owns the LR.
+        if sched in ("constant", "plateau") and warmup_steps > 0 and i < warmup_steps:
+            optimizer.learning_rate.assign(lr * (i + 1) / warmup_steps)
+
         if uses_invariance:
             cl_batch, cosmo_batch, i_sobol_batch, i_signal_batch = batch
             loss = model.grid_train_step(cl_batch, cosmo_batch, i_sobol_batch, i_signal_batch)
@@ -392,8 +508,17 @@ def main():
             with tb_writer.as_default():
                 tf.summary.scalar("loss/vali", vali_loss, step=i)
                 tf.summary.scalar("loss/vali_mse", mse_val, step=i)
+                tf.summary.scalar("lr", float(optimizer.learning_rate.numpy()), step=i)
             tb_writer.flush()
             LOGGER.info(f"step {i:>7d}  vali_loss = {vali_loss:.4f}  vali_mse = {mse_val:.4f}")
+
+            # Reduce the LR on a validation plateau (guarded so warmup never undoes a reduction).
+            if reduce_lr is not None and i >= warmup_steps:
+                current_lr = float(optimizer.learning_rate.numpy())
+                new_lr = reduce_lr.update(vali_loss, current_lr)
+                if new_lr < current_lr:
+                    optimizer.learning_rate.assign(new_lr)
+                    LOGGER.info(f"  -> reduce LR {current_lr:.2e} -> {new_lr:.2e}")
 
             if early_stopper is not None:
                 improved = early_stopper.update(vali_loss)
@@ -497,7 +622,7 @@ def main():
                     with_clustering=with_clustering,
                     with_cross_z=with_cross_z,
                     with_cross_probe=with_cross_probe,
-                    ggl_only=ggl_only,
+                    lenses_before_sources=lenses_before_sources,
                     apply_log=apply_log,
                     ell_weighting=ell_weighting,
                     scale_cut=scale_cut,
@@ -519,7 +644,7 @@ def main():
                 with_clustering=with_clustering,
                 with_cross_z=with_cross_z,
                 with_cross_probe=with_cross_probe,
-                ggl_only=ggl_only,
+                lenses_before_sources=lenses_before_sources,
                 apply_log=apply_log,
                 ell_weighting=ell_weighting,
                 scale_cut=scale_cut,

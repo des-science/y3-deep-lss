@@ -80,6 +80,60 @@ class PCAWhiteningLayer(tf.keras.layers.Layer):
         return config
 
 
+class AsinhScaleLayer(tf.keras.layers.Layer):
+    """Per-feature ``asinh(x / s)`` transform with the scale stored in the TF checkpoint.
+
+    The scale ``s`` is a data-derived, per-feature (per ``(pair, ell-bin)`` column) vector,
+    replacing the arbitrary fixed ``1e-10`` knee of the signed-log transform. ``asinh`` is the
+    Lupton asinh-magnitude symlog: linear for ``|x| << s``, logarithmic for ``|x| >> s``, smooth
+    through zero, sign-preserving, and invertible via ``x = s * sinh(y)``.
+
+    Call fit() once on the raw (untransformed) training Cls before the training loop. The fitted
+    scale is a non-trainable weight, so it is saved with the model checkpoint and restored
+    automatically at evaluation / inference time — no separate file needed. This guarantees the
+    same transform is applied across training, grid/mock/DES evaluation, and any later reload.
+    """
+
+    def __init__(self, floor=1e-30, **kwargs):
+        super().__init__(**kwargs)
+        self.floor = floor
+
+    def build(self, input_shape):
+        n_in = input_shape[-1]
+        self.scale_ = self.add_weight("scale", shape=(n_in,), trainable=False, initializer="ones")
+        super().build(input_shape)
+
+    def fit(self, x, max_samples=200_000):
+        """Set the per-feature scale to ``median(|x|, axis=0)`` from a (N, n_in) numpy array.
+
+        Subsamples to max_samples rows (like PCAWhiteningLayer.fit). The floor guards against a
+        zero scale on an all-zero feature column.
+        """
+        if not self.built:
+            self.build((None, x.shape[-1]))
+
+        rng = np.random.default_rng(0)
+        if x.shape[0] > max_samples:
+            idx = rng.choice(x.shape[0], size=max_samples, replace=False)
+            x = x[idx]
+
+        scale = np.median(np.abs(x.astype(np.float64)), axis=0)
+        scale = np.maximum(scale, self.floor)
+        LOGGER.info(
+            f"AsinhScaleLayer: per-feature scale median(|x|) over {x.shape[1]} features, "
+            f"range [{scale.min():.2e}, {scale.max():.2e}]"
+        )
+        self.scale_.assign(scale.astype(np.float32))
+
+    def call(self, inputs):
+        return tf.math.asinh(inputs / self.scale_)
+
+    def get_config(self):
+        config = super().get_config()
+        config.update({"floor": self.floor})
+        return config
+
+
 class MultiLayerPerceptron(tf.keras.Model):
     def __init__(
         self,
@@ -91,10 +145,14 @@ class MultiLayerPerceptron(tf.keras.Model):
         normalization="layer",
         activation="relu",
         whitening=None,
+        residual=False,
+        input_transform=None,
     ):
         super(MultiLayerPerceptron, self).__init__()
 
+        self.input_transform = input_transform
         self.whitening = whitening
+        self.residual = residual
         # Skip LayerNorm only when whitening already provides population-level unit variance
         # (whiten=True). With whiten=False the PCA only rotates; eigenvalue spread can be
         # huge, so LayerNorm is still needed to prevent activation explosion.
@@ -108,22 +166,36 @@ class MultiLayerPerceptron(tf.keras.Model):
         else:
             raise ValueError(f"Unknown normalization type: {normalization}")
 
-        self.hidden_layers = []
+        # Hidden blocks as (dense, dropout-or-None) pairs so residual skips can be applied
+        # cleanly between equal-width layers (the first layer changes width input -> hidden,
+        # so it is never a residual block).
+        self.hidden_blocks = []
         for _ in range(num_layers):
-            self.hidden_layers.append(tf.keras.layers.Dense(num_hidden_units, activation=activation))
-            if dropout_rate > 0:
-                self.hidden_layers.append(tf.keras.layers.Dropout(dropout_rate))
+            dense = tf.keras.layers.Dense(num_hidden_units, activation=activation)
+            dropout = tf.keras.layers.Dropout(dropout_rate) if dropout_rate > 0 else None
+            self.hidden_blocks.append((dense, dropout))
 
+        # Penultimate (width-changing) layer, never residual.
         if num_penultimate is not None:
             LOGGER.info("Including a penultimate layer in the MLP")
-            self.hidden_layers.append(tf.keras.layers.Dense(num_penultimate, name="penultimate"))
+            self.penultimate_layer = tf.keras.layers.Dense(num_penultimate, name="penultimate")
+        else:
+            self.penultimate_layer = None
 
         self.output_layer = tf.keras.layers.Dense(output_size, name="output")
 
     def call(self, inputs, training=False):
-        x = self.whitening(inputs) if self.whitening is not None else inputs
+        x = self.input_transform(inputs) if self.input_transform is not None else inputs
+        x = self.whitening(x) if self.whitening is not None else x
         if self.norm_layer is not None:
             x = self.norm_layer(x)
-        for layer in self.hidden_layers:
-            x = layer(x, training=training)
+        for i, (dense, dropout) in enumerate(self.hidden_blocks):
+            h = dense(x)
+            if dropout is not None:
+                h = dropout(h, training=training)
+            # Residual skip only from the second hidden layer onward, where input and output
+            # share num_hidden_units; the first layer maps input_dim -> num_hidden_units.
+            x = x + h if (self.residual and i > 0) else h
+        if self.penultimate_layer is not None:
+            x = self.penultimate_layer(x)
         return self.output_layer(x)
