@@ -44,6 +44,20 @@ python -m ipykernel install ${VIRTUAL_ENV:+--env PATH $PATH --env VIRTUAL_ENV $V
 ```
 To launch JupyterLab, specify `pytorch/v2.9.1:v2` in "Custom uenv".
 
+### stable kernel via standalone Jupyter server
+VSCode often "forgets" the kernel over a tunnel session (fixed by reloading the window).
+To make this more robust, run a standalone Jupyter server that outlives any
+extension/tunnel hiccups, and connect VSCode to it as an "Existing Jupyter Server"
+instead of letting VSCode launch the kernel itself:
+```
+# in the srun session, with torch_env active (e.g. inside tmux so it survives)
+jupyter server --no-browser --port=8888 --ServerApp.token='' --ServerApp.ip=127.0.0.1
+```
+In VSCode: notebook kernel picker → "Select Another Kernel" → "Existing Jupyter Server" →
+`http://localhost:8888`. Since `code tunnel` runs on the same compute node, this
+resolves directly. After a "Reload Window", just reconnect to the same server/kernel
+instead of relaunching one.
+
 ## VScode tunnel
 ### setup
 ```
