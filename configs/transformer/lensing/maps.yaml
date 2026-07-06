@@ -1,7 +1,7 @@
 name: nested_transformer
 
 training:
-  n_steps: 140000
+  n_steps: 120000
   output_every: Null
   checkpoint_every: 10000
   vali_every: 1000

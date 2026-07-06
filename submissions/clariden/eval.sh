@@ -27,15 +27,14 @@ SUBVERSION="rot_in_place"
 STRATEGY="mirrored"
 
 # PROBE="lensing"
-PROBE="clustering"
-# PROBE="combined"
+# PROBE="clustering"
+PROBE="combined"
 
-MODEL="v6"
-# MODEL="v6_cls"
+MODEL="v8_cls"
 
 INPUT="$MYSCRATCH/deep_lss/data/$VERSION/$SUBVERSION"
 OUTPUT="$MYSCRATCH/deep_lss/runs/$VERSION/$SUBVERSION/maps/$PROBE"
-LOG="$OUTPUT/$MODEL/logs/"$STRATEGY"_"$SLURM_JOB_ID""
+LOG="$OUTPUT/$MODEL/logs/${SLURM_JOB_ID}_${STRATEGY}"
 mkdir -p "$(dirname "$LOG")"
 
 TRAIN_TFR="$INPUT/tfrecords/grid/DESy3_grid_dmb_????.tfrecord"
@@ -46,9 +45,7 @@ srun --environment=tensorflow --gpu-bind=none --output=""$LOG"_evaluation.log" \
         --grid_vali_tfr_pattern=$TRAIN_TFR \
         --data_dir=$INPUT \
         --dir_model="$OUTPUT/$MODEL" \
-        --include_des
-        # --include_grid \
-        # --include_mocks
+        --include_mocks
 
 sleep 30
 
@@ -61,6 +58,33 @@ srun -N1 --ntasks-per-node=1 --gpus-per-task=1 --cpus-per-task=72 --mem=110G \
         --out_dir=\"$OUTPUT\" \
         --model_name=\"$MODEL\" \
         --flow_config=\"$FLOW_CONFIG\" \
-        --include_des"
-        # --include_grid \
-        # --include_mocks"
+        --n_flows=4 \
+        --load_flow \
+        --include_mocks"
+
+# srun --environment=tensorflow --gpu-bind=none --output=""$LOG"_evaluation.log" \
+#     python $REPOS/y3-deep-lss/deep_lss/apps/run_evaluation.py \
+#         --dist_strategy="$STRATEGY" \
+#         --grid_vali_tfr_pattern=$TRAIN_TFR \
+#         --data_dir=$INPUT \
+#         --dir_model="$OUTPUT/$MODEL" \
+#         --include_grid \
+#         --include_des \
+#         --include_mocks
+
+# sleep 30
+
+# FLOW_CONFIG="$REPOS/multiprobe-simulation-inference/configs/flow/maf.yaml"
+
+# srun -N1 --ntasks-per-node=1 --gpus-per-task=1 --cpus-per-task=72 --mem=110G \
+#     --uenv=pytorch/v2.9.1:v2 --view=default \
+#     --output=""$LOG"_inference.log" \
+#     bash -c "source ~/dlss/torch_env/bin/activate && python $REPOS/multiprobe-simulation-inference/msi/apps/run_inference.py \
+#         --out_dir=\"$OUTPUT\" \
+#         --model_name=\"$MODEL\" \
+#         --flow_config=\"$FLOW_CONFIG\" \
+#         --n_flows=4 \
+#         --sample_posterior \
+#         --include_grid \
+#         --include_mocks \
+#         --include_des"

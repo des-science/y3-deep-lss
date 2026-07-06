@@ -1,7 +1,11 @@
+# Nested hierarchical local-window transformer — combined probes, maps only.
+# No Cls branch (no cls_n_bins): the transformer output is the summary statistic directly.
+# Full-resolution smoothing baseline: all probes smoothed at the native n_side (no smooth_nside),
+# for comparison against maps.yaml, which smooths clustering at nside 256.
 name: nested_transformer
 
 training:
-  n_steps: 120000
+  n_steps: 100000
   output_every: Null
   checkpoint_every: 10000
   vali_every: 1000
@@ -31,39 +35,29 @@ network:
   max_checkpoints: 50
   jit_compile_body: true
   precision: bfloat16
-  input_norm: true
-  map_feature_dim: 512
-  head:
-    dropout_rate: 0.1
-  cls:
-    n_bins: 16
-    transform: asinh_per_feature
-    asinh_default_scale: null
-    embedding_layers: [512, 512, 512, 512]
-    embedding_dropout_rate: 0.5
   kwargs: # -> NestedHierarchicalLocalWindowTransformer
     base_embed_dim: 32
-    growth: double
-    num_heads: 4
-    window_levels: 3
+    growth: double # constant | double | full | 128
+    num_heads: 8
+    window_levels: 3 # local attention window = 4^window_levels tokens
     local_blocks_per_level: 1
-    global_blocks: 4
+    global_blocks: 3
     mlp_ratio: 4
-    layerscale_init: null
+    layerscale_init: null # pre-LayerScale lineage (ckpt-1..10); keep null so resumes match the checkpoint
 
 dset:
   training:
     common:
       is_eval: False
-      n_readers: 16
-      n_prefetch: 4
-      n_workers: 128
+      n_readers: 64
+      n_prefetch: 8
+      n_workers: Null
     grid:
-      local_batch_size: 20
+      local_batch_size: 16
       file_name_shuffle_buffer: 64
-      examples_shuffle_buffer: 1024
+      examples_shuffle_buffer: 256
   validation:
-    n_batches: 100
+    n_batches: 50
     common:
       is_eval: True
       n_readers: 8
@@ -74,8 +68,8 @@ dset:
   eval:
     common:
       is_eval: True
-      n_readers: 16
+      n_readers: 64
       n_prefetch: 2
-      n_workers: 128
+      n_workers: Null
     grid:
       local_batch_size: 16

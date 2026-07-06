@@ -1,7 +1,9 @@
+# Nested hierarchical local-window transformer — lensing, maps only.
+# No Cls branch (no cls_n_bins): the transformer output is the summary statistic directly.
 name: nested_transformer
 
 training:
-  n_steps: 120000
+  n_steps: 100000
   output_every: Null
   checkpoint_every: 10000
   vali_every: 1000
@@ -32,17 +34,10 @@ network:
   jit_compile_body: true
   precision: bfloat16
   input_norm: true
-  map_feature_dim: 512
   head:
     dropout_rate: 0.1
-  cls:
-    n_bins: 16
-    transform: asinh_per_feature
-    asinh_default_scale: null
-    embedding_layers: [512, 512, 512, 512]
-    embedding_dropout_rate: 0.5
   kwargs: # -> NestedHierarchicalLocalWindowTransformer
-    base_embed_dim: 32
+    base_embed_dim: 16
     growth: double
     num_heads: 4
     window_levels: 3
@@ -59,7 +54,7 @@ dset:
       n_prefetch: 4
       n_workers: 128
     grid:
-      local_batch_size: 20
+      local_batch_size: 16
       file_name_shuffle_buffer: 64
       examples_shuffle_buffer: 1024
   validation:

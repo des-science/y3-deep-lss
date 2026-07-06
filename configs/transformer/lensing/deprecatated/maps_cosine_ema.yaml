@@ -1,0 +1,81 @@
+# Variant of debug/maps.yaml — OPTIMIZATION schedule (lensing, maps only).
+#
+# Architecture and batch size are identical to the baseline; only the optimizer dynamics
+# change. The baseline uses scheduler=Null, which is a *flat* LR — its warmup_steps /
+# warmup_init_learning_rate are silently ignored (see deep_lss/utils/optimization.py).
+# Here we switch to a real linear-warmup -> cosine-decay schedule and turn on weight EMA:
+#   - warmup 1e-5 -> 2e-4 over 5000 steps (lets us safely use a higher peak LR than the
+#     flat 1e-4 baseline), then cosine decay to 0.05*2e-4 = 1e-5 over the remaining steps;
+#   - Adam weight EMA (momentum 0.999) averages late-training weights, which tends to
+#     stabilise the learned summary statistic for downstream inference.
+# These are the standard transformer-training levers and a cleaner optimization knob than
+# batch size for this variational-GMM MI objective (unbiased per-sample gradient).
+name: nested_transformer
+
+training:
+  n_steps: 100000
+  output_every: Null
+  checkpoint_every: 10000
+  vali_every: 1000
+  eval_every: Null
+
+optimization:
+  optimizer: adam
+  gradient_clipping:
+    clip_by_value: null
+    clip_by_norm: null
+    clip_by_global_norm: 1.0
+  mutual_info_loss:
+    learning_rate: 2.0e-4          # cosine peak (reached after warmup); baseline is flat 1e-4
+    optimizer_kwargs:
+      beta_1: 0.9
+      beta_2: 0.999
+    scheduler: cosine              # linear warmup -> cosine decay (activates the warmup keys)
+    warmup_steps: 5000
+    warmup_init_learning_rate: 1.0e-5
+    decay_alpha: 0.05              # final LR = decay_alpha * peak = 1.0e-5
+    ema_momentum: 0.999           # Adam weight EMA (~1000-step horizon over 100k steps)
+
+network:
+  name: nested_transformer
+  token_nside: 16
+  # smooth_nside: 256
+  z_bank_size: Null
+  max_checkpoints: 50
+  kwargs: # -> NestedHierarchicalLocalWindowTransformer
+    base_embed_dim: 16
+    growth: double # constant | double | full | 128
+    num_heads: 4
+    window_levels: 3 # local attention window = 4^window_levels tokens
+    local_blocks_per_level: 1
+    global_blocks: 2
+    mlp_ratio: 4
+
+dset:
+  training:
+    common:
+      is_eval: False
+      n_readers: 64
+      n_prefetch: 8
+      n_workers: Null
+    grid:
+      local_batch_size: 16
+      file_name_shuffle_buffer: 64
+      examples_shuffle_buffer: 256
+  validation:
+    n_batches: 50
+    common:
+      is_eval: True
+      n_readers: 8
+      n_prefetch: 2
+      n_workers: 16
+    grid:
+      local_batch_size: 16
+  eval:
+    common:
+      is_eval: True
+      n_readers: 64
+      n_prefetch: 2
+      n_workers: Null
+    grid:
+      local_batch_size: 16

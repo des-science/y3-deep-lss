@@ -1,0 +1,90 @@
+# Nested hierarchical local-window transformer — clustering, maps only.
+# No Cls branch (no `cls:` block): the transformer output is the summary statistic directly.
+# Architecture mirrors the lensing maps.yaml winner (base 32, 8 heads, +1 global block, LayerScale
+# 0.1); clustering is smoothed at nside 256 with its own kernel (per-probe smooth_nside) and
+# upsampled back, matching combined/maps.yaml's clustering treatment (scales config sets the base
+# kernel). Starting point for a dedicated clustering run — retune the architecture as needed.
+name: nested_transformer
+
+training:
+  n_steps: 150000
+  output_every: Null
+  checkpoint_every: 10000
+  vali_every: 1000
+  eval_every: Null
+
+optimization:
+  optimizer: adam
+  gradient_clipping:
+    clip_by_value: null
+    clip_by_norm: null
+    clip_by_global_norm: 1.0
+  mutual_info_loss:
+    learning_rate: 1.0e-4
+    optimizer_kwargs:
+      beta_1: 0.9
+      beta_2: 0.999
+    scheduler: Null
+    warmup_steps: 5000
+    warmup_init_learning_rate: 1.0e-5
+    decay_alpha: 0.0
+    ema_momentum: null
+
+network:
+  name: nested_transformer
+  # clustering (fwhm >= 57') is smoothed at nside 256 and upsampled back to the native n_side.
+  # This downsamples the maps inside the pipeline (parent_output_idx), which only shrinks the final
+  # batch tensor — raw tfrecord I/O is identical to lensing, so the dataloader values below transfer.
+  smooth_nside:
+    clustering: 256
+  token_nside: 16
+  z_bank_size: Null
+  max_checkpoints: 50
+  jit_compile_body: true
+  precision: bfloat16
+  input_norm: true
+  head:
+    dropout_rate: 0.1
+  kwargs: # -> NestedHierarchicalLocalWindowTransformer
+    base_embed_dim: 32
+    growth: double
+    num_heads: 8
+    window_levels: 3 # local attention window = 4^window_levels tokens
+    local_blocks_per_level: 1
+    global_blocks: 4
+    mlp_ratio: 4
+    layerscale_init: 0.1
+
+dset:
+  training:
+    # Dataloader values from the input-pipeline benchmark (deep_lss/apps/benchmark_dataloader.py):
+    # the loader is far from the bottleneck (~10 steps/s at batch 16 on a 4-GPU node), so these are
+    # tuned for predictable, low host RAM under the single per-node MirroredStrategy pipeline.
+    # Clustering is 4 z-bins (~7.3 MB/example), identical raw dataloading to lensing.
+    common:
+      is_eval: False
+      n_readers: 16       # 64 -> 16: ~25 GB less RAM, no throughput cost (16 cosmologies interleaved is ample mixing)
+      n_prefetch: 4       # 8 -> 4: negligible difference; do NOT use AUTOTUNE (starves combined)
+      n_workers: 128      # was Null(AUTOTUNE, unpredictable RAM). Must stay >> n_readers: parse/augment
+                          # workers = (n_workers - n_readers)//2, so a value near n_readers starves them.
+    grid:
+      local_batch_size: 16
+      file_name_shuffle_buffer: 64
+      examples_shuffle_buffer: 512   # global/per-node under mirrored (512 slots x 7.3 MB); bump with batch 32/64
+  validation:
+    n_batches: 50
+    common:
+      is_eval: True
+      n_readers: 8
+      n_prefetch: 2
+      n_workers: 16
+    grid:
+      local_batch_size: 16
+  eval:
+    common:
+      is_eval: True
+      n_readers: 16
+      n_prefetch: 2
+      n_workers: 128
+    grid:
+      local_batch_size: 16

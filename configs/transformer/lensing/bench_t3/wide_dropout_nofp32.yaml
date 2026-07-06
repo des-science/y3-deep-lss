@@ -2,14 +2,17 @@
 # No Cls branch (no cls_n_bins): the transformer output is the summary statistic directly.
 # wide_dropout (WIDE trunk base_embed_dim 32 + DROPOUT head 0.1) with the fp32 attention-softmax
 # upcast DISABLED (fp32_softmax: false). Removing the upcast frees ~9% peak memory (the fp32 score
-# tensor), which lifts the batch ceiling from 20 -> 24 for this wide arch (b24 = 90.85 GB single-GPU;
-# b28 OOMs). Throughput is flat (~107 ex/s at b20 and b24, compute-bound), so the larger batch buys
-# effective batch size, not wall-clock. n_steps scaled 120000 -> 100000 to keep the same number of
-# samples seen as wide_dropout@b20 (20*120000 == 24*100000) and the same ~10 h wall budget.
+# tensor). Single-GPU benchmark: b24 fits (90.85 GB) but on the real 4-GPU mirrored run b24 DEADLOCKED
+# at step 0 in the NCCL all-reduce (job 2690415) — the wide arch's 57M-param gradients make the NCCL
+# comm buffers too large at that memory margin (cf. base-16 configs where 24 was the safe fix). Fell
+# back to b22 (~84.5 GB single-GPU, ~same footprint as the known-good wide_dropout@b20-fp32on 83 GB).
+# Throughput is flat (~107 ex/s, compute-bound), so the larger batch buys effective batch size, not
+# wall-clock. n_steps scaled to keep ~the same samples seen as wide_dropout@b20 (20*120000 = 2.40M/GPU;
+# 22*109000 = 2.40M/GPU) and the same ~10 h wall budget.
 name: nested_transformer
 
 training:
-  n_steps: 100000  # 24*100000 == 20*120000 samples of wide_dropout@b20; ~10 h leaving eval+inference margin
+  n_steps: 109000  # 22*109000 ~= 20*120000 = 2.40M samples/GPU of wide_dropout@b20; ~10 h leaving eval+inference margin
   output_every: Null
   checkpoint_every: 10000
   vali_every: 1000
@@ -61,7 +64,7 @@ dset:
       n_prefetch: 4
       n_workers: 128
     grid:
-      local_batch_size: 24  # fp32_softmax off frees ~8 GB vs b20 -> b24 fits (90.85 GB); memory-marginal on 4-GPU NCCL, watch step 0
+      local_batch_size: 22  # b24 fit single-GPU but deadlocked 4-GPU NCCL at step 0 (job 2690415); b22 ~84.5 GB is the safe ceiling
       file_name_shuffle_buffer: 64
       examples_shuffle_buffer: 1024
   validation:

@@ -56,15 +56,20 @@ from deep_lss.utils import distribute, configuration, evaluation, optimization, 
 from deep_lss.models.delta_model import DeltaLossModel
 from deep_lss.models.grid_model import GridLossModel
 from deep_lss.utils.distribute import HorovodStrategy
-from deep_lss.nets import NETWORKS
+from deep_lss.nets import NETWORKS, TRANSFORMER_NETWORKS
 from deep_lss.nets.maps_plus_cls_network import MapsPlusCLSNetwork
-from deep_lss.nets.regression_head import get_cls_embedding_layers
+from deep_lss.nets.transformer_networks import (
+    HealpixTransformerNetwork,
+    TransformerMapsPlusCLSNetwork,
+)
+from deep_lss.nets.input_normalization import compute_input_norm_stats
+from deep_lss.nets.regression_head import get_cls_embedding_layers, get_regression_head
 
 LOGGER = logger.get_logger(__file__)
 
 # Keys present in dlss.yaml dset.common that are only meaningful for Cls (2pt) training
 # and unknown to FiducialPipeline / GridPipeline — strip them before splatting into pipe_kwargs.
-_CLS_ONLY_KEYS = frozenset({"with_cross_z", "with_cross_probe", "ggl_only"})
+_CLS_ONLY_KEYS = frozenset({"with_cross_z", "with_cross_probe", "lenses_before_sources", "ggl_only"})
 
 
 def setup():
@@ -97,6 +102,16 @@ def setup():
         type=str,
         required=True,
         help="input root dir of the fiducial or grid data vectors (training)",
+    )
+    parser.add_argument(
+        "--data_dir",
+        type=str,
+        default=None,
+        help=(
+            "input data dir holding the binned-Cls cache (cls/rebinned_nb*.h5), used to fit the"
+            " per-feature asinh scale for cls_transform=asinh_per_feature. If None, derived from"
+            " --train_tfr_pattern (the part before /tfrecords/)."
+        ),
     )
     parser.add_argument(
         "--fidu_vali_tfr_pattern",
@@ -220,15 +235,10 @@ def setup():
     for key, value in vars(args).items():
         LOGGER.info(f"{key} = {value}")
 
-    if args.mixed_precision:
-        policy_name = f"mixed_{args.mixed_precision_dtype}"
-        LOGGER.warning(f"Using mixed precision policy {policy_name}")
-        tf.keras.mixed_precision.set_global_policy(policy_name)
-
-        if args.loss_function == "delta":
-            LOGGER.warning(
-                f"Using mixed precision with the delta loss is not recommended, as training tends to be unstable"
-            )
+    # The numerical-precision policy is resolved in training() once net_conf is loaded: the
+    # network config supplies the default (network.precision, defaulting to full float32) and
+    # the --mixed_precision CLI flag overrides it. It must be set there, before the network
+    # (incl. the HealpySmoothing sparse kernel) is built, so every layer adopts the policy.
 
     if args.xla:
         LOGGER.warning(
@@ -350,6 +360,24 @@ def training(args=None):
     else:
         raise ValueError(f"Can't restore the model from an unspecified dir_model")
 
+    # numerical precision: net_conf["network"]["precision"] is the default (float32 = full
+    # precision); the --mixed_precision CLI flag overrides it. Set the global Keras policy here,
+    # before the network (incl. the HealpySmoothing sparse kernel, which casts itself to the
+    # policy's compute dtype) is built inside strategy.scope() below.
+    precision = net_conf["network"].get("precision", "float32")
+    if args.mixed_precision:
+        precision = args.mixed_precision_dtype  # CLI overrides the config
+    if precision not in ("float32", "float16", "bfloat16"):
+        raise ValueError(f"Unknown precision '{precision}'; expected float32, float16 or bfloat16")
+    if precision != "float32":
+        policy_name = f"mixed_{precision}"
+        LOGGER.warning(f"Using mixed precision policy {policy_name}")
+        tf.keras.mixed_precision.set_global_policy(policy_name)
+        if args.loss_function == "delta":
+            LOGGER.warning("Mixed precision with the delta loss is not recommended, training tends to be unstable")
+    else:
+        LOGGER.info("Using full float32 precision")
+
     # to be read by the evaluation script
     job_id = os.environ["SLURM_JOB_ID"]
     if job_id is not None:
@@ -448,14 +476,21 @@ def training(args=None):
     n_side = msfm_conf["analysis"]["n_side"]
     data_vec_pix, _, _, _ = files.load_pixel_file(msfm_conf)
 
-    smooth_nside = net_conf["network"].get("smooth_nside", None)
-    if smooth_nside is not None and smooth_nside < n_side:
-        smooth_indices, parent_output_idx = configuration.get_smooth_nside_indices(data_vec_pix, n_side, smooth_nside)
-        LOGGER.info(f"Using smooth_nside={smooth_nside}: {len(data_vec_pix)} → {len(smooth_indices)} pixels")
-    else:
-        smooth_nside = n_side
-        smooth_indices = data_vec_pix
-        parent_output_idx = None
+    # the network (and pipeline downsampling) run at the finest per-probe smoothing nside; probes
+    # smoothed at a coarser nside (per-probe smooth_nside mapping) are handled inside the network
+    smooth_nside, smooth_indices, parent_output_idx = configuration.resolve_smooth_nside(
+        net_conf, dlss_conf, msfm_conf
+    )
+
+    # every train/vali/adapt dataset uses the same in-network nside downsampling; specify it once
+    def build_dset(pipeline, tfr_pattern, ds_kwargs, input_context=None):
+        return pipeline.get_dset(
+            tfr_pattern=tfr_pattern,
+            **ds_kwargs,
+            input_context=input_context,
+            downsample_nside=smooth_nside if parent_output_idx is not None else None,
+            parent_output_idx=parent_output_idx,
+        )
 
     # constants: deep_lss
     params = dlss_conf["dset"]["training"]["params"]
@@ -465,9 +500,23 @@ def training(args=None):
     with_lensing = dlss_conf["dset"]["common"]["with_lensing"]
     with_clustering = dlss_conf["dset"]["common"]["with_clustering"]
     with_cross = dlss_conf["dset"]["common"].get("with_cross", False)
-    return_cls = "cls_n_bins" in net_conf["network"]
+    # Maps+Cls is enabled by the presence of a `cls:` block in the network config; its keys
+    # (n_bins, transform, embedding_layers, embedding_dropout_rate, asinh_default_scale) configure
+    # the Cls branch. cls_transform: "asinh_per_feature" (default) or "log1p_fixed".
+    cls_conf = net_conf["network"].get("cls", None)
+    return_cls = cls_conf is not None
+    cls_transform = (cls_conf or {}).get("transform", "asinh_per_feature")
+    if "cls_n_bins" in net_conf["network"]:
+        raise ValueError(
+            "Legacy flat Cls keys (cls_n_bins / cls_transform / cls_embedding_* / asinh_default_scale) "
+            "are no longer supported — move them under a nested `cls:` block in the network config "
+            "(see configs/transformer/lensing/maps+cls.yaml)."
+        )
     if return_cls:
-        LOGGER.warning("cls_n_bins detected in net_conf['network'] — will build MapsPlusCLSNetwork")
+        LOGGER.warning(
+            f"cls block detected in net_conf['network'] — will build MapsPlusCLSNetwork "
+            f"(cls_transform={cls_transform})"
+        )
 
     # constants: network
     n_steps = net_conf["training"]["n_steps"]
@@ -475,6 +524,12 @@ def training(args=None):
     checkpoint_every = net_conf["training"]["checkpoint_every"]
     vali_every = net_conf["training"]["vali_every"]
     eval_every = net_conf["training"]["eval_every"]
+    # fail-fast NaN watchdog: check the training loss every `nan_check_every` steps and abort
+    # after `nan_abort_after` consecutive non-finite checks. The grad-zeroing safety net in
+    # base_model turns a NaN step into a no-op, so without this a diverged run would silently
+    # burn its whole allocation as a frozen network. Optional config keys (default: hard-abort).
+    nan_check_every = net_conf["training"].get("nan_check_every", 100)
+    nan_abort_after = net_conf["training"].get("nan_abort_after", 1)
 
     # constants: miscellaneous
     if args.loss_function == "delta":
@@ -544,38 +599,128 @@ def training(args=None):
 
     # like https://www.tensorflow.org/tutorials/distribute/input#tfdistributestrategydistribute_datasets_from_function
     def train_dataset_fn(input_context):
-        dset = train_pipeline.get_dset(
-            tfr_pattern=args.train_tfr_pattern,
-            **dset_kwargs,
-            # distribution
-            input_context=input_context,
-            # nside downsampling
-            downsample_nside=smooth_nside if parent_output_idx is not None else None,
-            parent_output_idx=parent_output_idx,
-        )
-
-        return dset
+        return build_dset(train_pipeline, args.train_tfr_pattern, dset_kwargs, input_context)
 
     dist_dset = strategy.distribute_datasets_from_function(train_dataset_fn)
     dist_iter = iter(dist_dset)
 
     # network, create all of the variables within the strategy's scope, such that they are mirrored
     with strategy.scope():
-        net_spec = NETWORKS[net_conf["network"]["name"]](
-            out_features=n_output, smoothing_kwargs=smoothing_kwargs, **net_conf["network"]["kwargs"]
-        )
-        LOGGER.info(f"Loaded a network specification of type {NETWORKS[net_conf['network']['name']]}")
-        LOGGER.info(f"Network kwargs including regularization: {net_conf['network']['kwargs']}")
-
         optimizer = optimization.get_optimizer(net_conf, args.loss_function, args.restore_checkpoint)
 
-        if return_cls:
+        is_transformer = net_conf["network"]["name"] in TRANSFORMER_NETWORKS
+
+        if is_transformer:
+            # Nested hierarchical local-window transformer. The maps are smoothed (same
+            # HealpySmoothing front-end as the GCNNs) and reordered into nested superpixel
+            # blocks inside the pre-built tf.keras.Model, so no HealpyGCNN graph is built and
+            # n_neighbors is irrelevant.
+            token_nside = net_conf["network"]["token_nside"]
+            transformer_kwargs = net_conf["network"]["kwargs"]
+            # XLA-fuse the tokenizer->transformer body (smoothing stays eager). Off by default;
+            # enable per-config to cut the many tiny attention/layernorm/reshape kernel launches.
+            jit_compile_body = net_conf["network"].get("jit_compile_body", False)
+
+            # `head:` block, honored by BOTH transformer paths: dropout_rate is a single Dropout
+            # right before the final linear layer (after token pooling in maps-only, after fusion
+            # in maps+cls); fused_layers configures the post-fusion dense stack and therefore
+            # requires a `cls:` block.
+            head_conf = net_conf["network"].get("head", {}) or {}
+            fused_head_layers = head_conf.get("fused_layers", []) or None
+            head_dropout = head_conf.get("dropout_rate", None)
+            if fused_head_layers and not return_cls:
+                raise ValueError(
+                    "head.fused_layers is set but there is no cls: block — a maps-only run has "
+                    "nothing to fuse. Remove head.fused_layers or add a cls: block."
+                )
+
+            # `input_norm: true` standardizes the smoothed maps with statistics measured from
+            # training data on fresh runs and restored from the checkpoint otherwise. Adds
+            # checkpoint variables — keep it consistent with the run's lineage.
+            input_norm = bool(net_conf["network"].get("input_norm", False))
+
+            if return_cls:
+                _, l_min_per_pair, l_max_per_pair = configuration.get_cls_bounds_per_pair(msfm_conf, dlss_conf)
+                n_cls_bins = cls_conf.get("n_bins", 16)
+                cls_emb_widths = cls_conf.get("embedding_layers", [512, 512, 512, 512])
+                cls_emb_dropout = cls_conf.get("embedding_dropout_rate", None)
+                # dense regression head minus the leading Flatten (the fused vector is already 2-D)
+                regression_head_layers = get_regression_head(
+                    out_features=n_output,
+                    head_type="dense",
+                    dense_layers=fused_head_layers,
+                    dropout_rate=head_dropout,
+                )[1:]
+                network = TransformerMapsPlusCLSNetwork(
+                    smoothing_kwargs=smoothing_kwargs,
+                    smooth_indices=smooth_indices,
+                    nside=smooth_nside,
+                    token_nside=token_nside,
+                    in_channels=n_z_bins,
+                    map_feature_dim=net_conf["network"]["map_feature_dim"],
+                    transformer_kwargs=transformer_kwargs,
+                    tfr_n_side=n_side,
+                    n_cls_bins=n_cls_bins,
+                    l_min_per_pair=l_min_per_pair,
+                    l_max_per_pair=l_max_per_pair,
+                    cls_embedding_layers=get_cls_embedding_layers(cls_emb_widths, dropout_rate=cls_emb_dropout),
+                    regression_head_layers=regression_head_layers,
+                    jit_compile_body=jit_compile_body,
+                    cls_transform=cls_transform,
+                    input_norm=input_norm,
+                )
+                # trace so network.built=True before BaseModel.summary()
+                network(
+                    (tf.zeros((2, len(smooth_indices), n_z_bins)),
+                     tf.zeros((2, 3 * n_side, len(l_min_per_pair)))),
+                    training=False,
+                )
+            else:
+                network = HealpixTransformerNetwork(
+                    smoothing_kwargs=smoothing_kwargs,
+                    smooth_indices=smooth_indices,
+                    nside=smooth_nside,
+                    token_nside=token_nside,
+                    in_channels=n_z_bins,
+                    num_outputs=n_output,
+                    transformer_kwargs=transformer_kwargs,
+                    jit_compile_body=jit_compile_body,
+                    head_dropout_rate=head_dropout,
+                    input_norm=input_norm,
+                )
+                network(tf.zeros((2, len(smooth_indices), n_z_bins)), training=False)
+
+            LOGGER.info(f"Built transformer network {net_conf['network']['name']} (return_cls={return_cls})")
+            model = Model(
+                network=network,
+                n_side=None,
+                indices=None,
+                n_neighbors=None,
+                z_bank_size=net_conf["network"]["z_bank_size"],
+                max_checkpoints=net_conf["network"]["max_checkpoints"],
+                optimizer=optimizer,
+                input_shape=None,
+                max_batch_size=effective_local_batch_size,
+                checkpoint_dir=checkpoint_dir,
+                summary_dir=summary_dir,
+                restore_checkpoint=args.restore_checkpoint,
+                strategy=strategy,
+                xla=args.xla,
+                summary_every=args.summary_every,
+            )
+
+        elif return_cls:
+            net_spec = NETWORKS[net_conf["network"]["name"]](
+                out_features=n_output, smoothing_kwargs=smoothing_kwargs, **net_conf["network"]["kwargs"]
+            )
+            LOGGER.info(f"Loaded a network specification of type {NETWORKS[net_conf['network']['name']]}")
+            LOGGER.info(f"Network kwargs including regularization: {net_conf['network']['kwargs']}")
             # Build a MapsPlusCLSNetwork: HealpyGCNN for maps + binned log-Cls concatenated.
             # The model is passed pre-built so BaseModel uses it directly without re-wrapping in HealpyGCNN.
             _, l_min_per_pair, l_max_per_pair = configuration.get_cls_bounds_per_pair(msfm_conf, dlss_conf)
-            n_cls_bins = net_conf["network"].get("cls_n_bins", 16)
-            cls_emb_widths = net_conf["network"].get("cls_embedding_layers", [512, 512, 512, 512])
-            cls_emb_dropout = net_conf["network"].get("cls_embedding_dropout_rate", None)
+            n_cls_bins = cls_conf.get("n_bins", 16)
+            cls_emb_widths = cls_conf.get("embedding_layers", [512, 512, 512, 512])
+            cls_emb_dropout = cls_conf.get("embedding_dropout_rate", None)
             network = MapsPlusCLSNetwork(
                 conv_layers=net_spec.get_conv_layers(),
                 cls_embedding_layers=get_cls_embedding_layers(cls_emb_widths, dropout_rate=cls_emb_dropout),
@@ -589,6 +734,7 @@ def training(args=None):
                 n_cls_bins=n_cls_bins,
                 l_min_per_pair=l_min_per_pair,
                 l_max_per_pair=l_max_per_pair,
+                cls_transform=cls_transform,
             )
             # HealpySmoothing is a tf.keras.Model whose build() must be called before
             # setup_grid_loss_step accesses trainable_variables. BaseModel skips this
@@ -620,6 +766,11 @@ def training(args=None):
                 summary_every=args.summary_every,
             )
         else:
+            net_spec = NETWORKS[net_conf["network"]["name"]](
+                out_features=n_output, smoothing_kwargs=smoothing_kwargs, **net_conf["network"]["kwargs"]
+            )
+            LOGGER.info(f"Loaded a network specification of type {NETWORKS[net_conf['network']['name']]}")
+            LOGGER.info(f"Network kwargs including regularization: {net_conf['network']['kwargs']}")
             network = net_spec.get_layers()
             model = Model(
                 network=network,
@@ -638,6 +789,51 @@ def training(args=None):
                 xla=args.xla,
                 summary_every=args.summary_every,
             )
+
+        # Fit the per-feature asinh scale for the Cls branch and load it into the (checkpointed)
+        # layer. Only for fresh maps+cls runs — on restore the scale returns with the checkpoint.
+        if return_cls and cls_transform == "asinh_per_feature" and not args.restore_checkpoint:
+            from deep_lss.utils import cls_preprocessing
+
+            asinh_data_dir = args.data_dir
+            if asinh_data_dir is None:
+                asinh_data_dir = args.train_tfr_pattern.split("/tfrecords/")[0]
+                LOGGER.warning(f"--data_dir not set; deriving Cls-cache dir from --train_tfr_pattern: {asinh_data_dir}")
+            scales_name = os.path.splitext(os.path.basename(args.scales_config))[0]
+            dset_common = dlss_conf["dset"]["common"]
+            scale = cls_preprocessing.compute_asinh_scale_from_cache(
+                data_dir=asinh_data_dir,
+                msfm_conf=msfm_conf,
+                cls_n_bins=cls_conf.get("n_bins", 16),
+                scales_name=scales_name,
+                with_lensing=dset_common["with_lensing"],
+                with_clustering=dset_common["with_clustering"],
+                with_cross_z=dset_common.get("with_cross_z", True),
+                with_cross_probe=dset_common.get(
+                    "with_cross_probe", dset_common["with_lensing"] and dset_common["with_clustering"]
+                ),
+                lenses_before_sources=dset_common.get("lenses_before_sources", dset_common.get("ggl_only", False)),
+                default_scale=cls_conf.get("asinh_default_scale", None),
+            )
+            network.cls_layer.set_scale(scale)
+
+        # Measure the empirical input-map normalization (post-smoothing mean map + per-channel
+        # std) from training batches and load it into the (checkpointed) layer. Only for fresh
+        # transformer runs — on restore the statistics return with the checkpoint. Under Horovod
+        # only rank 0 measures (its data shard differs from the other ranks'), then broadcasts,
+        # so all replicas start from identical values.
+        if is_transformer and input_norm and not args.restore_checkpoint:
+            input_norm_stats = None
+            if not isinstance(strategy, HorovodStrategy) or hvd.rank() == 0:
+                adapt_dset = build_dset(train_pipeline, args.train_tfr_pattern, dset_kwargs)
+                # 32 batches x local_batch_size maps: per-pixel mean SE ~ std/sqrt(n_maps),
+                # a fixed (sim=data) offset field; the per-channel std is exact at this n
+                input_norm_stats = compute_input_norm_stats(
+                    network.smoothing, adapt_dset, n_batches=32, mask=network.input_norm.mask
+                )
+            if isinstance(strategy, HorovodStrategy):
+                input_norm_stats = strategy.broadcast_object(input_norm_stats, root_rank=0)
+            network.input_norm.load_stats(*input_norm_stats)
 
         # training step, fiducial pipeline
         if args.loss_function == "delta":
@@ -681,14 +877,17 @@ def training(args=None):
             else:
                 mutual_info_kwargs = {}
 
-            # when return_cls=True the network accepts a (maps, cls) tuple input, so no static
-            # input_signature is set (dim_x=None); the tf.function traces dynamically instead.
+            # A static input_signature (dim_x set) only fits the plain map path. When
+            # return_cls=True the network takes a (maps, cls) tuple, and the transformer
+            # reshapes its own input (and its map width = len(smooth_indices) which differs
+            # from len(data_vec_pix) under downsampling); in both cases trace dynamically.
+            dynamic_input = return_cls or is_transformer
             model.setup_grid_loss_step(
                 loss=args.loss_function,
                 batch_size=local_batch_size,
                 dim_theta=n_params,
-                dim_x=None if return_cls else len(data_vec_pix),
-                dim_channels=None if return_cls else n_z_bins,
+                dim_x=None if dynamic_input else len(data_vec_pix),
+                dim_channels=None if dynamic_input else n_z_bins,
                 **mutual_info_kwargs,
                 **likelihood_kwargs,
                 **net_conf["optimization"]["gradient_clipping"],
@@ -710,11 +909,25 @@ def training(args=None):
         def make_validation_loop(dist_dset, step_fn, n_expected, summary_map):
             def validation_loop():
                 metrics = [tf.keras.metrics.Mean(), tf.keras.metrics.Mean()]
+                n_batches = 0
+                n_loss_nan = 0
                 for batch_tuple in LOGGER.progressbar(dist_dset, at_level="debug", desc="validation", total=n_expected):
                     vals = step_fn(batch_tuple)
+                    n_batches += 1
                     for i, v in enumerate(vals):
                         if not tf.math.is_nan(v):
                             metrics[i].update_state(v)
+                        elif i == 0:
+                            n_loss_nan += 1
+                # A diverged (NaN) network makes every validation batch NaN; the per-batch skip
+                # above then leaves the loss metric empty and tf.keras.metrics.Mean returns 0, so
+                # the assert below silently passed and training kept running to completion. Catch
+                # the total-collapse case explicitly while still tolerating the odd partial batch.
+                if n_batches > 0 and n_loss_nan == n_batches:
+                    raise RuntimeError(
+                        f"Validation loss is NaN for all {n_batches} validation batches — the "
+                        "network has diverged (NaN). Aborting instead of logging a spurious 0."
+                    )
                 assert not tf.math.is_nan(
                     metrics[0].result()
                 ), "Validation loss is NaN, check the validation batch size as this is likely due to partially empty batches"
@@ -792,13 +1005,7 @@ def training(args=None):
             vali_fidu_pipe = FiducialPipeline(conf=msfm_conf, **vali_pipe_kwargs)
 
             def vali_dset_fn(input_context):
-                dset = vali_fidu_pipe.get_dset(
-                    tfr_pattern=args.fidu_vali_tfr_pattern,
-                    **vali_dset_kwargs,
-                    input_context=input_context,
-                    downsample_nside=smooth_nside if parent_output_idx is not None else None,
-                    parent_output_idx=parent_output_idx,
-                )
+                dset = build_dset(vali_fidu_pipe, args.fidu_vali_tfr_pattern, vali_dset_kwargs, input_context)
                 if n_vali_batches is not None:
                     dset = dset.take(n_vali_batches * strategy.num_replicas_in_sync).cache()
 
@@ -834,13 +1041,7 @@ def training(args=None):
             vali_grid_pipe = GridPipeline(conf=msfm_conf, **vali_pipe_kwargs)
 
             def vali_dset_fn(input_context):
-                dset = vali_grid_pipe.get_dset(
-                    tfr_pattern=grid_vali_tfr,
-                    **vali_dset_kwargs,
-                    input_context=input_context,
-                    downsample_nside=smooth_nside if parent_output_idx is not None else None,
-                    parent_output_idx=parent_output_idx,
-                )
+                dset = build_dset(vali_grid_pipe, grid_vali_tfr, vali_dset_kwargs, input_context)
                 if n_vali_batches is not None:
                     dset = dset.take(n_vali_batches * strategy.num_replicas_in_sync).cache()
 
@@ -887,6 +1088,7 @@ def training(args=None):
     t_accum = 0.0
     t_data_accum = 0.0
     t_compute_accum = 0.0
+    nan_streak = 0
 
     for step in LOGGER.progressbar(range(1, n_steps + 1), at_level="info", total=n_steps, desc="training"):
         # context for profiling like https://www.tensorflow.org/guide/profiler#profiling_custom_training_loops
@@ -907,6 +1109,25 @@ def training(args=None):
                 else:
                     loss = model.grid_train_step(x_batch, cosmo_batch)
             t_compute_end = time()
+
+            # fail-fast NaN watchdog (see nan_check_every / nan_abort_after above). The
+            # grad-zeroing safety net makes a NaN step a no-op, so a diverged run would otherwise
+            # freeze and burn its full allocation while saving a useless checkpoint.
+            if nan_check_every and (step % nan_check_every == 0):
+                if not bool(tf.math.is_finite(tf.cast(loss, tf.float32))):
+                    nan_streak += 1
+                    LOGGER.warning(
+                        f"Training loss is non-finite at step {step} "
+                        f"({nan_streak}/{nan_abort_after} consecutive check(s))"
+                    )
+                    if nan_streak >= nan_abort_after:
+                        raise RuntimeError(
+                            f"Training loss non-finite for {nan_streak} consecutive check(s) "
+                            f"(step {step}); aborting. Continuing would only waste the allocation "
+                            "on a frozen network. Check numerical stability (precision / depth)."
+                        )
+                else:
+                    nan_streak = 0
 
             # horovod
             if isinstance(model.strategy, HorovodStrategy) and step == 1:

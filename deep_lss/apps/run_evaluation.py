@@ -20,9 +20,10 @@ from msfm.utils import logger, files
 
 from deep_lss.utils import configuration, distribute, evaluation
 from deep_lss.models.base_model import BaseModel
-from deep_lss.nets import NETWORKS
+from deep_lss.nets import NETWORKS, TRANSFORMER_NETWORKS
 from deep_lss.nets.maps_plus_cls_network import MapsPlusCLSNetwork
-from deep_lss.nets.regression_head import get_cls_embedding_layers
+from deep_lss.nets.transformer_networks import HealpixTransformerNetwork, TransformerMapsPlusCLSNetwork
+from deep_lss.nets.regression_head import get_cls_embedding_layers, get_regression_head
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 warnings.filterwarnings("ignore", category=RuntimeWarning)
@@ -85,7 +86,7 @@ def setup():
 
     # Individual observation evaluation flags (all default off)
     parser.add_argument("--include_grid", action="store_true", help="write stride-spaced grid examples into obs/")
-    parser.add_argument("--n_grid_examples", type=int, default=4)
+    parser.add_argument("--n_grid_examples", type=int, default=16)
     parser.add_argument("--include_des", action="store_true", help="evaluate DES Y3 catalogs")
     parser.add_argument("--include_buzzard", action="store_true", help="evaluate Buzzard N-body realizations")
     parser.add_argument("--buzzard_labels", nargs="+", default=["Buzzard_mean"])
@@ -153,14 +154,11 @@ if __name__ == "__main__":
     n_side = msfm_conf["analysis"]["n_side"]
     data_vec_pix, _, _, _ = files.load_pixel_file(msfm_conf)
 
-    smooth_nside = net_conf["network"].get("smooth_nside", None)
-    if smooth_nside is not None and smooth_nside < n_side:
-        smooth_indices, parent_output_idx = configuration.get_smooth_nside_indices(data_vec_pix, n_side, smooth_nside)
-        LOGGER.info(f"Using smooth_nside={smooth_nside}: {len(data_vec_pix)} → {len(smooth_indices)} pixels")
-    else:
-        smooth_nside = n_side
-        smooth_indices = data_vec_pix
-        parent_output_idx = None
+    # the network (and pipeline downsampling) run at the finest per-probe smoothing nside; probes
+    # smoothed at a coarser nside (per-probe smooth_nside mapping) are handled inside the network
+    smooth_nside, smooth_indices, parent_output_idx = configuration.resolve_smooth_nside(
+        net_conf, dlss_conf, msfm_conf
+    )
 
     n_z_bins = 0
     if dlss_conf["dset"]["common"]["with_lensing"]:
@@ -203,51 +201,105 @@ if __name__ == "__main__":
     # set up directories
     checkpoint_dir = os.path.abspath(os.path.join(args.dir_model, "checkpoint"))
 
-    return_cls = "cls_n_bins" in net_conf["network"]
+    # Maps+Cls is enabled by the presence of a `cls:` block (see run_training.py).
+    cls_conf = net_conf["network"].get("cls", None)
+    return_cls = cls_conf is not None
+    if "cls_n_bins" in net_conf["network"]:
+        raise ValueError(
+            "Legacy flat Cls keys (cls_n_bins / cls_transform / cls_embedding_* / asinh_default_scale) "
+            "are no longer supported — move them under a nested `cls:` block in the network config "
+            "(see configs/transformer/lensing/maps+cls.yaml)."
+        )
     if return_cls:
-        LOGGER.warning("cls_n_bins detected in net_conf['network'] — building MapsPlusCLSNetwork for evaluation")
+        LOGGER.warning("cls block detected in net_conf['network'] — building MapsPlusCLSNetwork for evaluation")
 
     max_batch_size = net_conf["dset"]["eval"]["grid"]["local_batch_size"]
 
+    is_transformer = net_conf["network"]["name"] in TRANSFORMER_NETWORKS
+
     # create all of the variables within the strategy's scope, such that they are mirrored
     with strategy.scope():
-        net_spec = NETWORKS[net_conf["network"]["name"]](
-            out_features=n_output, smoothing_kwargs=smoothing_kwargs, **net_conf["network"]["kwargs"]
-        )
-        LOGGER.info(f"Loaded a network specification of type {NETWORKS[net_conf['network']['name']]}")
+        if is_transformer:
+            # Nested hierarchical local-window transformer. Mirror the construction in
+            # run_training.py: the maps are smoothed and reordered into nested superpixel
+            # blocks inside the pre-built tf.keras.Model, so no HealpyGCNN graph is built and
+            # n_neighbors is irrelevant. The network is traced with dummy inputs so that
+            # network.built is True before BaseModel calls network.summary().
+            token_nside = net_conf["network"]["token_nside"]
+            transformer_kwargs = net_conf["network"]["kwargs"]
+            # Mirror run_training.py: XLA-fuse the tokenizer->transformer body. Beyond the
+            # speed-up, this is required for the larger configs (many heads / nested levels) to
+            # evaluate at all — the eager attention softmax otherwise overflows the CUDA kernel
+            # launch limit ("invalid configuration argument"). The key lives under `network:`,
+            # not in `kwargs`, so it must be forwarded explicitly.
+            jit_compile_body = net_conf["network"].get("jit_compile_body", False)
 
-        if return_cls:
-            _, l_min_per_pair, l_max_per_pair = configuration.get_cls_bounds_per_pair(msfm_conf, dlss_conf)
-            n_cls_bins = net_conf["network"].get("cls_n_bins", 16)
-            cls_emb_widths = net_conf["network"].get("cls_embedding_layers", [512, 512, 512, 512])
-            cls_emb_dropout = net_conf["network"].get("cls_embedding_dropout_rate", None)
-            network = MapsPlusCLSNetwork(
-                conv_layers=net_spec.get_conv_layers(),
-                cls_embedding_layers=get_cls_embedding_layers(cls_emb_widths, dropout_rate=cls_emb_dropout),
-                regression_head_layers=net_spec.get_head_layers_no_flatten(),
-                n_side=smooth_nside,
-                tfr_n_side=n_side,
-                indices=smooth_indices,
-                n_neighbors=net_conf["network"]["n_neighbors"],
-                max_batch_size=max_batch_size,
-                initial_Fin=n_z_bins,
-                n_cls_bins=n_cls_bins,
-                l_min_per_pair=l_min_per_pair,
-                l_max_per_pair=l_max_per_pair,
-            )
-            network.gcnn.build((max_batch_size, len(smooth_indices), n_z_bins))
-            # Trace the full MapsPlusCLSNetwork so that network.built=True and BaseModel
-            # can call network.summary(). gcnn.build() only builds the map branch.
-            network(
-                (tf.zeros((2, len(smooth_indices), n_z_bins)),
-                 tf.zeros((2, 3 * n_side, len(l_min_per_pair)))),
-                training=False,
-            )
+            # Mirror run_training.py: head.dropout_rate is a single Dropout right before the
+            # final linear layer in both paths (inactive at eval, but the build must match).
+            head_conf = net_conf["network"].get("head", {}) or {}
+            fused_head_layers = head_conf.get("fused_layers", []) or None
+            head_dropout = head_conf.get("dropout_rate", None)
+
+            # Mirror run_training.py: input_norm adds the EmpiricalInputNormalization layer,
+            # whose statistics (measured at training time) are restored from the checkpoint.
+            input_norm = bool(net_conf["network"].get("input_norm", False))
+
+            if return_cls:
+                _, l_min_per_pair, l_max_per_pair = configuration.get_cls_bounds_per_pair(msfm_conf, dlss_conf)
+                n_cls_bins = cls_conf.get("n_bins", 16)
+                cls_emb_widths = cls_conf.get("embedding_layers", [512, 512, 512, 512])
+                cls_emb_dropout = cls_conf.get("embedding_dropout_rate", None)
+                # dense regression head minus the leading Flatten (the fused vector is already 2-D)
+                regression_head_layers = get_regression_head(
+                    out_features=n_output,
+                    head_type="dense",
+                    dense_layers=fused_head_layers,
+                    dropout_rate=head_dropout,
+                )[1:]
+                network = TransformerMapsPlusCLSNetwork(
+                    smoothing_kwargs=smoothing_kwargs,
+                    smooth_indices=smooth_indices,
+                    nside=smooth_nside,
+                    token_nside=token_nside,
+                    in_channels=n_z_bins,
+                    map_feature_dim=net_conf["network"]["map_feature_dim"],
+                    transformer_kwargs=transformer_kwargs,
+                    tfr_n_side=n_side,
+                    n_cls_bins=n_cls_bins,
+                    l_min_per_pair=l_min_per_pair,
+                    l_max_per_pair=l_max_per_pair,
+                    cls_embedding_layers=get_cls_embedding_layers(cls_emb_widths, dropout_rate=cls_emb_dropout),
+                    regression_head_layers=regression_head_layers,
+                    cls_transform=cls_conf.get("transform", "asinh_per_feature"),
+                    jit_compile_body=jit_compile_body,
+                    input_norm=input_norm,
+                )
+                network(
+                    (tf.zeros((2, len(smooth_indices), n_z_bins)),
+                     tf.zeros((2, 3 * n_side, len(l_min_per_pair)))),
+                    training=False,
+                )
+            else:
+                network = HealpixTransformerNetwork(
+                    smoothing_kwargs=smoothing_kwargs,
+                    smooth_indices=smooth_indices,
+                    nside=smooth_nside,
+                    token_nside=token_nside,
+                    in_channels=n_z_bins,
+                    num_outputs=n_output,
+                    transformer_kwargs=transformer_kwargs,
+                    jit_compile_body=jit_compile_body,
+                    head_dropout_rate=head_dropout,
+                    input_norm=input_norm,
+                )
+                network(tf.zeros((2, len(smooth_indices), n_z_bins)), training=False)
+
+            LOGGER.info(f"Built transformer network {net_conf['network']['name']} (return_cls={return_cls})")
             model = BaseModel(
                 network=network,
                 n_side=None,
                 indices=None,
-                n_neighbors=net_conf["network"]["n_neighbors"],
+                n_neighbors=None,
                 input_shape=None,
                 max_batch_size=max_batch_size,
                 checkpoint_dir=checkpoint_dir,
@@ -255,18 +307,62 @@ if __name__ == "__main__":
                 strategy=strategy,
             )
         else:
-            network = net_spec.get_layers()
-            model = BaseModel(
-                network=network,
-                n_side=smooth_nside,
-                indices=smooth_indices,
-                n_neighbors=net_conf["network"]["n_neighbors"],
-                input_shape=(None, len(smooth_indices), n_z_bins),
-                max_batch_size=max_batch_size,
-                checkpoint_dir=checkpoint_dir,
-                restore_checkpoint=True,
-                strategy=strategy,
+            net_spec = NETWORKS[net_conf["network"]["name"]](
+                out_features=n_output, smoothing_kwargs=smoothing_kwargs, **net_conf["network"]["kwargs"]
             )
+            LOGGER.info(f"Loaded a network specification of type {NETWORKS[net_conf['network']['name']]}")
+
+            if return_cls:
+                _, l_min_per_pair, l_max_per_pair = configuration.get_cls_bounds_per_pair(msfm_conf, dlss_conf)
+                n_cls_bins = cls_conf.get("n_bins", 16)
+                cls_emb_widths = cls_conf.get("embedding_layers", [512, 512, 512, 512])
+                cls_emb_dropout = cls_conf.get("embedding_dropout_rate", None)
+                network = MapsPlusCLSNetwork(
+                    conv_layers=net_spec.get_conv_layers(),
+                    cls_embedding_layers=get_cls_embedding_layers(cls_emb_widths, dropout_rate=cls_emb_dropout),
+                    regression_head_layers=net_spec.get_head_layers_no_flatten(),
+                    n_side=smooth_nside,
+                    tfr_n_side=n_side,
+                    indices=smooth_indices,
+                    n_neighbors=net_conf["network"]["n_neighbors"],
+                    max_batch_size=max_batch_size,
+                    initial_Fin=n_z_bins,
+                    n_cls_bins=n_cls_bins,
+                    l_min_per_pair=l_min_per_pair,
+                    l_max_per_pair=l_max_per_pair,
+                    cls_transform=cls_conf.get("transform", "asinh_per_feature"),
+                )
+                network.gcnn.build((max_batch_size, len(smooth_indices), n_z_bins))
+                # Trace the full MapsPlusCLSNetwork so that network.built=True and BaseModel
+                # can call network.summary(). gcnn.build() only builds the map branch.
+                network(
+                    (tf.zeros((2, len(smooth_indices), n_z_bins)), tf.zeros((2, 3 * n_side, len(l_min_per_pair)))),
+                    training=False,
+                )
+                model = BaseModel(
+                    network=network,
+                    n_side=None,
+                    indices=None,
+                    n_neighbors=net_conf["network"]["n_neighbors"],
+                    input_shape=None,
+                    max_batch_size=max_batch_size,
+                    checkpoint_dir=checkpoint_dir,
+                    restore_checkpoint=True,
+                    strategy=strategy,
+                )
+            else:
+                network = net_spec.get_layers()
+                model = BaseModel(
+                    network=network,
+                    n_side=smooth_nside,
+                    indices=smooth_indices,
+                    n_neighbors=net_conf["network"]["n_neighbors"],
+                    input_shape=(None, len(smooth_indices), n_z_bins),
+                    max_batch_size=max_batch_size,
+                    checkpoint_dir=checkpoint_dir,
+                    restore_checkpoint=True,
+                    strategy=strategy,
+                )
 
     # Build a numpy-level model callable for individual observation evaluation.
     # Includes downsampling when smooth_nside < n_side.
@@ -280,6 +376,7 @@ if __name__ == "__main__":
             return result / _counts[np.newaxis, :, np.newaxis]
 
     if return_cls:
+
         def _call_model(x, cls_raw):
             # x: (B, n_pix_dv, n_ch); cls_raw: (B, n_ell, n_z_cross), precomputed consistently
             # with training by forward_model_observation_map (same alm/smoothing pipeline that
@@ -290,7 +387,9 @@ if __name__ == "__main__":
                 cls_raw = np.concatenate([cls_raw, cls_raw], axis=0)
                 return model((x, cls_raw), training=False).numpy()[:1]
             return model((x, cls_raw), training=False).numpy()
+
     else:
+
         def _call_model(x, cls_raw=None):
             # HealpySmoothing pre-computes n_matmul_splits=2 for this pixel resolution;
             # tf.split requires the batch dim divisible by 2, so pad batch=1 → 2.
@@ -389,12 +488,8 @@ if __name__ == "__main__":
                 mock_labels = args.mock_labels
                 if mock_labels is None:
                     mock_labels = evaluation.discover_mock_labels(args.data_dir)
-                    LOGGER.info(
-                        f"Auto-discovered {len(mock_labels)} mock(s) in {args.data_dir}/obs: {mock_labels}"
-                    )
-                evaluation.evaluate_obs_benchmark(
-                    model_fn, out_file, msfm_conf, dlss_conf, args.data_dir, mock_labels
-                )
+                    LOGGER.info(f"Auto-discovered {len(mock_labels)} mock(s) in {args.data_dir}/obs: {mock_labels}")
+                evaluation.evaluate_obs_benchmark(model_fn, out_file, msfm_conf, dlss_conf, args.data_dir, mock_labels)
 
         if args.wandb and out_file is not None:
             LOGGER.info(f"Logged the predictions to weights & biases")
@@ -410,7 +505,7 @@ if __name__ == "__main__":
         checkpoints = model.checkpoint_manager.checkpoints[10:]
         for checkpoint in checkpoints:
             # model.checkpoint_manager.checkpoint.restore(checkpoint)
-            model.restore_model_from_checkpoint_dir(checkpoint)
+            model.restore_model_from_checkpoint_path(checkpoint)
             evaluate_current_checkpoint(model)
 
     else:

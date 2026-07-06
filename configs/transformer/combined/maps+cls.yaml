@@ -1,6 +1,15 @@
+# Nested hierarchical local-window transformer — combined probes, maps + Cls.
+# Adds the Cls branch (`cls:` block + map_feature_dim) on top of combined/maps.yaml: the map
+# transformer and the binned angular power spectra (lensing + clustering + cross pairs) are embedded
+# separately and fused before the regression head. Architecture mirrors lensing/maps+cls.yaml.
+# Per-probe smoothing: clustering smoothed at nside 256 and upsampled back; lensing stays at native
+# n_side, so the map branch runs at native resolution.
 name: nested_transformer
 
 training:
+  # local_batch_size 20 is the max that comfortably fits at full-res lensing (the Cls branch adds
+  # little on top of the ~83 GB map branch; lensing/maps+cls.yaml runs at 20 in production). 120k
+  # steps (uniform across probes) ~= 9.5 h on 4 GPUs.
   n_steps: 120000
   output_every: Null
   checkpoint_every: 10000
@@ -26,6 +35,11 @@ optimization:
 
 network:
   name: nested_transformer
+  # per-probe smoothing resolution: clustering (fwhm >= 57') is smoothed at nside 256 and
+  # upsampled back; lensing stays at the native n_side. See scale_cuts.clustering.theta_fwhm_base
+  # in the scales config for the matching base kernel choice.
+  smooth_nside:
+    clustering: 256
   token_nside: 16
   z_bank_size: Null
   max_checkpoints: 50

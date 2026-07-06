@@ -37,7 +37,7 @@ network:
   # number of ell bins per cross pair
   cls_n_bins: 16
   # MLP widths for the Cls embedding branch (Dense→LN per entry); [] to disable
-  cls_embedding_layers: [512, 512, 512, 512]
+  cls_embedding_layers: [1024, 1024, 1024, 1024]
   cls_embedding_dropout_rate: 0.5
   kwargs:
     base_channels: 32

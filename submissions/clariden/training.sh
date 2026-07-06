@@ -10,6 +10,10 @@
 #SBATCH --job-name=training
 #SBATCH --output=/users/athomsen/dlss/repos/y3-deep-lss/submissions/clariden/slurm/slurm-%j.out
 
+# disable core dumps: a crashing TF/Python task can otherwise write a 50+ GB
+# core file into the cwd (core_pattern=core_%h_%p) and fill the /users quota
+ulimit -c 0
+
 # extract Weights & Biases API key from the host's .netrc file and pass it as an environment variable
 # to accommodate containerized execution that might not inherit the host's home directory mounts properly.
 export WANDB_API_KEY=$(awk '/password/ {print $2}' ~/.netrc)
@@ -41,22 +45,32 @@ PROBE="lensing"
 # PROBE="clustering"
 # PROBE="combined"
 
-MAPS_PLUS_CLS="true"
-# MAPS_PLUS_CLS="false"
+# MAPS_PLUS_CLS="true"
+MAPS_PLUS_CLS="false"
+
+# network architecture: directory under configs/ holding the per-probe net configs
+# ARCH="deepsphere"
+ARCH="transformer"
 
 PROBES_CONFIG="$REPOS/y3-deep-lss/configs/probes/${PROBE}.yaml"
-if [ "$MAPS_PLUS_CLS" = "true" ]; then
-    NET_CONFIG="$REPOS/y3-deep-lss/configs/deepsphere/${PROBE}/maps+cls.yaml"
-else
-    NET_CONFIG="$REPOS/y3-deep-lss/configs/deepsphere/${PROBE}/maps.yaml"
+# NET_CONFIG may be overridden from the environment (e.g. to point at a
+# configs/${ARCH}/${PROBE}/hyperparameters/*.yaml variant); otherwise default per MAPS_PLUS_CLS.
+if [ -z "$NET_CONFIG" ]; then
+    if [ "$MAPS_PLUS_CLS" = "true" ]; then
+        NET_CONFIG="$REPOS/y3-deep-lss/configs/${ARCH}/${PROBE}/maps+cls.yaml"
+    else
+        NET_CONFIG="$REPOS/y3-deep-lss/configs/${ARCH}/${PROBE}/maps.yaml"
+    fi
 fi
+# NET_CONFIG="$REPOS/y3-deep-lss/configs/transformer/lensing/bench_t3/cls.yaml"  # uncomment to pin the t3_cls run
 
-MODEL="v6_cls"
-# MODEL="v6"
+
+# MODEL="t3_cls"
+MODEL="${MODEL:-t3}"
 
 INPUT="$MYSCRATCH/deep_lss/data/$VERSION/$SUBVERSION"
 OUTPUT="$MYSCRATCH/deep_lss/runs/$VERSION/$SUBVERSION/maps/$PROBE"
-LOG="$OUTPUT/$MODEL/logs/"$RUN_NUM"_"$STRATEGY"_"$SLURM_JOB_ID""
+LOG="$OUTPUT/$MODEL/logs/${SLURM_JOB_ID}_${RUN_NUM}_${STRATEGY}"
 mkdir -p "$(dirname "$LOG")"
 
 TRAIN_TFR="$INPUT/tfrecords/grid/DESy3_grid_dmb_????.tfrecord"
@@ -66,6 +80,7 @@ srun --environment=tensorflow --gpu-bind=none --output=""$LOG"_training.log" \
         --dir_base=$OUTPUT \
         --dir_model=$MODEL \
         --train_tfr_pattern=$TRAIN_TFR \
+        --data_dir=$INPUT \
         --msfm_config="$REPOS/multiprobe-simulation-forward-model/configs/$VERSION/$SUBVERSION.yaml" \
         --probes_config=$PROBES_CONFIG \
         --scales_config="$REPOS/y3-deep-lss/configs/scales/${SCALES}.yaml" \
@@ -74,7 +89,7 @@ srun --environment=tensorflow --gpu-bind=none --output=""$LOG"_training.log" \
         --net_config=$NET_CONFIG \
         --dist_strategy="$STRATEGY" \
         --wandb \
-        --wandb_tags "$VERSION" "$SUBVERSION" "$PROBE" "$LOSS" "$STRATEGY" "resnet" \
+        --wandb_tags "$VERSION" "$SUBVERSION" "$PROBE" "$LOSS" "$STRATEGY" "$ARCH" \
         $RESTORE_FLAG
 
 sleep 30
@@ -99,6 +114,7 @@ srun -N1 --ntasks-per-node=1 --gpus-per-task=1 --cpus-per-task=72 --mem=110G \
         --out_dir=\"$OUTPUT\" \
         --model_name=\"$MODEL\" \
         --flow_config=\"$FLOW_CONFIG\" \
+        --n_flows=4 \
         --sample_posterior \
         --include_grid \
         --include_des \

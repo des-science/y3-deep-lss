@@ -28,16 +28,16 @@ SUBVERSION="rot_in_place"
 
 STRATEGY="mirrored"
 
-# PROBE="lensing"
-# PROBE="clustering"
-PROBE="combined"
+# PROBE / MODEL may be overridden from the environment (e.g. sbatch --export=ALL,PROBE=lensing,MODEL=t2_default)
+# PROBE options: lensing / clustering / combined
+PROBE="${PROBE:-combined}"
 
 # MODEL="v6"
-MODEL="v6_cls"
+MODEL="${MODEL:-v8_cls}"
 
 INPUT="$MYSCRATCH/deep_lss/data/$VERSION/$SUBVERSION"
 OUTPUT="$MYSCRATCH/deep_lss/runs/$VERSION/$SUBVERSION/maps/$PROBE"
-LOG="$OUTPUT/$MODEL/logs/"$RUN_NUM"_"$STRATEGY"_"$SLURM_JOB_ID""
+LOG="$OUTPUT/$MODEL/logs/${SLURM_JOB_ID}_${RUN_NUM}_${STRATEGY}"
 mkdir -p "$(dirname "$LOG")"
 
 TRAIN_TFR="$INPUT/tfrecords/grid/DESy3_grid_dmb_????.tfrecord"
@@ -75,6 +75,7 @@ srun -N1 --ntasks-per-node=1 --gpus-per-task=1 --cpus-per-task=72 --mem=110G \
         --out_dir=\"$OUTPUT\" \
         --model_name=\"$MODEL\" \
         --flow_config=\"$FLOW_CONFIG\" \
+        --n_flows=4 \
         --sample_posterior \
         --include_grid \
         --include_des \

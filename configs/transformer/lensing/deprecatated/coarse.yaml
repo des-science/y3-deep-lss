@@ -1,17 +1,16 @@
-# contains the model specific configuration parameters for training and hyperparameter optimization
-name: deepsphere_default
+# Nested hierarchical local-window transformer — lensing, maps only.
+# No Cls branch (no cls_n_bins): the transformer output is the summary statistic directly.
+name: nested_transformer
 
 training:
-  n_steps: 200000
+  n_steps: 100000
   output_every: Null
   checkpoint_every: 10000
   vali_every: 1000
   eval_every: Null
 
 optimization:
-  # adam or sgd
   optimizer: adam
-  # this could also be handled in the optimizer instead of the training step
   gradient_clipping:
     clip_by_value: null
     clip_by_norm: null
@@ -25,32 +24,23 @@ optimization:
     warmup_steps: 5000
     warmup_init_learning_rate: 1.0e-5
     decay_alpha: 0.0
-    # EMA weight averaging (optional)
     ema_momentum: null
 
 network:
-  name: resnet
-  n_neighbors: 60
-  smooth_nside: 256
-  max_checkpoints: 50
-  save_second_to_last_layer: False
+  name: nested_transformer
+  token_nside: 8
   z_bank_size: Null
-  # number of ell bins per cross pair
-  cls_n_bins: 16
-  # MLP widths for the Cls embedding branch (Dense→LN per entry); [] to disable
-  cls_embedding_layers: [1024, 1024, 1024, 1024]
-  cls_embedding_dropout_rate: 0.5
-  kwargs:
-    base_channels: 32
-    # depth
-    downsampling_layers: 2
-    cheby_layers: 2
-    residual_layers: 5
-    # misc
-    poly_degree: 5
-    head_type: "dense"
-    dense_layers: []
-    dropout_rate: 0.1
+  max_checkpoints: 50
+  jit_compile_body: true
+  precision: bfloat16
+  kwargs: # -> NestedHierarchicalLocalWindowTransformer
+    base_embed_dim: 16
+    growth: double # constant | double | full | 128
+    num_heads: 4
+    window_levels: 3 # local attention window = 4^window_levels tokens
+    local_blocks_per_level: 1
+    global_blocks: 3
+    mlp_ratio: 4
 
 dset:
   training:
@@ -60,7 +50,7 @@ dset:
       n_prefetch: 8
       n_workers: Null
     grid:
-      local_batch_size: 20
+      local_batch_size: 16
       file_name_shuffle_buffer: 64
       examples_shuffle_buffer: 256
   validation:
@@ -71,7 +61,7 @@ dset:
       n_prefetch: 2
       n_workers: 16
     grid:
-      local_batch_size: 20
+      local_batch_size: 16
   eval:
     common:
       is_eval: True
@@ -79,4 +69,4 @@ dset:
       n_prefetch: 2
       n_workers: Null
     grid:
-      local_batch_size: 20
+      local_batch_size: 16

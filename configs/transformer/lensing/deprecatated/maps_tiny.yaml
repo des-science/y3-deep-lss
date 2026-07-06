@@ -1,0 +1,77 @@
+# Variant of debug/maps.yaml — TINY smoke-test (lensing, maps only).
+#
+# Smallest valid model at nside=512 / token_nside=16 (padding-free): L=5 nested
+# levels, 4^5=1024 pixels/token, N=448 occupied DES-Y3 footprint tokens. Use this to
+# validate the pipeline, memory footprint, and tensor shapes end-to-end before
+# committing to a full run. base_embed_dim=8 with growth=double gives the channel
+# ladder [8,16,32,64,128,256] (final dim 256); a single local and single global block
+# and mlp_ratio=2 keep it cheap. Training is shortened (2000 steps) for fast iteration.
+name: nested_transformer
+
+training:
+  n_steps: 2000
+  output_every: Null
+  checkpoint_every: 1000
+  vali_every: 200
+  eval_every: Null
+
+optimization:
+  optimizer: adam
+  gradient_clipping:
+    clip_by_value: null
+    clip_by_norm: null
+    clip_by_global_norm: 1.0
+  mutual_info_loss:
+    learning_rate: 1.0e-4
+    optimizer_kwargs:
+      beta_1: 0.9
+      beta_2: 0.999
+    scheduler: Null
+    warmup_steps: 5000
+    warmup_init_learning_rate: 1.0e-5
+    decay_alpha: 0.0
+    ema_momentum: null
+
+network:
+  name: nested_transformer
+  token_nside: 16
+  # smooth_nside: 256
+  z_bank_size: Null
+  max_checkpoints: 50
+  kwargs: # -> NestedHierarchicalLocalWindowTransformer
+    base_embed_dim: 8        # [8,16,32,64,128,256] across the 5 nested levels
+    growth: double # constant | double | full | 128
+    num_heads: 4
+    window_levels: 2 # local attention window = 4^window_levels tokens
+    local_blocks_per_level: 1
+    global_blocks: 1
+    mlp_ratio: 2
+
+dset:
+  training:
+    common:
+      is_eval: False
+      n_readers: 64
+      n_prefetch: 8
+      n_workers: Null
+    grid:
+      local_batch_size: 16
+      file_name_shuffle_buffer: 64
+      examples_shuffle_buffer: 256
+  validation:
+    n_batches: 50
+    common:
+      is_eval: True
+      n_readers: 8
+      n_prefetch: 2
+      n_workers: 16
+    grid:
+      local_batch_size: 16
+  eval:
+    common:
+      is_eval: True
+      n_readers: 64
+      n_prefetch: 2
+      n_workers: Null
+    grid:
+      local_batch_size: 16

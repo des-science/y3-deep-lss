@@ -1,3 +1,8 @@
+# Nested hierarchical local-window transformer — clustering, maps + Cls.
+# Adds the Cls branch (`cls:` block + map_feature_dim) on top of clustering/maps.yaml: the map
+# transformer and the binned angular power spectra are embedded separately and fused before the
+# regression head. Architecture mirrors lensing/maps+cls.yaml; the map branch runs at nside 256
+# (clustering-only, so smooth_nside 256 is the finest smoothing resolution — no upsample back).
 name: nested_transformer
 
 training:
@@ -26,6 +31,11 @@ optimization:
 
 network:
   name: nested_transformer
+  # clustering-only, so nside 256 is the finest active smooth_nside and becomes the network's working
+  # resolution (resolve_smooth_nside): the pipeline downsamples the native-res maps to 256 and the
+  # transformer runs on those ~4x fewer pixels (no upsample back to native, unlike combined).
+  smooth_nside:
+    clustering: 256
   token_nside: 16
   z_bank_size: Null
   max_checkpoints: 50
@@ -59,7 +69,7 @@ dset:
       n_prefetch: 4
       n_workers: 128
     grid:
-      local_batch_size: 20
+      local_batch_size: 72
       file_name_shuffle_buffer: 64
       examples_shuffle_buffer: 1024
   validation:

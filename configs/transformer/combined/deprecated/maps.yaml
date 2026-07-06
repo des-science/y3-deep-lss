@@ -1,0 +1,86 @@
+# Nested hierarchical local-window transformer — combined probes, maps only.
+# No Cls branch (no cls_n_bins): the transformer output is the summary statistic directly.
+# Clustering is smoothed at nside 256 with its own kernel (per-probe smooth_nside) and upsampled
+# back to the native n_side after smoothing, so the transformer itself is identical to
+# maps_fullres.yaml while the smoothing does ~9x less sparse-matmul work.
+name: nested_transformer
+
+training:
+  n_steps: 100000
+  output_every: Null
+  checkpoint_every: 10000
+  vali_every: 1000
+  eval_every: Null
+
+optimization:
+  optimizer: adam
+  gradient_clipping:
+    clip_by_value: null
+    clip_by_norm: null
+    clip_by_global_norm: 1.0
+  mutual_info_loss:
+    learning_rate: 1.0e-4
+    optimizer_kwargs:
+      beta_1: 0.9
+      beta_2: 0.999
+    scheduler: Null
+    warmup_steps: 5000
+    warmup_init_learning_rate: 1.0e-5
+    decay_alpha: 0.0
+    ema_momentum: null
+
+network:
+  name: nested_transformer
+  # per-probe smoothing resolution: clustering (fwhm >= 57') is smoothed at nside 256 and
+  # upsampled back; lensing stays at the native n_side. See scale_cuts.clustering.theta_fwhm_base
+  # in the scales config for the matching base kernel choice.
+  smooth_nside:
+    clustering: 256
+  token_nside: 16
+  z_bank_size: Null
+  max_checkpoints: 50
+  jit_compile_body: true
+  precision: bfloat16
+  kwargs: # -> NestedHierarchicalLocalWindowTransformer
+    base_embed_dim: 32
+    growth: double # constant | double | full | 128
+    num_heads: 8
+    window_levels: 3 # local attention window = 4^window_levels tokens
+    local_blocks_per_level: 1
+    global_blocks: 3
+    mlp_ratio: 4
+    layerscale_init: null # pre-LayerScale lineage (ckpt-1..10); keep null so resumes match the checkpoint
+
+dset:
+  training:
+    # Dataloader values from the input-pipeline benchmark (deep_lss/apps/benchmark_dataloader.py):
+    # the loader is far from the bottleneck (~9 steps/s at batch 16 on a 4-GPU node), so these are
+    # tuned for predictable, low host RAM under the single per-node MirroredStrategy pipeline.
+    # Combined is 8 z-bins (~14.7 MB/example), so buffers cost ~2x the single-probe runs.
+    common:
+      is_eval: False
+      n_readers: 16       # 64 -> 16: ~40 GB less RAM, no throughput cost
+      n_prefetch: 4       # 8 -> 4: negligible difference; do NOT use AUTOTUNE (dropped combined to 406 ex/s)
+      n_workers: 128      # was Null(AUTOTUNE, unpredictable RAM). Must stay >> n_readers: parse/augment
+                          # workers = (n_workers - n_readers)//2, so a value near n_readers starves them.
+    grid:
+      local_batch_size: 16
+      file_name_shuffle_buffer: 64
+      examples_shuffle_buffer: 512   # global/per-node under mirrored (512 slots x 14.7 MB); bump with batch 32/64
+  validation:
+    n_batches: 50
+    common:
+      is_eval: True
+      n_readers: 8
+      n_prefetch: 2
+      n_workers: 16
+    grid:
+      local_batch_size: 16
+  eval:
+    common:
+      is_eval: True
+      n_readers: 16
+      n_prefetch: 2
+      n_workers: 128
+    grid:
+      local_batch_size: 16
