@@ -48,7 +48,7 @@ FLOW_CONFIGS=("maf_cosine_100" "maf_cosine_300" "maf_cosine_500" "maf_plateau")
 for FLOW_CONFIG in "${FLOW_CONFIGS[@]}"; do
     srun -N1 --ntasks-per-node=1 --exclusive --gpus-per-task=1 --cpus-per-gpu=72 --mem=110G \
         --uenv=pytorch/v2.9.1:v2 --view=default \
-        --output="${LOG}_${FLOW_CONFIG}.log" \
+        --output="${LOG}_${FLOW_CONFIG}_inference.log" \
         bash -c "source ~/dlss/torch_env/bin/activate && \
             python $REPOS/multiprobe-simulation-inference/msi/apps/run_inference.py \
                 --out_dir=\"$OUTPUT\" \

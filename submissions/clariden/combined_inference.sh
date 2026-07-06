@@ -35,7 +35,7 @@ for PROBE in "${PROBES[@]}"; do
 
     srun -N1 --ntasks-per-node=1 --exclusive --gpus-per-task=1 --cpus-per-gpu=72 --mem=110G \
         --uenv=pytorch/v2.9.1:v2 --view=default \
-        --output="${LOG}_combined_flow_inference.log" \
+        --output="${LOG}_combined_inference.log" \
         bash -c "source ~/dlss/torch_env/bin/activate && python $REPOS/multiprobe-simulation-inference/msi/apps/run_inference.py \
             --out_dir=\"$MAPS_OUTPUT\" \
             --model_name=\"$MAPS_MODEL\" \
