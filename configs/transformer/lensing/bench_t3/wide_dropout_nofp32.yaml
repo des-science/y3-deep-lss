@@ -1,0 +1,83 @@
+# Nested hierarchical local-window transformer — lensing, maps only.
+# No Cls branch (no cls_n_bins): the transformer output is the summary statistic directly.
+# wide_dropout (WIDE trunk base_embed_dim 32 + DROPOUT head 0.1) with the fp32 attention-softmax
+# upcast DISABLED (fp32_softmax: false). Removing the upcast frees ~9% peak memory (the fp32 score
+# tensor), which lifts the batch ceiling from 20 -> 24 for this wide arch (b24 = 90.85 GB single-GPU;
+# b28 OOMs). Throughput is flat (~107 ex/s at b20 and b24, compute-bound), so the larger batch buys
+# effective batch size, not wall-clock. n_steps scaled 120000 -> 100000 to keep the same number of
+# samples seen as wide_dropout@b20 (20*120000 == 24*100000) and the same ~10 h wall budget.
+name: nested_transformer
+
+training:
+  n_steps: 100000  # 24*100000 == 20*120000 samples of wide_dropout@b20; ~10 h leaving eval+inference margin
+  output_every: Null
+  checkpoint_every: 10000
+  vali_every: 1000
+  eval_every: Null
+
+optimization:
+  optimizer: adam
+  gradient_clipping:
+    clip_by_value: null
+    clip_by_norm: null
+    clip_by_global_norm: 1.0
+  mutual_info_loss:
+    learning_rate: 1.0e-4
+    optimizer_kwargs:
+      beta_1: 0.9
+      beta_2: 0.999
+    scheduler: Null
+    warmup_steps: 5000
+    warmup_init_learning_rate: 1.0e-5
+    decay_alpha: 0.0
+    ema_momentum: null
+
+network:
+  name: nested_transformer
+  token_nside: 16
+  z_bank_size: Null
+  max_checkpoints: 50
+  jit_compile_body: true
+  precision: bfloat16
+  input_norm: true
+  head:
+    dropout_rate: 0.1
+  kwargs: # -> NestedHierarchicalLocalWindowTransformer
+    base_embed_dim: 32
+    growth: double
+    num_heads: 4
+    window_levels: 3
+    local_blocks_per_level: 1
+    global_blocks: 4
+    mlp_ratio: 4
+    layerscale_init: null
+    fp32_softmax: false  # disable the fp32 attention-softmax upcast (fp32 LayerNorm remains the stabilizer)
+
+dset:
+  training:
+    common:
+      is_eval: False
+      n_readers: 16
+      n_prefetch: 4
+      n_workers: 128
+    grid:
+      local_batch_size: 24  # fp32_softmax off frees ~8 GB vs b20 -> b24 fits (90.85 GB); memory-marginal on 4-GPU NCCL, watch step 0
+      file_name_shuffle_buffer: 64
+      examples_shuffle_buffer: 1024
+  validation:
+    n_batches: 100
+    common:
+      is_eval: True
+      n_readers: 8
+      n_prefetch: 2
+      n_workers: 16
+    grid:
+      local_batch_size: 16
+  eval:
+    common:
+      is_eval: True
+      n_readers: 16
+      n_prefetch: 2
+      n_workers: 128
+    grid:
+      local_batch_size: 16
