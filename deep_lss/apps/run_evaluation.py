@@ -244,6 +244,10 @@ if __name__ == "__main__":
             # whose statistics (measured at training time) are restored from the checkpoint.
             input_norm = bool(net_conf["network"].get("input_norm", False))
 
+            # Mirror run_training.py: masked_attention rebuilds the same static mask constants
+            # (no checkpoint variables involved).
+            masked_attention = bool(net_conf["network"].get("masked_attention", False))
+
             if return_cls:
                 _, l_min_per_pair, l_max_per_pair = configuration.get_cls_bounds_per_pair(msfm_conf, dlss_conf)
                 n_cls_bins = cls_conf.get("n_bins", 16)
@@ -273,6 +277,7 @@ if __name__ == "__main__":
                     cls_transform=cls_conf.get("transform", "asinh_per_feature"),
                     jit_compile_body=jit_compile_body,
                     input_norm=input_norm,
+                    masked_attention=masked_attention,
                 )
                 network(
                     (tf.zeros((2, len(smooth_indices), n_z_bins)),
@@ -291,6 +296,7 @@ if __name__ == "__main__":
                     jit_compile_body=jit_compile_body,
                     head_dropout_rate=head_dropout,
                     input_norm=input_norm,
+                    masked_attention=masked_attention,
                 )
                 network(tf.zeros((2, len(smooth_indices), n_z_bins)), training=False)
 

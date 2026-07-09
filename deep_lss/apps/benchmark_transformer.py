@@ -141,6 +141,7 @@ def run_single(args):
             num_outputs=n_output,
             transformer_kwargs=transformer_kwargs,
             jit_compile_body=jit_compile_body,
+            masked_attention=bool(net_conf["network"].get("masked_attention", False)),
         )
         network(tf.zeros((2, len(smooth_indices), n_z_bins)), training=False)
 

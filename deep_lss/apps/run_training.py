@@ -639,6 +639,10 @@ def training(args=None):
             # checkpoint variables — keep it consistent with the run's lineage.
             input_norm = bool(net_conf["network"].get("input_norm", False))
 
+            # `masked_attention: true` excludes footprint-masked pixels from the transformer's
+            # attention/merges/pooling (static mask constants, no checkpoint variables).
+            masked_attention = bool(net_conf["network"].get("masked_attention", False))
+
             if return_cls:
                 _, l_min_per_pair, l_max_per_pair = configuration.get_cls_bounds_per_pair(msfm_conf, dlss_conf)
                 n_cls_bins = cls_conf.get("n_bins", 16)
@@ -668,6 +672,7 @@ def training(args=None):
                     jit_compile_body=jit_compile_body,
                     cls_transform=cls_transform,
                     input_norm=input_norm,
+                    masked_attention=masked_attention,
                 )
                 # trace so network.built=True before BaseModel.summary()
                 network(
@@ -687,6 +692,7 @@ def training(args=None):
                     jit_compile_body=jit_compile_body,
                     head_dropout_rate=head_dropout,
                     input_norm=input_norm,
+                    masked_attention=masked_attention,
                 )
                 network(tf.zeros((2, len(smooth_indices), n_z_bins)), training=False)
 

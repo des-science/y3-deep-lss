@@ -105,6 +105,41 @@ def _input_norm_footprint(smoothing_kwargs):
     return None if mask is None else np.asarray(mask)
 
 
+def _masked_attention_token_valid(masked_attention, smoothing_kwargs, tokenizer):
+    """Resolve the ``masked_attention`` option into per-slot token validity, or None.
+
+    ``masked_attention`` is either a bool — ``True`` reuses the footprint the smoothing /
+    input-norm front-ends already apply (``_input_norm_footprint``) — or an explicit
+    ``(n_pix,)`` / ``(n_pix, n_channels)`` array over the footprint pixels, mirroring how
+    those layers take their mask as a constructor array rather than deducing it from the
+    data. Fractional (apodized/downsampled) values are binarized with ``> 0`` (the
+    ``EmpiricalInputNormalization`` convention) and a pixel counts as valid if ANY channel
+    observes it: channels that do not observe it stay zeroed by the input-norm mask, while
+    the pixel still carries the other channels' information into attention.
+    """
+    if masked_attention is None or masked_attention is False:
+        return None
+    if masked_attention is True:
+        footprint = _input_norm_footprint(smoothing_kwargs)
+        if footprint is None:
+            raise ValueError(
+                "masked_attention: true requires the smoothing front-end's footprint "
+                "mask (smoothing_kwargs['mask']), but none is configured — pass the "
+                "mask array explicitly instead."
+            )
+    else:
+        footprint = np.asarray(masked_attention)
+    valid = footprint > 0
+    if valid.ndim == 2:
+        valid = valid.any(axis=-1)
+    token_valid = tokenizer.valid_slots(valid)
+    LOGGER.warning(
+        f"Masked attention enabled: {int(token_valid.sum())}/{len(token_valid)} token "
+        f"slots valid ({int(valid.sum())}/{len(valid)} footprint pixels)"
+    )
+    return token_valid
+
+
 def _make_transformer_body(tokenizer, transformer, jit_compile_body):
     """Build the tokenizer -> transformer forward, optionally as one XLA-compiled subgraph.
 
@@ -182,6 +217,7 @@ class HealpixNestedTokenizer(tf.keras.layers.Layer):
         self.num_top_level_tokens = n_tokens
         self.num_pixels = int(n_tokens * block)
         self._n_pix_in = n_pix_in
+        self._gather_idx_np = gather_idx
         self.gather_idx = tf.constant(gather_idx, dtype=tf.int32)
 
         LOGGER.warning(
@@ -190,6 +226,20 @@ class HealpixNestedTokenizer(tf.keras.layers.Layer):
             f"num_pixels={self.num_pixels}, zero-padded slots={n_pad} "
             f"({'padding-free' if n_pad == 0 else 'PARTIAL superpixels — token_nside < footprint padding'})"
         )
+
+    def valid_slots(self, pixel_valid):
+        """Map per-footprint-pixel validity ``(P,)`` to per-slot validity ``(num_pixels,)``.
+
+        Applies the same reordering as ``call``; the appended zero-pad row (empty slots)
+        is always invalid. Used to hand the transformer its static ``token_valid`` mask.
+        """
+        pixel_valid = np.asarray(pixel_valid).astype(bool).reshape(-1)
+        if len(pixel_valid) != self._n_pix_in:
+            raise ValueError(
+                f"pixel_valid has {len(pixel_valid)} entries, expected {self._n_pix_in} "
+                f"footprint pixels."
+            )
+        return np.concatenate([pixel_valid, [False]])[self._gather_idx_np]
 
     def call(self, x, training=None):
         # (B, P, C) -> (B, P+1, C) with a trailing zero pixel used for empty slots
@@ -219,6 +269,7 @@ class HealpixTransformerNetwork(tf.keras.Model):
         jit_compile_body=False,
         head_dropout_rate=None,
         input_norm=False,
+        masked_attention=False,
     ):
         super().__init__()
 
@@ -236,6 +287,9 @@ class HealpixTransformerNetwork(tf.keras.Model):
         )
 
         self.tokenizer = HealpixNestedTokenizer(smooth_indices, nside, token_nside, in_channels)
+        # masked_attention: exclude masked pixels from the transformer's attention/merges/
+        # pooling instead of feeding them through as zeros (see _masked_attention_token_valid).
+        # Mask constants only — no variables, so toggling keeps the checkpoint lineage.
         self.transformer = HealpixNestedHierarchicalLocalWindowTransformer(
             num_pixels=self.tokenizer.num_pixels,
             nside=nside,
@@ -243,6 +297,7 @@ class HealpixTransformerNetwork(tf.keras.Model):
             in_channels=in_channels,
             num_outputs=num_outputs,
             head_dropout_rate=head_dropout_rate,
+            token_valid=_masked_attention_token_valid(masked_attention, smoothing_kwargs, self.tokenizer),
             **transformer_kwargs,
         )
         # smoothing (sparse, XLA-incompatible) stays eager; the tokenizer->transformer body
@@ -288,6 +343,7 @@ class TransformerMapsPlusCLSNetwork(tf.keras.Model):
         jit_compile_body=False,
         cls_transform="asinh_per_feature",
         input_norm=False,
+        masked_attention=False,
     ):
         super().__init__()
 
@@ -305,12 +361,16 @@ class TransformerMapsPlusCLSNetwork(tf.keras.Model):
         )
 
         self.tokenizer = HealpixNestedTokenizer(smooth_indices, nside, token_nside, in_channels)
+        # masked_attention: exclude masked pixels from the transformer's attention/merges/
+        # pooling instead of feeding them through as zeros (see _masked_attention_token_valid).
+        # Mask constants only — no variables, so toggling keeps the checkpoint lineage.
         self.transformer = HealpixNestedHierarchicalLocalWindowTransformer(
             num_pixels=self.tokenizer.num_pixels,
             nside=nside,
             nside_down=token_nside,
             in_channels=in_channels,
             num_outputs=map_feature_dim,
+            token_valid=_masked_attention_token_valid(masked_attention, smoothing_kwargs, self.tokenizer),
             **transformer_kwargs,
         )
         # smoothing (sparse, XLA-incompatible) stays eager; the tokenizer->transformer body

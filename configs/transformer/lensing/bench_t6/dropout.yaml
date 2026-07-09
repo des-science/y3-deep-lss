@@ -1,0 +1,101 @@
+# Nested hierarchical local-window transformer — lensing, maps + Cls.
+# bench_t5 variant: default.yaml + residual-branch dropout inside the transformer trunk
+# (block_dropout_rate, the ViT "drop rate": Dropout on the attention and MLP branch
+# outputs of every local and global block). The base already regularizes the fusion head
+# (head.dropout_rate 0.1) and the Cls embedding (0.5); this adds the map branch.
+# Variable-free — checkpoint lineage matches default.yaml.
+name: nested_transformer
+
+training:
+  n_steps: 120000
+  output_every: Null
+  checkpoint_every: 10000
+  vali_every: 1000
+  eval_every: Null
+
+optimization:
+  optimizer: adam
+  gradient_clipping:
+    clip_by_value: null
+    clip_by_norm: null
+    clip_by_global_norm: 1.0
+  mutual_info_loss:
+    learning_rate: 1.0e-4
+    optimizer_kwargs:
+      beta_1: 0.9
+      beta_2: 0.999
+    scheduler: Null
+    warmup_steps: 5000
+    warmup_init_learning_rate: 1.0e-5
+    decay_alpha: 0.0
+    ema_momentum: null
+
+network:
+  name: nested_transformer
+  token_nside: 16
+  z_bank_size: Null
+  max_checkpoints: 50
+  jit_compile_body: true
+  precision: bfloat16
+  input_norm: true
+  # exclude footprint-masked pixels from attention/merges/pooling (static mask
+  # constants only — no checkpoint variables, toggling keeps the lineage)
+  masked_attention: false
+  map_feature_dim: 512
+  head:
+    dropout_rate: 0.1
+  cls:
+    n_bins: 16
+    transform: asinh_per_feature
+    asinh_default_scale: null
+    embedding_layers: [512, 512, 512, 512]
+    embedding_dropout_rate: 0.1
+  kwargs: # -> HealpixNestedHierarchicalLocalWindowTransformer
+    base_embed_dim: 32
+    growth: double
+    num_heads: 4
+    window_levels: 3
+    local_blocks_per_level: 1
+    global_blocks: 1
+    mlp_ratio: 4
+    layerscale_init: null
+    fp32_softmax: true
+    # residual-branch dropout inside every local and global block (variable-free).
+    # The same rate hits both residual branches of all 7 blocks (3 local + 4 global),
+    # so keep it small
+    block_dropout_rate: 0.1
+    # positional encoding for the local window attention: null (position-free) or
+    # geodesic (distance-kernel attention bias, zero-init so it starts at the baseline)
+    pos_encoding: null
+    # patch merge: concat (order-sensitive concat+Dense) or deepsets
+    # (child-permutation-invariant, requires a pos_encoding)
+    merge_op: concat
+
+dset:
+  training:
+    common:
+      is_eval: False
+      n_readers: 16
+      n_prefetch: 4
+      n_workers: 128
+    grid:
+      local_batch_size: 20
+      file_name_shuffle_buffer: 64
+      examples_shuffle_buffer: 1024
+  validation:
+    n_batches: 100
+    common:
+      is_eval: True
+      n_readers: 8
+      n_prefetch: 2
+      n_workers: 16
+    grid:
+      local_batch_size: 16
+  eval:
+    common:
+      is_eval: True
+      n_readers: 16
+      n_prefetch: 2
+      n_workers: 128
+    grid:
+      local_batch_size: 16
