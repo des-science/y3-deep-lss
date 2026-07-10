@@ -8,7 +8,7 @@ Author: Arne Thomsen
 import tensorflow as tf
 from deepsphere import healpy_layers
 
-from deep_lss.nets.regression_head import get_regression_head
+from deep_lss.nets.heads.regression_head import get_regression_head
 from msfm.utils import logger
 
 LOGGER = logger.get_logger(__file__)
@@ -127,7 +127,7 @@ class ResNetLayers:
     def get_head_layers_no_flatten(self):
         """Return the regression head layers without the leading Flatten layer.
 
-        Used by MapsPlusCLSNetwork which performs its own flatten-and-concat step before the head.
+        Used by ResNetMapsPlusCLSNetwork which performs its own flatten-and-concat step before the head.
         Only meaningful for head_type='dense'; for 'conv' heads the full head is returned.
         """
         return self._head_layers_no_flatten

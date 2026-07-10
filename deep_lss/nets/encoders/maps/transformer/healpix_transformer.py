@@ -5,7 +5,7 @@ import numpy as np
 import tensorflow as tf
 from msfm.utils import logger
 
-from .nested_transfomer import NestedHierarchicalLocalWindowTransformer
+from .nested_transformer import NestedHierarchicalLocalWindowTransformer
 
 LOGGER = logger.get_logger(__file__)
 

@@ -83,26 +83,3 @@ def get_regression_head(
         raise ValueError(f"Unknown regression head type: {head_type}")
 
     return layers
-
-
-def get_cls_embedding_layers(hidden_layers, dropout_rate=None, activation="relu"):
-    """Build an MLP to embed binned Cls before fusion with map features in MapsPlusCLSNetwork.
-
-    Args:
-        hidden_layers: List of int widths, e.g. ``[512, 512, 512, 512]``.
-            ``None`` or empty list → returns ``[]`` (no embedding).
-        dropout_rate: Optional float; a single Dropout appended after all hidden layers.
-        activation: Activation for hidden Dense layers.
-
-    Returns:
-        List of Keras layers: interleaved Dense + LayerNorm, with optional trailing Dropout.
-    """
-    if not hidden_layers:
-        return []
-    layers = []
-    for h in hidden_layers:
-        layers.append(tf.keras.layers.Dense(h, activation=activation))
-        layers.append(tf.keras.layers.LayerNormalization(axis=-1))
-    if dropout_rate is not None:
-        layers.append(tf.keras.layers.Dropout(dropout_rate))
-    return layers

@@ -65,7 +65,7 @@ def run_single(args):
     from msfm.utils import input_output, files, parameters
     from deep_lss.utils import configuration, optimization
     from deep_lss.models.grid_model import GridLossModel
-    from deep_lss.nets.transformer_networks import HealpixTransformerNetwork
+    from deep_lss.nets.encoders.maps.transformer.network import HealpixTransformerNetwork
 
     net_conf = input_output.read_yaml(args.net_config)
     dlss_conf = configuration.read_split_configs(args.probes_config, args.scales_config)

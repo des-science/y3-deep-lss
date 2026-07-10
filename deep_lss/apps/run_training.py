@@ -57,13 +57,12 @@ from deep_lss.models.delta_model import DeltaLossModel
 from deep_lss.models.grid_model import GridLossModel
 from deep_lss.utils.distribute import HorovodStrategy
 from deep_lss.nets import NETWORKS, TRANSFORMER_NETWORKS
-from deep_lss.nets.maps_plus_cls_network import MapsPlusCLSNetwork
-from deep_lss.nets.transformer_networks import (
-    HealpixTransformerNetwork,
-    TransformerMapsPlusCLSNetwork,
-)
-from deep_lss.nets.input_normalization import compute_input_norm_stats
-from deep_lss.nets.regression_head import get_cls_embedding_layers, get_regression_head
+from deep_lss.nets.composite.resnet_maps_plus_cls import ResNetMapsPlusCLSNetwork
+from deep_lss.nets.encoders.maps.transformer.network import HealpixTransformerNetwork
+from deep_lss.nets.composite.transformer_maps_plus_cls import TransformerMapsPlusCLSNetwork
+from deep_lss.nets.layers.maps.input_normalization import compute_input_norm_stats
+from deep_lss.nets.heads.regression_head import get_regression_head
+from deep_lss.nets.layers.cls.embedding import get_cls_embedding_layers
 
 LOGGER = logger.get_logger(__file__)
 
@@ -514,7 +513,7 @@ def training(args=None):
         )
     if return_cls:
         LOGGER.warning(
-            f"cls block detected in net_conf['network'] — will build MapsPlusCLSNetwork "
+            f"cls block detected in net_conf['network'] — will build ResNetMapsPlusCLSNetwork "
             f"(cls_transform={cls_transform})"
         )
 
@@ -721,13 +720,13 @@ def training(args=None):
             )
             LOGGER.info(f"Loaded a network specification of type {NETWORKS[net_conf['network']['name']]}")
             LOGGER.info(f"Network kwargs including regularization: {net_conf['network']['kwargs']}")
-            # Build a MapsPlusCLSNetwork: HealpyGCNN for maps + binned log-Cls concatenated.
+            # Build a ResNetMapsPlusCLSNetwork: HealpyGCNN for maps + binned log-Cls concatenated.
             # The model is passed pre-built so BaseModel uses it directly without re-wrapping in HealpyGCNN.
             _, l_min_per_pair, l_max_per_pair = configuration.get_cls_bounds_per_pair(msfm_conf, dlss_conf)
             n_cls_bins = cls_conf.get("n_bins", 16)
             cls_emb_widths = cls_conf.get("embedding_layers", [512, 512, 512, 512])
             cls_emb_dropout = cls_conf.get("embedding_dropout_rate", None)
-            network = MapsPlusCLSNetwork(
+            network = ResNetMapsPlusCLSNetwork(
                 conv_layers=net_spec.get_conv_layers(),
                 cls_embedding_layers=get_cls_embedding_layers(cls_emb_widths, dropout_rate=cls_emb_dropout),
                 regression_head_layers=net_spec.get_head_layers_no_flatten(),
@@ -747,7 +746,7 @@ def training(args=None):
             # because input_shape=None is passed below (tuple inputs can't use the
             # standard build path). Build the inner GCNN directly with the map shape.
             network.gcnn.build((effective_local_batch_size, len(smooth_indices), n_z_bins))
-            # Trace the full MapsPlusCLSNetwork so that network.built=True and BaseModel
+            # Trace the full ResNetMapsPlusCLSNetwork so that network.built=True and BaseModel
             # can call network.summary(). gcnn.build() only builds the map branch.
             network(
                 (tf.zeros((2, len(smooth_indices), n_z_bins)),

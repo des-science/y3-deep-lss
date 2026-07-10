@@ -223,7 +223,7 @@ def _get_effective_local_batch_size(loss_function, net_conf, mode, n_params):
 def _get_split_probe_specs(
     loss_function, msfm_conf, dlss_conf, net_conf, probe_nsides, n_side, data_vec_pix, mask_dict, dir_base, mode
 ):
-    """Build the per-probe smoothing spec consumed by ``deep_lss.nets.split_smoothing.PerProbeSmoothing``.
+    """Build the per-probe smoothing spec consumed by ``deep_lss.nets.layers.maps.smoothing.PerProbeSmoothing``.
 
     One ``HealpySmoothing`` kwargs dict per active probe at that probe's nside, following the same
     conventions as the single-kernel path: white noise sigma scaled by (probe_nside / n_side) and
@@ -318,7 +318,7 @@ def get_smoothing_kwargs(loss_function, msfm_conf, dlss_conf, net_conf, dir_base
     Returns:
         dict: keyword arguments for deepsphere.healpy_layers.HealpySmoothing, or — when
             ``network.smooth_nside`` requests mixed per-probe nsides — a ``{"split_probes": [...]}``
-            spec for ``deep_lss.nets.split_smoothing.PerProbeSmoothing``.
+            spec for ``deep_lss.nets.layers.maps.smoothing.PerProbeSmoothing``.
     """
     # msfm
     n_side = msfm_conf["analysis"]["n_side"]

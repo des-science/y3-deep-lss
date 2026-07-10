@@ -21,9 +21,11 @@ from msfm.utils import logger, files
 from deep_lss.utils import configuration, distribute, evaluation
 from deep_lss.models.base_model import BaseModel
 from deep_lss.nets import NETWORKS, TRANSFORMER_NETWORKS
-from deep_lss.nets.maps_plus_cls_network import MapsPlusCLSNetwork
-from deep_lss.nets.transformer_networks import HealpixTransformerNetwork, TransformerMapsPlusCLSNetwork
-from deep_lss.nets.regression_head import get_cls_embedding_layers, get_regression_head
+from deep_lss.nets.composite.resnet_maps_plus_cls import ResNetMapsPlusCLSNetwork
+from deep_lss.nets.encoders.maps.transformer.network import HealpixTransformerNetwork
+from deep_lss.nets.composite.transformer_maps_plus_cls import TransformerMapsPlusCLSNetwork
+from deep_lss.nets.heads.regression_head import get_regression_head
+from deep_lss.nets.layers.cls.embedding import get_cls_embedding_layers
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 warnings.filterwarnings("ignore", category=RuntimeWarning)
@@ -211,7 +213,7 @@ if __name__ == "__main__":
             "(see configs/transformer/lensing/maps+cls.yaml)."
         )
     if return_cls:
-        LOGGER.warning("cls block detected in net_conf['network'] — building MapsPlusCLSNetwork for evaluation")
+        LOGGER.warning("cls block detected in net_conf['network'] — building ResNetMapsPlusCLSNetwork for evaluation")
 
     max_batch_size = net_conf["dset"]["eval"]["grid"]["local_batch_size"]
 
@@ -323,7 +325,7 @@ if __name__ == "__main__":
                 n_cls_bins = cls_conf.get("n_bins", 16)
                 cls_emb_widths = cls_conf.get("embedding_layers", [512, 512, 512, 512])
                 cls_emb_dropout = cls_conf.get("embedding_dropout_rate", None)
-                network = MapsPlusCLSNetwork(
+                network = ResNetMapsPlusCLSNetwork(
                     conv_layers=net_spec.get_conv_layers(),
                     cls_embedding_layers=get_cls_embedding_layers(cls_emb_widths, dropout_rate=cls_emb_dropout),
                     regression_head_layers=net_spec.get_head_layers_no_flatten(),
@@ -339,7 +341,7 @@ if __name__ == "__main__":
                     cls_transform=cls_conf.get("transform", "asinh_per_feature"),
                 )
                 network.gcnn.build((max_batch_size, len(smooth_indices), n_z_bins))
-                # Trace the full MapsPlusCLSNetwork so that network.built=True and BaseModel
+                # Trace the full ResNetMapsPlusCLSNetwork so that network.built=True and BaseModel
                 # can call network.summary(). gcnn.build() only builds the map branch.
                 network(
                     (tf.zeros((2, len(smooth_indices), n_z_bins)), tf.zeros((2, 3 * n_side, len(l_min_per_pair)))),
