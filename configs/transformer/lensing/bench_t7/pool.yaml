@@ -1,23 +1,15 @@
 # Nested hierarchical local-window transformer — lensing, maps + Cls.
-# bench_t5 variant: default.yaml + patchified stem (stem_levels 1, base_embed_dim 32 -> 64).
-# The finest nested level is folded into the input projection (one linear embed of
-# 4 pixels x 4 channels = 16 values per nside-256 patch — lossless, since 64 >= 16),
-# so the hierarchy starts one level coarser and the memory-dominant nside-512 stage
-# disappears. base_embed_dim doubles to keep the top dim at 1024 (body dims
-# [64, 128, 256, 512, 1024]); under growth: double the per-stage dense FLOPs are
-# ~constant, so this is roughly cost-neutral vs default.yaml. The 13.7 arcmin token
-# scale stays at ~Nyquist of the finest smoothing FWHM (12.6 arcmin); stem_levels: 2
-# (27.5 arcmin patches) is the aggressive follow-up and would start to linearize real
-# structure for the two least-smoothed bins.
+# bench_t7 variant: bench_t6/default.yaml (the winning base architecture) + learned-query attention pooling over the top-level
+# tokens (pool: mean reproduces the plain mean pool). Attacks the compression
+# bottleneck of the uniform mean pool: a learned-query cross-attention pool (strict
+# generalization of the mean) lets the readout weight regions.
 name: nested_transformer
 
 training:
-  # sized for ~11 h train on 4x GH200 at local_batch_size 48 (batch 48 -> 79.6 GB peak, in
-  # the NCCL-safe memory band; batch 64 OOMs, see benchmark_t6.sh). One hierarchical level
-  # fewer than default.yaml -> much lighter, so a higher batch fits.
-  # real ~301 ms/step (synthetic single-GPU 207.0 ms x K=1.45) -> 130k ~= 10.9 h
-  # (12 h wall leaves ~1 h for eval+inference).
-  n_steps: 130000
+  # inherits the bench_t6/default.yaml base sizing: ~11 h on 4x GH200 at local_batch_size 20
+  # (150k x ~264 ms real/step; 12 h wall leaves ~1 h for eval+inference). This variant adds one
+  # small, near-iso-cost feature on top of the base — re-size only if a benchmark shows a slowdown.
+  n_steps: 150000
   output_every: Null
   checkpoint_every: 10000
   vali_every: 1000
@@ -61,13 +53,10 @@ network:
     embedding_layers: [512, 512, 512, 512]
     embedding_dropout_rate: 0.1
   kwargs: # -> HealpixNestedHierarchicalLocalWindowTransformer
-    base_embed_dim: 64 # the variant: doubled so the top dim stays 1024 with 4 body levels
+    base_embed_dim: 32
     growth: double
     num_heads: 4
     window_levels: 3
-    # the variant: patchified stem — fold the finest nested level into the input
-    # projection; the hierarchy starts at nside 256 with 4 local stages instead of 5
-    stem_levels: 1
     local_blocks_per_level: 1
     global_blocks: 1
     mlp_ratio: 4
@@ -81,6 +70,10 @@ network:
     # patch merge: concat (order-sensitive concat+Dense) or deepsets
     # (child-permutation-invariant, requires a pos_encoding)
     merge_op: concat
+    # the variant: learned-query attention pooling over the top-level tokens
+    # (pool: mean reproduces the plain mean pool)
+    pool: attention
+    pool_queries: 1
 
 dset:
   training:
@@ -90,7 +83,7 @@ dset:
       n_prefetch: 4
       n_workers: 128
     grid:
-      local_batch_size: 48  # 79.6 GB peak (NCCL-safe band); 64 OOMs. See benchmark_t6.sh.
+      local_batch_size: 20  # base sizing (default.yaml: 81.6 GB peak, NCCL-safe band). See benchmark_t6.sh.
       file_name_shuffle_buffer: 64
       examples_shuffle_buffer: 1024
   validation:

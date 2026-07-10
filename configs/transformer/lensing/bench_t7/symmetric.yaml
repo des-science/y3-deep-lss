@@ -1,13 +1,14 @@
 # Nested hierarchical local-window transformer — lensing, maps + Cls.
-# bench_t5 variant: default.yaml + residual-branch dropout inside the transformer trunk
-# (block_dropout_rate, the ViT "drop rate": Dropout on the attention and MLP branch
-# outputs of every local and global block). The base already regularizes the fusion head
-# (head.dropout_rate 0.1) and the Cls embedding (0.5); this adds the map branch.
-# Variable-free — checkpoint lineage matches default.yaml.
+# bench_t7 variant: bench_t6/default.yaml (the winning base architecture) + symmetry-respecting
+# local pathway (moved here from ../maps_symmetric.yaml, rebased from maps-only onto the maps+cls base).
 name: nested_transformer
 
 training:
-  n_steps: 120000
+  # the symmetry-respecting pathway (geodesic bias + deepsets merge) is the one heavier variant:
+  # at the base local_batch_size 20 it peaks 89.6 GB, above the ~85 GB NCCL-safe band. Sized
+  # instead at local_batch_size 18 -> 82.1 GB peak (safe), 175.1 ms synthetic x K=1.45 = 254 ms
+  # real/step; 150k ~= 10.6 h on 4x GH200 (benchmark_t7_symmetric.sh).
+  n_steps: 150000
   output_every: Null
   checkpoint_every: 10000
   vali_every: 1000
@@ -60,16 +61,13 @@ network:
     mlp_ratio: 4
     layerscale_init: null
     fp32_softmax: true
-    # residual-branch dropout inside every local and global block (variable-free).
-    # The same rate hits both residual branches of all 7 blocks (3 local + 4 global),
-    # so keep it small
-    block_dropout_rate: 0.1
-    # positional encoding for the local window attention: null (position-free) or
-    # geodesic (distance-kernel attention bias, zero-init so it starts at the baseline)
-    pos_encoding: null
-    # patch merge: concat (order-sensitive concat+Dense) or deepsets
-    # (child-permutation-invariant, requires a pos_encoding)
-    merge_op: concat
+    # residual-branch dropout inside every local and global block (variable-free)
+    block_dropout_rate: null
+    # symmetry-respecting local pathway: geodesic distance-kernel attention bias
+    # (zero-init, starts identical to the baseline) + permutation-invariant merge
+    # (deepsets requires a pos_encoding — the merge discards the child order)
+    pos_encoding: geodesic
+    merge_op: deepsets
 
 dset:
   training:
@@ -79,7 +77,7 @@ dset:
       n_prefetch: 4
       n_workers: 128
     grid:
-      local_batch_size: 20
+      local_batch_size: 18  # 82.1 GB peak (NCCL-safe); base b20 = 89.6 GB is above the band. See benchmark_t7_symmetric.sh.
       file_name_shuffle_buffer: 64
       examples_shuffle_buffer: 1024
   validation:

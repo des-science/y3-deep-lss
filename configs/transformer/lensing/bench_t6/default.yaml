@@ -4,7 +4,11 @@
 name: nested_transformer
 
 training:
-  n_steps: 120000
+  # sized for ~11 h train on 4x GH200 at local_batch_size 20 (batch 20 -> 81.6 GB peak, in
+  # the NCCL-safe memory band; batch 24 -> 95.3 GB is a time-bomb, see benchmark_t6.sh).
+  # real ~264 ms/step (synthetic single-GPU 181.6 ms x K=1.45) -> 150k ~= 11.0 h
+  # (12 h wall leaves ~1 h for eval+inference).
+  n_steps: 150000
   output_every: Null
   checkpoint_every: 10000
   vali_every: 1000
@@ -74,7 +78,7 @@ dset:
       n_prefetch: 4
       n_workers: 128
     grid:
-      local_batch_size: 20
+      local_batch_size: 20  # 81.6 GB peak (NCCL-safe band); 24 -> 95.3 GB time-bomb, 32 OOMs. See benchmark_t6.sh.
       file_name_shuffle_buffer: 64
       examples_shuffle_buffer: 1024
   validation:

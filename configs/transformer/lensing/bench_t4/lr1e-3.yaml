@@ -1,3 +1,5 @@
+# Nested hierarchical local-window transformer — lensing, maps + Cls.
+# The `cls:` block enables the Cls branch, fused with the transformer map features.
 name: nested_transformer
 
 training:
@@ -14,7 +16,7 @@ optimization:
     clip_by_norm: null
     clip_by_global_norm: 1.0
   mutual_info_loss:
-    learning_rate: 1.0e-4
+    learning_rate: 1.0e-3
     optimizer_kwargs:
       beta_1: 0.9
       beta_2: 0.999

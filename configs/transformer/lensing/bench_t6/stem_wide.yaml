@@ -17,7 +17,7 @@ training:
   # fewer than default.yaml -> much lighter, so a higher batch fits.
   # real ~301 ms/step (synthetic single-GPU 207.0 ms x K=1.45) -> 130k ~= 10.9 h
   # (12 h wall leaves ~1 h for eval+inference).
-  n_steps: 130000
+  n_steps: 120000
   output_every: Null
   checkpoint_every: 10000
   vali_every: 1000
@@ -61,7 +61,7 @@ network:
     embedding_layers: [512, 512, 512, 512]
     embedding_dropout_rate: 0.1
   kwargs: # -> HealpixNestedHierarchicalLocalWindowTransformer
-    base_embed_dim: 64 # the variant: doubled so the top dim stays 1024 with 4 body levels
+    base_embed_dim: 128
     growth: double
     num_heads: 4
     window_levels: 3
@@ -90,7 +90,7 @@ dset:
       n_prefetch: 4
       n_workers: 128
     grid:
-      local_batch_size: 48  # 79.6 GB peak (NCCL-safe band); 64 OOMs. See benchmark_t6.sh.
+      local_batch_size: 28
       file_name_shuffle_buffer: 64
       examples_shuffle_buffer: 1024
   validation:

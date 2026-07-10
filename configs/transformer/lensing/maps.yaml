@@ -18,7 +18,7 @@ optimization:
     optimizer_kwargs:
       beta_1: 0.9
       beta_2: 0.999
-    scheduler: Null
+    scheduler: cosine
     warmup_steps: 5000
     warmup_init_learning_rate: 1.0e-5
     decay_alpha: 0.0

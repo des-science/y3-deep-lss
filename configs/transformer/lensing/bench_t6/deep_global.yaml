@@ -1,6 +1,3 @@
-# Nested hierarchical local-window transformer — lensing, maps + Cls.
-# bench_t5 variant: default.yaml + symmetry-respecting local pathway (moved here from
-# ../maps_symmetric.yaml, rebased from maps-only onto the maps+cls base).
 name: nested_transformer
 
 training:
@@ -21,7 +18,7 @@ optimization:
     optimizer_kwargs:
       beta_1: 0.9
       beta_2: 0.999
-    scheduler: Null
+    scheduler: cosine
     warmup_steps: 5000
     warmup_init_learning_rate: 1.0e-5
     decay_alpha: 0.0
@@ -35,9 +32,6 @@ network:
   jit_compile_body: true
   precision: bfloat16
   input_norm: true
-  # exclude footprint-masked pixels from attention/merges/pooling (static mask
-  # constants only — no checkpoint variables, toggling keeps the lineage)
-  masked_attention: false
   map_feature_dim: 512
   head:
     dropout_rate: 0.1
@@ -47,23 +41,15 @@ network:
     asinh_default_scale: null
     embedding_layers: [512, 512, 512, 512]
     embedding_dropout_rate: 0.1
-  kwargs: # -> HealpixNestedHierarchicalLocalWindowTransformer
+  kwargs: # -> NestedHierarchicalLocalWindowTransformer
     base_embed_dim: 32
     growth: double
     num_heads: 4
     window_levels: 3
     local_blocks_per_level: 1
-    global_blocks: 1
+    global_blocks: 4
     mlp_ratio: 4
     layerscale_init: null
-    fp32_softmax: true
-    # residual-branch dropout inside every local and global block (variable-free)
-    block_dropout_rate: null
-    # symmetry-respecting local pathway: geodesic distance-kernel attention bias
-    # (zero-init, starts identical to the baseline) + permutation-invariant merge
-    # (deepsets requires a pos_encoding — the merge discards the child order)
-    pos_encoding: geodesic
-    merge_op: deepsets
 
 dset:
   training:

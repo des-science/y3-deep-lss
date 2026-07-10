@@ -1,8 +1,7 @@
 # Nested hierarchical local-window transformer — lensing, maps + Cls.
-# bench_t5 variant: default.yaml + learned-query attention pooling over the top-level
-# tokens (pool: mean reproduces the plain mean pool). Attacks the compression
-# bottleneck of the uniform mean pool: a learned-query cross-attention pool (strict
-# generalization of the mean) lets the readout weight regions.
+# bench_t4 optimizer sweep: constant LR (== t3_wide_cls reference) + weight EMA (0.9999).
+# Isolates the effect of EMA. Note: ema_momentum != null forces the non-legacy Adam path,
+# a minor implementation change vs the legacy-Adam reference.
 name: nested_transformer
 
 training:
@@ -27,7 +26,7 @@ optimization:
     warmup_steps: 5000
     warmup_init_learning_rate: 1.0e-5
     decay_alpha: 0.0
-    ema_momentum: null
+    ema_momentum: 0.9999
 
 network:
   name: nested_transformer
@@ -37,9 +36,6 @@ network:
   jit_compile_body: true
   precision: bfloat16
   input_norm: true
-  # exclude footprint-masked pixels from attention/merges/pooling (static mask
-  # constants only — no checkpoint variables, toggling keeps the lineage)
-  masked_attention: false
   map_feature_dim: 512
   head:
     dropout_rate: 0.1
@@ -49,28 +45,15 @@ network:
     asinh_default_scale: null
     embedding_layers: [512, 512, 512, 512]
     embedding_dropout_rate: 0.1
-  kwargs: # -> HealpixNestedHierarchicalLocalWindowTransformer
+  kwargs: # -> NestedHierarchicalLocalWindowTransformer
     base_embed_dim: 32
     growth: double
     num_heads: 4
     window_levels: 3
     local_blocks_per_level: 1
-    global_blocks: 1
+    global_blocks: 4
     mlp_ratio: 4
     layerscale_init: null
-    fp32_softmax: true
-    # residual-branch dropout inside every local and global block (variable-free)
-    block_dropout_rate: null
-    # positional encoding for the local window attention: null (position-free) or
-    # geodesic (distance-kernel attention bias, zero-init so it starts at the baseline)
-    pos_encoding: null
-    # patch merge: concat (order-sensitive concat+Dense) or deepsets
-    # (child-permutation-invariant, requires a pos_encoding)
-    merge_op: concat
-    # the variant: learned-query attention pooling over the top-level tokens
-    # (pool: mean reproduces the plain mean pool)
-    pool: attention
-    pool_queries: 1
 
 dset:
   training:

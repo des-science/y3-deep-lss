@@ -1,3 +1,7 @@
+# Nested hierarchical local-window transformer — lensing, maps + Cls.
+# bench_t4 optimizer sweep: AdamW + weight_decay 0.05 with the cosine schedule (peak 1e-4).
+# Isolates AdamW/weight-decay vs cosine.yaml (same peak LR, same schedule) — the standard
+# ViT/Swin/DeiT recipe. weight_decay is forwarded via optimizer_kwargs into tf.keras AdamW.
 name: nested_transformer
 
 training:
@@ -8,7 +12,7 @@ training:
   eval_every: Null
 
 optimization:
-  optimizer: adam
+  optimizer: adamw
   gradient_clipping:
     clip_by_value: null
     clip_by_norm: null
@@ -18,6 +22,7 @@ optimization:
     optimizer_kwargs:
       beta_1: 0.9
       beta_2: 0.999
+      weight_decay: 0.05
     scheduler: cosine
     warmup_steps: 5000
     warmup_init_learning_rate: 1.0e-5

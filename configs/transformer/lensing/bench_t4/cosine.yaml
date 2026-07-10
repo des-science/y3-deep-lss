@@ -1,6 +1,5 @@
 # Nested hierarchical local-window transformer — lensing, maps + Cls.
-# bench_t5 variant: default.yaml + masked attention (moved here from ../maps_masked.yaml,
-# rebased from maps-only onto the maps+cls base).
+# The `cls:` block enables the Cls branch, fused with the transformer map features.
 name: nested_transformer
 
 training:
@@ -21,7 +20,7 @@ optimization:
     optimizer_kwargs:
       beta_1: 0.9
       beta_2: 0.999
-    scheduler: Null
+    scheduler: cosine
     warmup_steps: 5000
     warmup_init_learning_rate: 1.0e-5
     decay_alpha: 0.0
@@ -35,10 +34,6 @@ network:
   jit_compile_body: true
   precision: bfloat16
   input_norm: true
-  # exclude footprint-masked pixels from attention/merges/pooling (masked attention with
-  # the smoothing front-end's mask) instead of feeding them through as zeros. Static mask
-  # constants only — no checkpoint variables, so the lineage matches default.yaml.
-  masked_attention: true
   map_feature_dim: 512
   head:
     dropout_rate: 0.1
@@ -48,24 +43,15 @@ network:
     asinh_default_scale: null
     embedding_layers: [512, 512, 512, 512]
     embedding_dropout_rate: 0.1
-  kwargs: # -> HealpixNestedHierarchicalLocalWindowTransformer
+  kwargs: # -> NestedHierarchicalLocalWindowTransformer
     base_embed_dim: 32
     growth: double
     num_heads: 4
     window_levels: 3
     local_blocks_per_level: 1
-    global_blocks: 1
+    global_blocks: 4
     mlp_ratio: 4
     layerscale_init: null
-    fp32_softmax: true
-    # residual-branch dropout inside every local and global block (variable-free)
-    block_dropout_rate: null
-    # positional encoding for the local window attention: null (position-free) or
-    # geodesic (distance-kernel attention bias, zero-init so it starts at the baseline)
-    pos_encoding: null
-    # patch merge: concat (order-sensitive concat+Dense) or deepsets
-    # (child-permutation-invariant, requires a pos_encoding)
-    merge_op: concat
 
 dset:
   training:

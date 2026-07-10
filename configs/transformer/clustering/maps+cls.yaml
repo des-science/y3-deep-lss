@@ -23,7 +23,7 @@ optimization:
     optimizer_kwargs:
       beta_1: 0.9
       beta_2: 0.999
-    scheduler: Null
+    scheduler: cosine
     warmup_steps: 5000
     warmup_init_learning_rate: 1.0e-5
     decay_alpha: 0.0
@@ -50,7 +50,7 @@ network:
     transform: asinh_per_feature
     asinh_default_scale: null
     embedding_layers: [512, 512, 512, 512]
-    embedding_dropout_rate: 0.5
+    embedding_dropout_rate: 0.1
   kwargs: # -> NestedHierarchicalLocalWindowTransformer
     base_embed_dim: 32
     growth: double
@@ -69,7 +69,11 @@ dset:
       n_prefetch: 4
       n_workers: 128
     grid:
-      local_batch_size: 72
+      # local_batch_size 48 (not 72): the run is I/O-bound, not compute-bound. Maps are read at
+      # native res then downsampled to 256, so the light nside-256 network starves — step time scales
+      # with the ~bytes/step (batch), and batch 72 gave ~2.2 steps/s => ~15 h for 120k. Batch 48
+      # (192 global) => ~3.3 steps/s => ~10 h, keeping n_steps uniform with the other probes.
+      local_batch_size: 48
       file_name_shuffle_buffer: 64
       examples_shuffle_buffer: 1024
   validation:

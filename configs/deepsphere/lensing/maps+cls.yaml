@@ -34,19 +34,26 @@ network:
   max_checkpoints: 50
   save_second_to_last_layer: False
   z_bank_size: Null
-  # number of ell bins per cross pair
-  cls_n_bins: 16
-  # Cls transform in the Cls branch (ClsBinningAndTransformLayer):
-  #   log1p_fixed        -> sign(x)*log1p(|x|/1e-10) with a fixed knee (default if omitted)
-  #   asinh_per_feature  -> asinh(x/s), s = median|C_l| per (pair, ell-bin) fitted from the cached
-  #                         binned Cls ({data_dir}/cls/rebinned_nb{cls_n_bins}_{scales}.h5) and
-  #                         stored in the checkpoint. Falls back to a uniform asinh_default_scale
-  #                         (with a warning) if the cache is absent.
-  cls_transform: asinh_per_feature
-  asinh_default_scale: 1.0e-10
-  # MLP widths for the Cls embedding branch (Dense→LN per entry); [] to disable
-  cls_embedding_layers: [1024, 1024, 1024, 1024]
-  cls_embedding_dropout_rate: 0.5
+  # Maps+Cls: the presence of this `cls:` block enables the Cls branch (MapsPlusCLSNetwork); the
+  # map GCNN and the binned angular power spectra are embedded separately and concatenated before
+  # the regression head. Same schema as configs/transformer/lensing/maps+cls.yaml — but note that
+  # `map_feature_dim` is transformer-only (the GCNN trunk sets its own feature dim) and is
+  # intentionally omitted here.
+  cls:
+    # number of ell bins per cross pair
+    n_bins: 16
+    # Cls transform in the Cls branch (ClsBinningAndTransformLayer):
+    #   log1p_fixed        -> sign(x)*log1p(|x|/1e-10) with a fixed knee
+    #   asinh_per_feature  -> asinh(x/s), s = median|C_l| per (pair, ell-bin) fitted from the cached
+    #                         binned Cls ({data_dir}/cls/rebinned_nb{n_bins}_{scales}.h5) and stored
+    #                         in the checkpoint.
+    transform: asinh_per_feature
+    # fallback uniform scale used only if the Cls cache is absent; null => require the cache
+    # (strict — the per-feature scale is the whole point of asinh_per_feature)
+    asinh_default_scale: null
+    # MLP widths for the Cls embedding branch (Dense→LN per entry); [] to disable
+    embedding_layers: [512, 512, 512, 512]
+    embedding_dropout_rate: 0.1
   kwargs:
     base_channels: 32
     # depth

@@ -27,7 +27,7 @@ optimization:
     optimizer_kwargs:
       beta_1: 0.9
       beta_2: 0.999
-    scheduler: Null
+    scheduler: cosine
     warmup_steps: 5000
     warmup_init_learning_rate: 1.0e-5
     decay_alpha: 0.0
@@ -54,7 +54,7 @@ network:
     transform: asinh_per_feature
     asinh_default_scale: null
     embedding_layers: [512, 512, 512, 512]
-    embedding_dropout_rate: 0.5
+    embedding_dropout_rate: 0.1
   kwargs: # -> NestedHierarchicalLocalWindowTransformer
     base_embed_dim: 32
     growth: double
