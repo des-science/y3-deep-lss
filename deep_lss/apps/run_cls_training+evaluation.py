@@ -12,7 +12,8 @@ from msfm.utils import files, logger
 LOGGER = logger.get_logger(__file__)
 
 from deep_lss.models.grid_model import GridLossModel
-from deep_lss.nets.mlp import AsinhScaleLayer, MultiLayerPerceptron, PCAWhiteningLayer
+from deep_lss.nets.encoders.cls.mlp import MultiLayerPerceptron
+from deep_lss.nets.layers.cls.whitening import AsinhScaleLayer, PCAWhiteningLayer
 from deep_lss.utils import cls_evaluation, configuration, evaluation
 
 from msi.utils import dataset

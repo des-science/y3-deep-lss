@@ -8,7 +8,7 @@ Author: Arne Thomsen
 import tensorflow as tf
 from deepsphere import healpy_layers
 
-from deep_lss.nets.regression_head import get_regression_head
+from deep_lss.nets.heads.regression_head import get_regression_head
 
 
 class OneDResidualBlock(tf.keras.Model):

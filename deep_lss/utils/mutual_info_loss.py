@@ -13,9 +13,9 @@ Lanzieri et al. 2024 https://arxiv.org/pdf/2407.10877
 
 import tensorflow as tf
 
-from deep_lss.nets.mlp import MultiLayerPerceptron
-from deep_lss.nets.gaussian_mixture import GaussianMixtureModel
-from deep_lss.nets.normalizing_flow import NormalizingFlowModel
+from deep_lss.nets.encoders.cls.mlp import MultiLayerPerceptron
+from deep_lss.nets.estimators.gaussian_mixture import GaussianMixtureModel
+from deep_lss.nets.estimators.normalizing_flow import NormalizingFlowModel
 
 # Jensen-Shannon-divergence estimator #################################################################################
 
