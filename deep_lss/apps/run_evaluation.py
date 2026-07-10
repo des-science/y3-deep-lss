@@ -274,7 +274,11 @@ if __name__ == "__main__":
                     n_cls_bins=n_cls_bins,
                     l_min_per_pair=l_min_per_pair,
                     l_max_per_pair=l_max_per_pair,
-                    cls_embedding_layers=get_cls_embedding_layers(cls_emb_widths, dropout_rate=cls_emb_dropout),
+                    cls_embedding_layers=get_cls_embedding_layers(
+                        cls_emb_widths,
+                        dropout_rate=cls_emb_dropout,
+                        dropout_per_layer=cls_conf.get("embedding_dropout_per_layer", True),
+                    ),
                     regression_head_layers=regression_head_layers,
                     cls_transform=cls_conf.get("transform", "asinh_per_feature"),
                     jit_compile_body=jit_compile_body,
@@ -327,7 +331,11 @@ if __name__ == "__main__":
                 cls_emb_dropout = cls_conf.get("embedding_dropout_rate", None)
                 network = ResNetMapsPlusCLSNetwork(
                     conv_layers=net_spec.get_conv_layers(),
-                    cls_embedding_layers=get_cls_embedding_layers(cls_emb_widths, dropout_rate=cls_emb_dropout),
+                    cls_embedding_layers=get_cls_embedding_layers(
+                        cls_emb_widths,
+                        dropout_rate=cls_emb_dropout,
+                        dropout_per_layer=cls_conf.get("embedding_dropout_per_layer", True),
+                    ),
                     regression_head_layers=net_spec.get_head_layers_no_flatten(),
                     n_side=smooth_nside,
                     tfr_n_side=n_side,
