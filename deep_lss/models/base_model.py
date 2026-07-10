@@ -132,7 +132,7 @@ class BaseModel(object):
         if isinstance(self.optimizer, (tf.keras.optimizers.Optimizer, tf.keras.optimizers.legacy.Optimizer)):
             pass
         elif self.optimizer is None:
-            self.optimizer = tf.keras.optimizers.legacy.Adam(**optimizer_kwargs)
+            self.optimizer = tf.keras.optimizers.Adam(**optimizer_kwargs)
         elif self.optimizer == "adam":
             self.optimizer = tf.keras.optimizers.Adam(**optimizer_kwargs)
         elif self.optimizer == "sgd":
@@ -308,6 +308,17 @@ class BaseModel(object):
             tf.train.Checkpoint(network=self.network, train_step=self.train_step).restore(
                 restore_dir
             ).expect_partial().assert_existing_objects_matched()
+        except AssertionError:
+            # assert_existing_objects_matched() also fires on harmless optimizer-only mismatches,
+            # e.g. eval reconstructs a plain-Adam optimizer (no LR schedule) while the checkpoint
+            # was saved by a scheduled optimizer whose learning_rate is a callable, not a Variable,
+            # so nothing was checkpointed under that path. Optimizer state doesn't matter outside of
+            # training, so retry restoring network + train_step only; assert_existing_objects_matched()
+            # is called again below and still hard-fails on a genuine network-variable mismatch.
+            restore_dir = self.checkpoint_manager.latest_checkpoint
+            tf.train.Checkpoint(network=self.network, train_step=self.train_step).restore(
+                restore_dir
+            ).expect_partial().assert_existing_objects_matched()
         LOGGER.info(f"Network successfully restored from checkpoint {restore_dir}.")
 
     def restore_model_from_checkpoint_path(self, checkpoint_path):
@@ -325,7 +336,17 @@ class BaseModel(object):
         # slots this Checkpoint object doesn't track; the assert still hard-fails if any
         # already-built model variable (e.g. a layer added after the checkpoint was saved) has
         # no counterpart in the checkpoint, instead of silently keeping its init value.
-        self.checkpoint.restore(checkpoint_path).expect_partial().assert_existing_objects_matched()
+        try:
+            self.checkpoint.restore(checkpoint_path).expect_partial().assert_existing_objects_matched()
+        except AssertionError:
+            # expect_partial() only silences unused-checkpoint-entry warnings, not this assert; an
+            # eval-time optimizer built without the training-time LR schedule (e.g. plain Adam vs. a
+            # scheduled optimizer whose learning_rate is a callable, not a checkpointed Variable) still
+            # trips it. Optimizer state is irrelevant outside of training, so retry network-only; this
+            # still hard-fails on a genuine network-variable mismatch.
+            tf.train.Checkpoint(network=self.network, train_step=self.train_step).restore(
+                checkpoint_path
+            ).expect_partial().assert_existing_objects_matched()
         LOGGER.info(f"Network successfully restored from checkpoint {checkpoint_path}.")
 
     def build_network(self, input_shape):

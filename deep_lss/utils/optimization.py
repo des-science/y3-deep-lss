@@ -96,10 +96,26 @@ def get_optimizer(net_conf, loss_function="delta_loss", restore_checkpoint=False
             )
             LOGGER.info(f"Using Adam optimizer (non-legacy, EMA momentum={ema_momentum})")
         else:
-            optimizer = tf.keras.optimizers.legacy.Adam(
+            optimizer = tf.keras.optimizers.Adam(
                 learning_rate=learning_rate_schedule, **net_conf["optimization"][loss_function]["optimizer_kwargs"]
             )
-            LOGGER.info(f"Using Adam optimizer")
+            LOGGER.info(f"Using Adam optimizer (non-legacy)")
+    elif optimizer_name == "adamw":
+        # weight_decay is passed through optimizer_kwargs (standard ViT/Swin recipe: AdamW, wd ~0.05)
+        if ema_momentum is not None:
+            optimizer = tf.keras.optimizers.AdamW(
+                learning_rate=learning_rate_schedule,
+                use_ema=True,
+                ema_momentum=float(ema_momentum),
+                **net_conf["optimization"][loss_function]["optimizer_kwargs"],
+            )
+            LOGGER.info(f"Using AdamW optimizer (EMA momentum={ema_momentum})")
+        else:
+            optimizer = tf.keras.optimizers.AdamW(
+                learning_rate=learning_rate_schedule,
+                **net_conf["optimization"][loss_function]["optimizer_kwargs"],
+            )
+            LOGGER.info(f"Using AdamW optimizer")
     elif optimizer_name == "sgd":
         optimizer = tf.keras.optimizers.SGD(
             learning_rate=learning_rate_schedule, **net_conf["optimization"][loss_function]["optimizer_kwargs"]
