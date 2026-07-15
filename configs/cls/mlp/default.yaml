@@ -1,0 +1,49 @@
+# Cls summary encoder — MLP on the flattened Cls data vector. Canonical baseline
+# (behaviourally identical to the legacy configs/mlp/default.yaml).
+
+network:
+  name: mlp
+  kwargs:
+    num_hidden_units: 1024
+    num_layers: 4
+    dropout_rate: 0.1
+    normalization: layer
+    activation: relu
+
+# Data
+scale_cut: hard_rebinned
+cls_n_bins: 16
+cls_transform: asinh_per_feature
+
+# PCA (MLP-only; it rotates the flat feature vector — channel nets reject it)
+pca_components: null
+pca_whiten: false
+
+# Training
+n_steps: 1000000
+batch_size: 1024
+learning_rate: 1.0e-4
+weight_decay: 1.0e-2
+clip_by_global_norm: 1.0
+
+lr_schedule: constant
+lr_warmup_steps: 5000
+
+early_stopping:
+  patience: 15 # must exceed plateau patience so the LR drops first
+  min_delta: 5.0e-2
+  min_steps: 10000
+
+# EMA weight averaging
+ema_momentum: null
+
+# Logging / checkpointing
+log_every: 100
+vali_every: 5000
+
+# Compilation
+xla: true
+
+# Reproducibility
+seed: 42
+deterministic_ops: false
