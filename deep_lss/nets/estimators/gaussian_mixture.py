@@ -22,6 +22,8 @@ class GaussianMixtureModel:
         activation="relu",
         full_covariance=True,
         diagonal_eps=1e-5,
+        theta_shift=None,
+        theta_scale=None,
     ):
         self.dim_theta = dim_theta
         self.dim_summary = dim_summary
@@ -31,6 +33,18 @@ class GaussianMixtureModel:
         self.activation = activation
         self.full_covariance = full_covariance
         self.diagonal_eps = diagonal_eps
+
+        # Optional affine standardization applied inside log_prob/mean: the mixture operates on
+        # z = (theta - theta_shift) / theta_scale, which keeps the head well-conditioned when the
+        # parameters live on very different scales (e.g. H0 ~ 70 vs Ob ~ 0.045). log_prob remains
+        # the density in physical theta units via the constant log-Jacobian.
+        if theta_shift is not None or theta_scale is not None:
+            self.theta_shift = tf.constant(theta_shift, dtype=tf.float32)
+            self.theta_scale = tf.constant(theta_scale, dtype=tf.float32)
+            self.log_jacobian = -tf.reduce_sum(tf.math.log(self.theta_scale))
+        else:
+            self.theta_shift = None
+            self.theta_scale = None
 
         self.mixture_logits_net = self._build_network(output_size=num_components)
         self.loc_net = self._build_network(output_size=num_components * dim_theta)
@@ -86,6 +100,10 @@ class GaussianMixtureModel:
 
         theta = tf.cast(theta, tf.float32)
 
+        if self.theta_shift is not None:
+            theta = (theta - self.theta_shift) / self.theta_scale
+            return gmm.log_prob(theta) + self.log_jacobian
+
         return gmm.log_prob(theta)
 
     def mean(self, summary):
@@ -93,4 +111,9 @@ class GaussianMixtureModel:
         mixture_logits = tf.cast(self.mixture_logits_net(summary), tf.float32)
         loc = tf.cast(tf.reshape(self.loc_net(summary), [-1, self.num_components, self.dim_theta]), tf.float32)
         weights = tf.nn.softmax(mixture_logits, axis=-1)  # [B, K]
-        return tf.reduce_sum(weights[:, :, tf.newaxis] * loc, axis=1)  # [B, D]
+        mean = tf.reduce_sum(weights[:, :, tf.newaxis] * loc, axis=1)  # [B, D]
+
+        if self.theta_shift is not None:
+            mean = mean * self.theta_scale + self.theta_shift
+
+        return mean

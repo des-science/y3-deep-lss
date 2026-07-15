@@ -32,12 +32,40 @@ class NormalizingFlowModel:
         activation="relu",
         scale_eps=1e-5,
         log_scale_clip=5.0,
+        permute=False,
+        theta_shift=None,
+        theta_scale=None,
     ):
         self.dim_theta = dim_theta
         self.dim_summary = dim_summary
         self.num_layers = num_layers
         self.scale_eps = scale_eps
         self.log_scale_clip = log_scale_clip
+
+        # Fixed roll-by-1 permutation applied between couplings (volume-preserving, zero parameters).
+        # Without it the half-split is static, so dims within the same half (for the standard 6-param
+        # target: Om, s8, w0 all sit in the lower half) never condition on each other directly and
+        # their correlations must be built up indirectly across layers.
+        self.permute = permute
+        if permute:
+            perm = np.roll(np.arange(dim_theta), 1)
+            self._perm = tf.constant(perm, dtype=tf.int32)
+            self._inv_perm = tf.constant(np.argsort(perm), dtype=tf.int32)
+
+        # Optional affine standardization mirroring GaussianMixtureModel: the flow operates on
+        # z_theta = (theta - theta_shift) / theta_scale. This matters more here than for the GMM:
+        # raw theta is a direct INPUT to the coupling MLPs (in the GMM it only enters the NLL
+        # quadratic form), and the couplings must also absorb each parameter's scale into their
+        # clipped log-scale outputs. log_prob remains the density in physical theta units via the
+        # constant log-Jacobian.
+        if theta_shift is not None or theta_scale is not None:
+            self.theta_shift = tf.constant(theta_shift, dtype=tf.float32)
+            self.theta_scale = tf.constant(theta_scale, dtype=tf.float32)
+            self.log_jacobian = -tf.reduce_sum(tf.math.log(self.theta_scale))
+        else:
+            self.theta_shift = None
+            self.theta_scale = None
+            self.log_jacobian = 0.0
 
         # d = size of the "lower" half; upper half has size dim_theta - d
         self._d = dim_theta // 2
@@ -57,11 +85,16 @@ class NormalizingFlowModel:
             )
 
     def _build_coupling_net(self, in_size, out_size, num_hidden_units, num_hidden_layers, activation):
-        layers = [tf.keras.layers.InputLayer(input_shape=(in_size,))]
+        # Force float32 on the coupling MLPs. When the surrounding model runs under a
+        # mixed_bfloat16 policy (the maps training path), Dense layers would otherwise emit
+        # bfloat16 shift/log_scale while log_prob/inverse cast theta and summary to float32,
+        # producing a dtype-mismatch TypeError in the (z_transform - shift) subtract. The flow's
+        # log/exp density math wants float32 regardless, so pin the whole head to it.
+        layers = [tf.keras.layers.InputLayer(input_shape=(in_size,), dtype="float32")]
         for _ in range(num_hidden_layers):
-            layers.append(tf.keras.layers.Dense(num_hidden_units, activation=activation))
+            layers.append(tf.keras.layers.Dense(num_hidden_units, activation=activation, dtype="float32"))
         # outputs 2 * out_size: first half = shift, second half = raw log-scale
-        layers.append(tf.keras.layers.Dense(2 * out_size, kernel_initializer="glorot_uniform"))
+        layers.append(tf.keras.layers.Dense(2 * out_size, kernel_initializer="glorot_uniform", dtype="float32"))
         return tf.keras.Sequential(layers)
 
     def log_prob(self, theta, summary):
@@ -69,11 +102,16 @@ class NormalizingFlowModel:
         theta = tf.cast(theta, tf.float32)
         summary = tf.cast(summary, tf.float32)
 
+        if self.theta_shift is not None:
+            theta = (theta - self.theta_shift) / self.theta_scale
+
         z = theta
         log_det_J = tf.zeros(tf.shape(theta)[0], dtype=tf.float32)
         d = self._d
 
         for i, net in enumerate(self.coupling_nets):
+            if self.permute and i > 0:
+                z = tf.gather(z, self._perm, axis=-1)
             if i % 2 == 0:
                 # pass upper half through; transform lower half conditioned on upper + summary
                 z_pass = z[:, d:]
@@ -101,7 +139,7 @@ class NormalizingFlowModel:
             tf.cast(self.dim_theta, tf.float32) * tf.math.log(2.0 * np.pi) + tf.reduce_sum(tf.square(z), axis=-1)
         )
 
-        return log_p_base + log_det_J
+        return log_p_base + log_det_J + self.log_jacobian
 
     def _shift_log_scale(self, net, context, out_size):
         out = net(context)  # (B, 2 * out_size)
@@ -137,6 +175,13 @@ class NormalizingFlowModel:
                 scale = tf.exp(log_scale) + self.scale_eps
                 theta_up = z_up * scale + shift
                 theta = tf.concat([theta_low, theta_up], axis=-1)
+
+            # forward applies the permutation BEFORE coupling i (for i > 0), so invert it AFTER
+            if self.permute and i > 0:
+                theta = tf.gather(theta, self._inv_perm, axis=-1)
+
+        if self.theta_shift is not None:
+            theta = theta * self.theta_scale + self.theta_shift
 
         return theta
 

@@ -154,6 +154,8 @@ def get_variational_model_from_summary(
     # GMM-specific
     num_components=4,
     full_covariance=True,
+    theta_shift=None,
+    theta_scale=None,
     # shared
     num_hidden_layers=2,
     num_hidden_units=128,
@@ -162,6 +164,7 @@ def get_variational_model_from_summary(
     num_layers=4,
     scale_eps=1e-5,
     log_scale_clip=5.0,
+    permute=False,
 ):
     if density_estimator == "gmm":
         estimator = GaussianMixtureModel(
@@ -172,6 +175,8 @@ def get_variational_model_from_summary(
             num_hidden_units=num_hidden_units,
             activation=activation,
             full_covariance=full_covariance,
+            theta_shift=theta_shift,
+            theta_scale=theta_scale,
         )
     elif density_estimator == "flow":
         estimator = NormalizingFlowModel(
@@ -183,6 +188,9 @@ def get_variational_model_from_summary(
             activation=activation,
             scale_eps=scale_eps,
             log_scale_clip=log_scale_clip,
+            permute=permute,
+            theta_shift=theta_shift,
+            theta_scale=theta_scale,
         )
     else:
         raise ValueError(f"Unknown density_estimator '{density_estimator}', choose 'gmm' or 'flow'")
