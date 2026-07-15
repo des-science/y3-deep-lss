@@ -150,20 +150,23 @@ class GeodesicKernelAttention(Fp32SoftmaxMultiHeadAttention):
     precision ``a_h``. Because the bias depends on pairwise distance only, it is symmetric
     (``b_ij = b_ji``) and invariant under every isometry of the window, so local attention
     regains real geometry without breaking the (approximate) rotation/reflection symmetry
-    of the data. ``a_h`` is zero-initialized, so the layer is exactly plain attention at
-    initialization.
+    of the data. ``a_h`` is initialized at ``coeff_init``: 0 starts as exactly plain
+    attention, but the bench_t7 symmetric run showed the coefficients then never engage
+    (|a_h| <= 0.023 after 150k steps), so a non-zero init (e.g. -1, a real RBF at step 0)
+    is needed to actually exercise the positional pathway.
     """
 
-    def __init__(self, dist_sq, num_heads, **kwargs):
+    def __init__(self, dist_sq, num_heads, coeff_init=0.0, **kwargs):
         super().__init__(num_heads=num_heads, **kwargs)
         self._kernel_num_heads = num_heads
         self.dist_sq = tf.constant(dist_sq, dtype=tf.float32)  # (S, S)
+        self.coeff_init = float(coeff_init)
 
     def build(self, input_shape):
         self.kernel_coeff = self.add_weight(
             name="kernel_coeff",
             shape=(self._kernel_num_heads,),
-            initializer="zeros",
+            initializer=tf.keras.initializers.Constant(self.coeff_init),
             trainable=True,
             dtype="float32",
         )
@@ -175,6 +178,59 @@ class GeodesicKernelAttention(Fp32SoftmaxMultiHeadAttention):
         # in the compute dtype; force fp32 to match the fp32 dist_sq constant.
         coeff = tf.cast(self.kernel_coeff, tf.float32)
         bias = coeff[:, tf.newaxis, tf.newaxis] * self.dist_sq  # (H, S, S)
+        attention_scores = attention_scores + tf.cast(
+            bias[tf.newaxis], attention_scores.dtype
+        )
+        return super()._masked_softmax(attention_scores, attention_mask)
+
+
+class GeodesicBinnedBiasAttention(Fp32SoftmaxMultiHeadAttention):
+    """Fp32SoftmaxMultiHeadAttention with a learnable distance-binned relative bias.
+
+    Adds ``b_ij(h) = bias_table[h, bin_idx_ij]`` to the attention logits, where
+    ``bin_idx`` is a precomputed (S, S) table assigning each window-token pair to one of
+    ``B`` geodesic-distance bins (bin 0 = the diagonal, d = 0). This is the Swin-style
+    learnable relative position bias restricted to a function of pairwise distance only,
+    so like GeodesicKernelAttention it is symmetric (``b_ij = b_ji``) and invariant under
+    every isometry of the window — but with (num_heads, B) capacity instead of one scalar
+    per head it can express non-monotone kernels and receives O(1) gradient signal per
+    bin. The table is initialized as the RBF kernel ``coeff_init * bin_center_dsq`` so
+    the positional pathway is engaged from step 0 (the zero-init scalar kernel was shown
+    not to bootstrap).
+    """
+
+    def __init__(self, bin_idx, bin_centers, num_heads, coeff_init=-1.0, **kwargs):
+        super().__init__(num_heads=num_heads, **kwargs)
+        self._bias_num_heads = num_heads
+        self.bin_idx = tf.constant(bin_idx, dtype=tf.int32)  # (S, S)
+        self._bin_centers = np.asarray(bin_centers, dtype=np.float32)  # (B,)
+        self.num_bins = len(self._bin_centers)
+        self.coeff_init = float(coeff_init)
+
+    def build(self, input_shape):
+        init_table = self.coeff_init * np.tile(
+            self._bin_centers[np.newaxis, :], (self._bias_num_heads, 1)
+        )  # (H, B)
+
+        # callable initializer: Keras Constant only reliably supports scalars
+        def _rbf_table_init(shape, dtype=None):
+            return tf.constant(init_table, dtype=dtype or tf.float32)
+
+        self.bias_table = self.add_weight(
+            name="bias_table",
+            shape=(self._bias_num_heads, self.num_bins),
+            initializer=_rbf_table_init,
+            trainable=True,
+            dtype="float32",
+        )
+        super().build(input_shape)
+
+    def _masked_softmax(self, attention_scores, attention_mask=None):
+        # attention_scores: (B_like, H, S, S)
+        # Under a mixed-precision policy bias_table is an AutoCastVariable that reads
+        # in the compute dtype; force fp32 for the gather, mirroring kernel_coeff.
+        table = tf.cast(self.bias_table, tf.float32)  # (H, B)
+        bias = tf.gather(table, self.bin_idx, axis=1)  # (H, S, S)
         attention_scores = attention_scores + tf.cast(
             bias[tf.newaxis], attention_scores.dtype
         )
@@ -304,6 +360,8 @@ class TransformerBlock(tf.keras.layers.Layer):
         layerscale_init=1e-4,
         fp32_softmax=True,
         attn_dist_sq=None,
+        attn_dist_bins=None,
+        attn_coeff_init=0.0,
         block_dropout_rate=None,
         **kwargs,
     ):
@@ -320,11 +378,29 @@ class TransformerBlock(tf.keras.layers.Layer):
         # attn_dist_sq: optional (S, S) normalized squared geodesic distances between the S
         # sequence tokens; enables the distance-kernel bias (GeodesicKernelAttention, which
         # always takes the fp32-softmax path).
-        if attn_dist_sq is not None:
+        # attn_dist_bins: optional (bin_idx (S, S), bin_centers (B,)) tuple; enables the
+        # distance-binned learnable bias (GeodesicBinnedBiasAttention) instead. Mutually
+        # exclusive with attn_dist_sq. attn_coeff_init sets the RBF init of either bias.
+        if attn_dist_sq is not None and attn_dist_bins is not None:
+            raise ValueError(
+                "attn_dist_sq and attn_dist_bins are mutually exclusive — pass one "
+                "positional bias table, not both."
+            )
+        if attn_dist_bins is not None:
+            bin_idx, bin_centers = attn_dist_bins
+            self.attn = GeodesicBinnedBiasAttention(
+                bin_idx=bin_idx,
+                bin_centers=bin_centers,
+                num_heads=num_heads,
+                key_dim=dim // num_heads,
+                coeff_init=attn_coeff_init,
+            )
+        elif attn_dist_sq is not None:
             self.attn = GeodesicKernelAttention(
                 dist_sq=attn_dist_sq,
                 num_heads=num_heads,
                 key_dim=dim // num_heads,
+                coeff_init=attn_coeff_init,
             )
         else:
             attn_cls = Fp32SoftmaxMultiHeadAttention if fp32_softmax else tf.keras.layers.MultiHeadAttention
@@ -409,6 +485,8 @@ class NestedLocalWindowBlock(tf.keras.layers.Layer):
         layerscale_init=1e-4,
         fp32_softmax=True,
         dist_sq=None,
+        dist_bins=None,
+        pos_coeff_init=0.0,
         window_mask=None,
         block_dropout_rate=None,
         **kwargs,
@@ -422,6 +500,8 @@ class NestedLocalWindowBlock(tf.keras.layers.Layer):
         self.window_levels = window_levels
         # dist_sq: optional (S, S) normalized squared geodesic distances between the S
         # window tokens, in the same row-major nested order as the flattening below.
+        # dist_bins: optional (bin_idx (S, S), bin_centers (B,)) distance-bin tuple in the
+        # same token order; selects the binned bias instead (see TransformerBlock).
         self._dist_sq_len = None if dist_sq is None else len(dist_sq)
         # window_mask: optional static (n_windows, S, S) boolean attention mask, one slice
         # per local window of a single sample in the same row-major window order as the
@@ -442,6 +522,8 @@ class NestedLocalWindowBlock(tf.keras.layers.Layer):
             layerscale_init=layerscale_init,
             fp32_softmax=fp32_softmax,
             attn_dist_sq=dist_sq,
+            attn_dist_bins=dist_bins,
+            attn_coeff_init=pos_coeff_init,
             block_dropout_rate=block_dropout_rate,
         )
 
@@ -697,6 +779,8 @@ class NestedHierarchicalLocalWindowTransformer(tf.keras.Model):
         pool_queries=1,
         multiscale_readout=False,
         local_dist_sq=None,
+        local_dist_bins=None,
+        pos_coeff_init=0.0,
         token_valid=None,
         **kwargs,
     ):
@@ -745,12 +829,17 @@ class NestedHierarchicalLocalWindowTransformer(tf.keras.Model):
             raise ValueError(
                 f"merge_op must be one of {sorted(merge_classes)}, got {merge_op!r}."
             )
-        if merge_op == "deepsets" and local_dist_sq is None:
+        if merge_op == "deepsets" and local_dist_sq is None and local_dist_bins is None:
             raise ValueError(
                 "merge_op='deepsets' requires a positional encoding in the local "
-                "window attention (local_dist_sq): the permutation-invariant merge "
-                "discards the child order, so without positional information the "
-                "network retains no relative geometry at all."
+                "window attention (local_dist_sq or local_dist_bins): the "
+                "permutation-invariant merge discards the child order, so without "
+                "positional information the network retains no relative geometry at all."
+            )
+        if local_dist_sq is not None and local_dist_bins is not None:
+            raise ValueError(
+                "local_dist_sq and local_dist_bins are mutually exclusive — pass one "
+                "positional encoding, not both."
             )
 
         # local_dist_sq: optional per-stage (S, S) normalized squared geodesic distances
@@ -770,6 +859,31 @@ class NestedHierarchicalLocalWindowTransformer(tf.keras.Model):
                     raise ValueError(
                         f"local_dist_sq[{level}] has {len(table)} tokens, "
                         f"expected {expected}."
+                    )
+
+        # local_dist_bins: optional per-stage (bin_idx (S, S) int, bin_centers (B,))
+        # tuples with the same per-stage S; selects the distance-binned learnable bias
+        # (GeodesicBinnedBiasAttention) instead of the scalar distance kernel.
+        # pos_coeff_init sets the (RBF) init of whichever bias is enabled.
+        if local_dist_bins is not None:
+            if len(local_dist_bins) != body_levels:
+                raise ValueError(
+                    f"local_dist_bins must have one (bin_idx, bin_centers) per local "
+                    f"stage ({body_levels}), got {len(local_dist_bins)}."
+                )
+            for level, (bin_idx, bin_centers) in enumerate(local_dist_bins):
+                expected = 4 ** min(window_levels, body_levels - level)
+                bin_idx = np.asarray(bin_idx)
+                if bin_idx.shape != (expected, expected):
+                    raise ValueError(
+                        f"local_dist_bins[{level}] bin_idx has shape {bin_idx.shape}, "
+                        f"expected ({expected}, {expected})."
+                    )
+                if bin_idx.max() >= len(bin_centers):
+                    raise ValueError(
+                        f"local_dist_bins[{level}] bin_idx references bin "
+                        f"{bin_idx.max()} but only {len(bin_centers)} bin_centers "
+                        f"were given."
                     )
 
         # token_valid: optional (N * 4^num_nested_levels,) boolean validity of the finest
@@ -922,6 +1036,10 @@ class NestedHierarchicalLocalWindowTransformer(tf.keras.Model):
                         layerscale_init=layerscale_init,
                         fp32_softmax=fp32_softmax,
                         dist_sq=None if local_dist_sq is None else local_dist_sq[level],
+                        dist_bins=(
+                            None if local_dist_bins is None else local_dist_bins[level]
+                        ),
+                        pos_coeff_init=pos_coeff_init,
                         window_mask=(
                             None if stage_window_masks is None else stage_window_masks[level]
                         ),
@@ -1019,7 +1137,9 @@ class NestedHierarchicalLocalWindowTransformer(tf.keras.Model):
         )
         LOGGER.warning(
             f"NestedHierarchicalLocalWindowTransformer options: "
-            f"pos_encoding={'geodesic' if local_dist_sq is not None else None}, "
+            f"pos_encoding="
+            f"{'geodesic' if local_dist_sq is not None else 'geodesic_binned' if local_dist_bins is not None else None}"
+            f" (coeff_init={pos_coeff_init}), "
             f"merge_op={merge_op!r}, pool={pool!r}"
             + (f" ({pool_queries} learned queries)" if pool == "attention" else "")
             + f", multiscale_readout={multiscale_readout}, "

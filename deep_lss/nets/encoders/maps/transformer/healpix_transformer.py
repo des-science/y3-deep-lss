@@ -56,6 +56,66 @@ def window_mean_squared_distances(
     return tables
 
 
+def window_binned_distances(
+    nside,
+    num_nested_levels,
+    window_levels,
+    num_bins=16,
+    ref_windows=64,
+    seed=0,
+):
+    """Per-stage distance-bin tables for the binned relative attention bias.
+
+    Returns a list (length ``num_nested_levels``) of ``(bin_idx, bin_centers)`` tuples:
+    ``bin_idx`` is an (S, S) int32 table assigning each window-token pair to a geodesic
+    distance bin, and ``bin_centers`` is the mean normalized squared distance per bin
+    (used for the RBF init of GeodesicBinnedBiasAttention — same normalized-d^2 units as
+    the tables of ``window_mean_squared_distances``, which this reuses).
+
+    Bin 0 is the diagonal (d = 0); the off-diagonal entries are quantile-binned into at
+    most ``num_bins - 1`` bins. Small late-stage tables (S = 16, 4) have fewer distinct
+    values than bins, in which case each distinct value gets its own bin. Empty bins are
+    dropped and the indices renumbered contiguously, so ``bin_idx.max() ==
+    len(bin_centers) - 1`` always holds.
+    """
+    if num_bins < 2:
+        raise ValueError("num_bins must be >= 2 (diagonal bin + at least one off-diagonal bin)")
+
+    tables = window_mean_squared_distances(
+        nside=nside,
+        num_nested_levels=num_nested_levels,
+        window_levels=window_levels,
+        ref_windows=ref_windows,
+        seed=seed,
+    )
+    out = []
+    for d2 in tables:
+        S = d2.shape[0]
+        off_mask = ~np.eye(S, dtype=bool)
+        off = d2[off_mask]
+        uniq = np.unique(off)
+        n_target = min(num_bins - 1, len(uniq))
+        if len(uniq) == n_target:
+            # one bin per distinct value
+            off_bins = np.searchsorted(uniq, off)
+        else:
+            edges = np.unique(np.quantile(off, np.linspace(0.0, 1.0, n_target + 1)))
+            off_bins = np.digitize(off, edges[1:-1], right=False)
+
+        bin_idx = np.zeros((S, S), dtype=np.int64)
+        bin_idx[off_mask] = 1 + off_bins
+        # drop any empty bins defensively and renumber contiguously
+        used, bin_idx = np.unique(bin_idx, return_inverse=True)
+        bin_idx = bin_idx.reshape(S, S)
+
+        bin_centers = np.array(
+            [d2[bin_idx == k].mean() for k in range(len(used))], dtype=np.float32
+        )
+        bin_centers[0] = 0.0
+        out.append((bin_idx.astype(np.int32), bin_centers))
+    return out
+
+
 class HealpixNestedHierarchicalLocalWindowTransformer(
     NestedHierarchicalLocalWindowTransformer
 ):
@@ -66,6 +126,7 @@ class HealpixNestedHierarchicalLocalWindowTransformer(
         nside_down,
         in_channels,
         pos_encoding=None,
+        pos_encoding_kwargs=None,
         bias_ref_windows=64,
         **kwargs,
     ):
@@ -75,14 +136,26 @@ class HealpixNestedHierarchicalLocalWindowTransformer(
         num_nested_levels = int(hp.nside2order(nside) - hp.nside2order(nside_down))
 
         # pos_encoding: positional encoding for the local window attention.
-        #   None       — plain, position-free local attention.
-        #   "geodesic" — distance-kernel bias in every local window block (see
-        #                GeodesicKernelAttention). The tables depend only on nside and
-        #                the window layout, so they are precomputed here and passed
-        #                down as local_dist_sq. With a patchified stem (stem_levels)
-        #                the hierarchy starts that many levels coarser, so the tables
-        #                describe the body geometry.
+        #   None              — plain, position-free local attention.
+        #   "geodesic"        — distance-kernel bias in every local window block (see
+        #                       GeodesicKernelAttention). The tables depend only on nside
+        #                       and the window layout, so they are precomputed here and
+        #                       passed down as local_dist_sq. With a patchified stem
+        #                       (stem_levels) the hierarchy starts that many levels
+        #                       coarser, so the tables describe the body geometry.
+        #   "geodesic_binned" — distance-binned learnable relative bias (see
+        #                       GeodesicBinnedBiasAttention), passed down as
+        #                       local_dist_bins.
+        # pos_encoding_kwargs: options of the chosen encoding —
+        #   coeff_init (both):           RBF init of the bias, b = coeff_init * d^2.
+        #                                Defaults: 0.0 for "geodesic" (legacy behavior;
+        #                                known not to bootstrap — bench_t7 symmetric),
+        #                                -1.0 for "geodesic_binned" (engaged at step 0).
+        #   num_bins ("geodesic_binned"): max distance bins per stage (default 16).
         stem_levels = kwargs.get("stem_levels", 0)
+        pe_kwargs = dict(pos_encoding_kwargs or {})
+        if pos_encoding is None and pe_kwargs:
+            raise ValueError("pos_encoding_kwargs given but pos_encoding is None.")
         if pos_encoding == "geodesic":
             kwargs["local_dist_sq"] = window_mean_squared_distances(
                 nside=nside >> stem_levels,
@@ -90,9 +163,25 @@ class HealpixNestedHierarchicalLocalWindowTransformer(
                 window_levels=kwargs.get("window_levels", 3),
                 ref_windows=bias_ref_windows,
             )
+            kwargs["pos_coeff_init"] = float(pe_kwargs.pop("coeff_init", 0.0))
+        elif pos_encoding == "geodesic_binned":
+            kwargs["local_dist_bins"] = window_binned_distances(
+                nside=nside >> stem_levels,
+                num_nested_levels=num_nested_levels - stem_levels,
+                window_levels=kwargs.get("window_levels", 3),
+                num_bins=int(pe_kwargs.pop("num_bins", 16)),
+                ref_windows=bias_ref_windows,
+            )
+            kwargs["pos_coeff_init"] = float(pe_kwargs.pop("coeff_init", -1.0))
         elif pos_encoding is not None:
             raise ValueError(
-                f"pos_encoding must be None or 'geodesic', got {pos_encoding!r}."
+                f"pos_encoding must be None, 'geodesic' or 'geodesic_binned', "
+                f"got {pos_encoding!r}."
+            )
+        if pe_kwargs:
+            raise ValueError(
+                f"Unknown pos_encoding_kwargs for pos_encoding={pos_encoding!r}: "
+                f"{sorted(pe_kwargs)}"
             )
 
         # Number of fine nside pixels inside each nside_down top-level token.
@@ -132,7 +221,17 @@ class HealpixNestedHierarchicalLocalWindowTransformer(
                 f"Geodesic distance-kernel tables: {num_nested_levels - stem_levels} "
                 f"stages starting at nside={nside >> stem_levels}"
                 + (f" (shifted by stem_levels={stem_levels})" if stem_levels > 0 else "")
-                + f", averaged over {bias_ref_windows} reference windows"
+                + f", averaged over {bias_ref_windows} reference windows, "
+                + f"kernel_coeff init {kwargs['pos_coeff_init']}"
+            )
+        elif pos_encoding == "geodesic_binned":
+            LOGGER.warning(
+                f"Geodesic binned-bias tables: {num_nested_levels - stem_levels} "
+                f"stages starting at nside={nside >> stem_levels}"
+                + (f" (shifted by stem_levels={stem_levels})" if stem_levels > 0 else "")
+                + f", averaged over {bias_ref_windows} reference windows, per-stage "
+                + f"bins {[len(centers) for _, centers in kwargs['local_dist_bins']]}, "
+                + f"RBF init coeff {kwargs['pos_coeff_init']}"
             )
 
         super().__init__(
@@ -146,6 +245,7 @@ class HealpixNestedHierarchicalLocalWindowTransformer(
         self.num_pixels = num_pixels
         self.nested_shape = full_nested_shape
         self.pos_encoding = pos_encoding
+        self.pos_encoding_kwargs = pos_encoding_kwargs
         self.bias_ref_windows = bias_ref_windows
 
     def batch_flat_to_nested(self, batch: tf.Tensor) -> tf.Tensor:
