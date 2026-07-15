@@ -10,6 +10,10 @@
 #SBATCH --job-name=training
 #SBATCH --output=/users/athomsen/dlss/repos/y3-deep-lss/submissions/clariden/slurm/slurm-%j.out
 
+# disable core dumps: a crashing TF/Python task can otherwise write a 50+ GB
+# core file into the cwd (core_pattern=core_%h_%p) and fill the /users quota
+ulimit -c 0
+
 # extract Weights & Biases API key from the host's .netrc file and pass it as an environment variable
 # to accommodate containerized execution that might not inherit the host's home directory mounts properly.
 export WANDB_API_KEY=$(awk '/password/ {print $2}' ~/.netrc)

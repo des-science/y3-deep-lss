@@ -28,7 +28,7 @@ BASE_MODEL_NAME="v31_pca"
 
 FLOW_CONFIG="$REPOS/multiprobe-simulation-inference/configs/flow/maf.yaml"
 # LOSS_CONFIGS=("vmim" "vmim_vicreg" "vmim_vicreg_var_cov" "vmim_vicreg_inv")
-LOSS_CONFIGS=("vmim" "vmim_fac2" "vmim_flow" "mse")
+LOSS_CONFIGS=("vmim" "vmim_gmm" "vmim_fac2" "mse")
 
 INPUT="$MYSCRATCH/deep_lss/data/$VERSION/$SUBVERSION"
 OUTPUT="$MYSCRATCH/deep_lss/runs/$VERSION/$SUBVERSION/cls/$PROBE"
@@ -52,7 +52,7 @@ if [ "$SCALE_CUT" = "hard_rebinned" ]; then
             --msfm_config="$REPOS/multiprobe-simulation-forward-model/configs/$VERSION/$SUBVERSION.yaml" \
             --probes_config="$REPOS/y3-deep-lss/configs/probes/${PROBE}.yaml" \
             --scales_config="$REPOS/y3-deep-lss/configs/scales/${SCALES}.yaml" \
-            --loss_config="$REPOS/y3-deep-lss/configs/loss/cls/${LOSS_CONFIGS[0]}.yaml" \
+            --loss_config="$REPOS/y3-deep-lss/configs/loss/${LOSS_CONFIGS[0]}.yaml" \
             --mlp_config="$REPOS/y3-deep-lss/configs/mlp/${MLP}.yaml" \
             --data_config="$REPOS/y3-deep-lss/configs/data/${DATA}.yaml" \
             --data_dir="$INPUT" \
@@ -74,7 +74,7 @@ for LOSS in "${LOSS_CONFIGS[@]}"; do
                 --msfm_config="$REPOS/multiprobe-simulation-forward-model/configs/$VERSION/$SUBVERSION.yaml" \
                 --probes_config="$REPOS/y3-deep-lss/configs/probes/${PROBE}.yaml" \
                 --scales_config="$REPOS/y3-deep-lss/configs/scales/${SCALES}.yaml" \
-                --loss_config="$REPOS/y3-deep-lss/configs/loss/cls/${LOSS}.yaml" \
+                --loss_config="$REPOS/y3-deep-lss/configs/loss/${LOSS}.yaml" \
                 --mlp_config="$REPOS/y3-deep-lss/configs/mlp/${MLP}.yaml" \
                 --data_config="$REPOS/y3-deep-lss/configs/data/${DATA}.yaml" \
                 --data_dir="$INPUT" \

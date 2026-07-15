@@ -19,13 +19,14 @@ VERSION="v16"
 SUBVERSION="rot_in_place"
 INPUT="$MYSCRATCH/deep_lss/data/$VERSION/$SUBVERSION"
 
-PROBES=("lensing" "clustering" "2x2pt" "combined")
-# PROBES=("combined" "3x2pt" "clustering" "clustering_auto")
+# PROBES / NET / MODEL_NAME may be overridden from the environment (space-separated for PROBES),
+# e.g.  NET=transformer MODEL_NAME=v39_transformer PROBES="lensing clustering 2x2pt combined" sbatch cls_training.sh
+# The four default probes fit the node's 4 GPUs in a single wave.
+read -r -a PROBES <<< "${PROBES:-lensing clustering 2x2pt combined}"
 
-MLP="default"
-# MLP="pca"
-# MLP="plateau"
-# MLP="asinh"
+# Cls summary architecture: config file in configs/cls/ selecting network.name (mlp | cls_cnn |
+# cls_transformer). See run_cls_training+evaluation.py for the switch. Options: mlp | cnn | transformer.
+NET="${NET:-mlp}"
 
 LOSS="vmim"
 # LOSS="vmim_vicreg_inv"
@@ -42,7 +43,7 @@ DATA="default"
 # MODEL_NAME="v35_lmax_1024"
 # MODEL_NAME="lmax_1024_pca"
 # MODEL_NAME="v35_lmax_1024_plateau"
-MODEL_NAME="v37_no_pca"
+MODEL_NAME="${MODEL_NAME:-v39}"
 # MODEL_NAME="debug1"
 
 FLOW_CONFIG="$REPOS/multiprobe-simulation-inference/configs/flow/maf.yaml"
@@ -52,7 +53,7 @@ FLOW_CONFIG="$REPOS/multiprobe-simulation-inference/configs/flow/maf.yaml"
 # cache is probe-independent (covers all pairs; probe selection happens at load time).
 SCALE_CUT=$(srun -N1 --ntasks-per-node=1 --environment=tensorflow python -c "
 import yaml
-with open('$REPOS/y3-deep-lss/configs/mlp/${MLP}.yaml') as f:
+with open('$REPOS/y3-deep-lss/configs/cls/${NET}.yaml') as f:
     print(yaml.safe_load(f).get('scale_cut', 'soft_pruned'))
 ")
 
@@ -67,7 +68,7 @@ if [ "$SCALE_CUT" = "hard_rebinned" ]; then
             --probes_config="$REPOS/y3-deep-lss/configs/probes/combined.yaml" \
             --scales_config="$REPOS/y3-deep-lss/configs/scales/${SCALES}.yaml" \
             --loss_config="$REPOS/y3-deep-lss/configs/loss/${LOSS}.yaml" \
-            --mlp_config="$REPOS/y3-deep-lss/configs/mlp/${MLP}.yaml" \
+            --net_config="$REPOS/y3-deep-lss/configs/cls/${NET}.yaml" \
             --data_config="$REPOS/y3-deep-lss/configs/data/${DATA}.yaml" \
             --data_dir="$INPUT" \
             --out_dir="$INPUT" \
@@ -89,7 +90,7 @@ for PROBE in "${PROBES[@]}"; do
                 --probes_config="$REPOS/y3-deep-lss/configs/probes/${PROBE}.yaml" \
                 --scales_config="$REPOS/y3-deep-lss/configs/scales/${SCALES}.yaml" \
                 --loss_config="$REPOS/y3-deep-lss/configs/loss/${LOSS}.yaml" \
-                --mlp_config="$REPOS/y3-deep-lss/configs/mlp/${MLP}.yaml" \
+                --net_config="$REPOS/y3-deep-lss/configs/cls/${NET}.yaml" \
                 --data_config="$REPOS/y3-deep-lss/configs/data/${DATA}.yaml" \
                 --data_dir="$INPUT" \
                 --out_dir="$OUTPUT" \

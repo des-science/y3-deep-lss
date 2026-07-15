@@ -37,7 +37,8 @@ SCALES="8wl,32gc"
 # SCALES="unsmoothed"
 DATA="default"
 
-PROBE="lensing"
+# PROBE may be overridden from the environment (e.g. PROBE=clustering sbatch eval_inference.sh)
+PROBE="${PROBE:-lensing}"
 # PROBE="clustering"
 # PROBE="combined"
 
@@ -55,8 +56,10 @@ else
     NET_CONFIG="$REPOS/y3-deep-lss/configs/${ARCH}/${PROBE}/maps.yaml"
 fi
 
+# MODEL / PROBE may be overridden from the environment (e.g. MODEL=t4_cosine sbatch eval_inference.sh);
+# eval loads the network config from the model directory, so NET_CONFIG/MAPS_PLUS_CLS above are irrelevant here.
 # MODEL="v8_cls"
-MODEL="t1"
+MODEL="${MODEL:-t1}"
 
 INPUT="$MYSCRATCH/deep_lss/data/$VERSION/$SUBVERSION"
 OUTPUT="$MYSCRATCH/deep_lss/runs/$VERSION/$SUBVERSION/maps/$PROBE"
