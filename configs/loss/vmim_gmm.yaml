@@ -1,0 +1,20 @@
+# GMM variational head for VMIM -- the default until 2026-07-12, kept as a stable fallback.
+# The RealNVP flow head (vmim.yaml) reaches a tighter MI bound on the standard 6-param lensing
+# target (best head vali NLL -2.29 vs -1.86, physical units, same target); downstream mock FoM is
+# statistically equivalent, so use this if a flow head ever proves unstable on a new target.
+# theta standardization inside the head is ON by default (standardize_theta, see
+# run_cls_training+evaluation.py) -- runs recorded before 2026-07-12 trained WITHOUT it.
+loss_function: mutual_info
+
+mutual_info_loss:
+  estimator: variational
+  density_estimator: gmm
+  dim_summary_fac: 1
+  kwargs:
+    num_components: 4
+    num_hidden_layers: 2
+    num_hidden_units: 128
+    activation: relu
+    full_covariance: true
+  regu:
+    z_weight: null

@@ -1,0 +1,108 @@
+# Nested hierarchical local-window transformer — lensing, maps + Cls.
+# bench_t7 follow-up: symmetric.yaml with the scalar distance kernel replaced by a distance-binned
+# learnable relative bias (Swin-style, but a function of geodesic distance only, so still isometry-
+# invariant). The symmetric run's scalar kernel_coeff never engaged (|a_h| <= 0.023 after 150k steps
+# -> ~1.5 nats worse vali NLL than bench_t6/default); the binned table has (num_heads, <=16) capacity
+# per stage, O(1) gradient signal per bin, can express non-monotone kernels, and is RBF-initialized
+# (b = -1.0 * bin_center_d^2) so the positional pathway is engaged from step 0.
+name: nested_transformer
+
+training:
+  # same activation footprint as symmetric.yaml (the binned bias adds one (H,S,S) gather-broadcast,
+  # same as the existing coeff*dist_sq add; params ~16x4 fp32 per block), so the memory sizing
+  # carries over: local_batch_size 18 -> 82.1 GB peak (NCCL-safe), ~254 ms real/step, 150k ~= 10.6 h
+  # on 4x GH200 (benchmark_t7_symmetric.sh).
+  n_steps: 150000
+  output_every: Null
+  checkpoint_every: 10000
+  vali_every: 1000
+  eval_every: Null
+
+optimization:
+  optimizer: adam
+  gradient_clipping:
+    clip_by_value: null
+    clip_by_norm: null
+    clip_by_global_norm: 1.0
+  mutual_info_loss:
+    learning_rate: 1.0e-4
+    optimizer_kwargs:
+      beta_1: 0.9
+      beta_2: 0.999
+    scheduler: Null
+    warmup_steps: 5000
+    warmup_init_learning_rate: 1.0e-5
+    decay_alpha: 0.0
+    ema_momentum: null
+
+network:
+  name: nested_transformer
+  token_nside: 16
+  z_bank_size: Null
+  max_checkpoints: 50
+  jit_compile_body: true
+  precision: bfloat16
+  input_norm: true
+  # exclude footprint-masked pixels from attention/merges/pooling (static mask
+  # constants only — no checkpoint variables, toggling keeps the lineage)
+  masked_attention: false
+  map_feature_dim: 512
+  head:
+    dropout_rate: 0.1
+  cls:
+    n_bins: 16
+    transform: asinh_per_feature
+    asinh_default_scale: null
+    embedding_layers: [512, 512, 512, 512]
+    embedding_dropout_rate: 0.1
+  kwargs: # -> HealpixNestedHierarchicalLocalWindowTransformer
+    base_embed_dim: 32
+    growth: double
+    num_heads: 4
+    window_levels: 3
+    local_blocks_per_level: 1
+    global_blocks: 1
+    mlp_ratio: 4
+    layerscale_init: null
+    fp32_softmax: true
+    # residual-branch dropout inside every local and global block (variable-free)
+    block_dropout_rate: null
+    # symmetry-respecting local pathway: distance-binned learnable attention bias
+    # (GeodesicBinnedBiasAttention; bin 0 = diagonal, <=15 quantile bins off-diagonal,
+    # late small stages capped at their distinct distances) + permutation-invariant
+    # merge. RBF init (coeff_init * bin_center_d^2) so the bias is engaged at step 0.
+    # Write floats as -1.0, never bare scientific notation (parses as a string).
+    pos_encoding: geodesic_binned
+    pos_encoding_kwargs:
+      coeff_init: -1.0
+      num_bins: 16
+    merge_op: deepsets
+
+dset:
+  training:
+    common:
+      is_eval: False
+      n_readers: 16
+      n_prefetch: 4
+      n_workers: 128
+    grid:
+      local_batch_size: 18  # 82.1 GB peak (NCCL-safe); base b20 = 89.6 GB is above the band. See benchmark_t7_symmetric.sh.
+      file_name_shuffle_buffer: 64
+      examples_shuffle_buffer: 1024
+  validation:
+    n_batches: 100
+    common:
+      is_eval: True
+      n_readers: 8
+      n_prefetch: 2
+      n_workers: 16
+    grid:
+      local_batch_size: 16
+  eval:
+    common:
+      is_eval: True
+      n_readers: 16
+      n_prefetch: 2
+      n_workers: 128
+    grid:
+      local_batch_size: 16

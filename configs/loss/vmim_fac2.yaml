@@ -1,3 +1,7 @@
+# GMM head with a 2x-overcomplete summary (dim_summary = 2 * n_params). Used for the 2026-07-12
+# decoupling test (lmax_1024_min_fac2); note that run predates the standardize_theta default, so
+# rerunning this config now trains a STANDARDIZED head. Caveat: the extra summary dims proved
+# fragile at the data point (min_fac2 was the only run rejected by l-C2ST on DES Y3, p = 0.02).
 loss_function: mutual_info
 
 mutual_info_loss:

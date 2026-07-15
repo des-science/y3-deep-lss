@@ -1,14 +1,31 @@
+# Standard VMIM loss (default since 2026-07-12): RealNVP flow variational head q(theta|s).
+# theta standardization inside the head is ON by default (standardize_theta, see the training
+# apps) -- it is what made flow heads train stably at all, and is worth ~+30% mock FoM even for
+# the GMM on the standard 6-param target (the ~30x Om-vs-n_Aia scale spread under-trains the
+# tight directions; the MI-bound optimum itself is affine-invariant). The old GMM default lives
+# in vmim_gmm.yaml as a fallback.
+#
+# Architecture: 4 couplings, 2x128 conditioners, roll-by-1 permutation between couplings.
+# The permutation is zero-parameter and fixes the static half-split (without it, params within
+# the same half -- Om, s8, w0 for the 6-param target -- never condition on each other directly).
+# Sized by the 2026-07-12 ablation on lmax_1024 lensing (head vali NLL, physical units:
+# p6h128 -2.312 > noperm 6x128 -2.292 > 4x128 -2.21 > 6x64 -2.19 > 4x64 -2.12 > GMM -1.86):
+# 6 couplings buy ~0.1 nat of bound tightness over 4, but downstream constraining power was FLAT
+# across the whole grid (mock median FoM2D 526-547, coverage clean everywhere), so the default
+# stays at the cheaper 4; bump num_layers to 6 only if a harder target shows the head is binding.
 loss_function: mutual_info
 
 mutual_info_loss:
   estimator: variational
-  density_estimator: gmm
+  density_estimator: flow
   dim_summary_fac: 1
   kwargs:
-    num_components: 4
     num_hidden_layers: 2
     num_hidden_units: 128
     activation: relu
-    full_covariance: true
+    num_layers: 4
+    scale_eps: 1.0e-5
+    log_scale_clip: 5.0
+    permute: true
   regu:
     z_weight: null

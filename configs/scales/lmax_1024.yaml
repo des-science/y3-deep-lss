@@ -1,7 +1,25 @@
 scale_cuts:
+  n_sigma_support: 3
+  arcmin: True
+  # Uniform harmonic scale cut at l_max = 1024. Unlike 8wl,32gc (fixed 8/32 Mpc/h beams -> a
+  # different l_max per z-bin), a single Gaussian beam theta_fwhm = 16.96 arcmin suppresses power
+  # to the 1% threshold (low_pass^2) at l = 1024 for every bin. white_noise_sigma matches the
+  # smoothed signal C_l at l = 1024: sigma = sqrt(0.01 * C_l^signal(1024) / pixarea), derived from
+  # the fiducial maps following notebooks/scale_cuts.ipynb (see scratch/deep_lss/noise_lmax1024.py).
+  # n_side = 512, low_pass^2(1024) = 0.0100 (l_max_thresh = 1025).
   lensing:
-    l_min: [30, 30, 30, 30]
+    theta_fwhm: [16.96, 16.96, 16.96, 16.96]
+    # 1 % noise threshold at l_max = 1024. Cf. 8wl,32gc l_max = [589, 863, 1159, 1382]: lower noise
+    # for bins 0-1 (1024 > their l_max -> less smoothing) and higher for bins 2-3 (1024 < their l_max).
+    white_noise_sigma: [1.8074e-4, 3.4800e-4, 5.5118e-4, 6.6987e-4]
     l_max: [1024, 1024, 1024, 1024]
+    l_min: [30, 30, 30, 30]
   clustering:
-    l_min: [30, 30, 30, 30]
+    theta_fwhm: [16.96, 16.96, 16.96, 16.96]
+    # NOTE: l_max = 1024 is aggressive for clustering (8wl,32gc caps it at [133, 195, 255, 305]); the
+    # maglim count maps at l ~ 1024 sit near the shot-noise floor. This block is unused by the current
+    # lensing-only run and is provided for completeness. For a split per-probe smooth_nside clustering
+    # run, add theta_fwhm_base (< 16.96 / sqrt(2)).
+    white_noise_sigma: [2.4010e-1, 1.2923e-1, 1.4183e-1, 1.6501e-1]
     l_max: [1024, 1024, 1024, 1024]
+    l_min: [30, 30, 30, 30]

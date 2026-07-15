@@ -1,0 +1,50 @@
+# Directly attacks the OVERFITTING visible in the v39 loss curve (train MI keeps dropping while vali
+# MI turns up after ~60k; ~0.8 nat train-vali gap). Stronger regularization on the baseline net:
+# dropout 0.1 -> 0.3 and AdamW weight_decay 1e-2 -> 1e-1. If the gap is what limits generalization,
+# this should flatten/lower the vali curve and (hopefully) tighten the posterior. Same net/schedule
+# as default.yaml so regularization strength is the only variable.
+
+# Network architecture
+num_hidden_units: 1024
+num_layers: 4
+dropout_rate: 0.3
+normalization: layer
+activation: relu
+
+# Data
+scale_cut: hard_rebinned
+cls_n_bins: 16
+cls_transform: asinh_per_feature
+
+# PCA
+pca_components: null
+pca_whiten: false
+
+# Training
+n_steps: 1000000
+batch_size: 1024
+learning_rate: 1e-4
+weight_decay: 1e-1
+clip_by_global_norm: 1.0
+
+lr_schedule: constant
+lr_warmup_steps: 5000
+
+early_stopping:
+  patience: 15
+  min_delta: 5e-2
+  min_steps: 10000
+
+# EMA weight averaging
+ema_momentum: null
+
+# Logging / checkpointing
+log_every: 100
+vali_every: 5000
+
+# Compilation
+xla: true
+
+# Reproducibility
+seed: 42
+deterministic_ops: false

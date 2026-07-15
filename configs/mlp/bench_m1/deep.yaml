@@ -1,0 +1,52 @@
+# ARCHITECTURE axis: depth only. Doubles num_layers 4 -> 8, everything else identical to default.yaml
+# (relu, no residual). This isolates the depth variable and matches the architecture of v35, the
+# historical best-FoM run (v35 = deep + log1p + PCA; here we test the depth ingredient alone under
+# the fixed asinh scaling). A deeper net has more capacity to break the Om-S8 degeneracy, but will
+# also overfit harder than the 4-layer default -> if the vali curve turns up early, the round-2 move
+# is deep + reg or deep + a decaying schedule. (gelu/residual is a separate, historically weaker
+# variant -> round 2, not this sweep.)
+
+# Network architecture
+num_hidden_units: 1024
+num_layers: 8
+dropout_rate: 0.1
+normalization: layer
+activation: relu
+
+# Data
+scale_cut: hard_rebinned
+cls_n_bins: 16
+cls_transform: asinh_per_feature
+
+# PCA
+pca_components: null
+pca_whiten: false
+
+# Training
+n_steps: 1000000
+batch_size: 1024
+learning_rate: 1e-4
+weight_decay: 1e-2
+clip_by_global_norm: 1.0
+
+lr_schedule: constant
+lr_warmup_steps: 5000
+
+early_stopping:
+  patience: 15
+  min_delta: 5e-2
+  min_steps: 10000
+
+# EMA weight averaging
+ema_momentum: null
+
+# Logging / checkpointing
+log_every: 100
+vali_every: 5000
+
+# Compilation
+xla: true
+
+# Reproducibility
+seed: 42
+deterministic_ops: false

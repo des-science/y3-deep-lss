@@ -1,0 +1,109 @@
+# Nested hierarchical local-window transformer — lensing, maps + Cls.
+# bench_t7 follow-up: the concat counterpart of symmetric_init. Adds the scalar geodesic distance-kernel
+# attention bias (RBF-initialised, coeff_init -1.0) ON TOP of the order-sensitive concat merge of
+# bench_t6/default — i.e. distance-aware local attention WITHOUT giving up concat's NEST orientation
+# gauge. The symmetric* runs showed a distance-only bias with a deepsets merge caps at per-window-isometry
+# invariance and recovers almost none of the ~3x FoM gap vs concat (the merge carries the orientation
+# info). This config tests the complementary hypothesis: concat already supplies orientation, so an
+# engaged distance bias could add explicit intra-window locality that concat cannot — the one distance-only
+# knob that is not redundant with the baseline. Together with symmetric_{init,binned} this completes a
+# 2x2 {concat,deepsets} x {geodesic,geodesic_binned} factorial (coeff_init -1.0 fixed) vs t6_default.
+name: nested_transformer
+
+training:
+  # geodesic bias + concat merge. The bias pathway drove the symmetric run from t6's ~81.6 GB regime to
+  # ~89.6 GB at batch 20 (above the NCCL-safe band); concat adds only a small delta over deepsets, so this
+  # runs at batch 18 like the symmetric* variants: ~83 GB peak (in band), ~254 ms real/step, 150k ~= 10.6 h
+  # on 4x GH200. Write floats as -1.0, never bare scientific notation (parses as a string).
+  n_steps: 150000
+  output_every: Null
+  checkpoint_every: 10000
+  vali_every: 1000
+  eval_every: Null
+
+optimization:
+  optimizer: adam
+  gradient_clipping:
+    clip_by_value: null
+    clip_by_norm: null
+    clip_by_global_norm: 1.0
+  mutual_info_loss:
+    learning_rate: 1.0e-4
+    optimizer_kwargs:
+      beta_1: 0.9
+      beta_2: 0.999
+    scheduler: Null
+    warmup_steps: 5000
+    warmup_init_learning_rate: 1.0e-5
+    decay_alpha: 0.0
+    ema_momentum: null
+
+network:
+  name: nested_transformer
+  token_nside: 16
+  z_bank_size: Null
+  max_checkpoints: 50
+  jit_compile_body: true
+  precision: bfloat16
+  input_norm: true
+  # exclude footprint-masked pixels from attention/merges/pooling (static mask
+  # constants only — no checkpoint variables, toggling keeps the lineage)
+  masked_attention: false
+  map_feature_dim: 512
+  head:
+    dropout_rate: 0.1
+  cls:
+    n_bins: 16
+    transform: asinh_per_feature
+    asinh_default_scale: null
+    embedding_layers: [512, 512, 512, 512]
+    embedding_dropout_rate: 0.1
+  kwargs: # -> HealpixNestedHierarchicalLocalWindowTransformer
+    base_embed_dim: 32
+    growth: double
+    num_heads: 4
+    window_levels: 3
+    local_blocks_per_level: 1
+    global_blocks: 1
+    mlp_ratio: 4
+    layerscale_init: null
+    fp32_softmax: true
+    # residual-branch dropout inside every local and global block (variable-free)
+    block_dropout_rate: null
+    # scalar geodesic distance-kernel attention bias, RBF-initialised (coeff_init -1.0 = a real
+    # RBF at step 0) + order-sensitive concat merge (the bench_t6/default gauge). Distance-aware
+    # attention on top of concat, not a symmetry variant. Write floats as -1.0, never bare scientific
+    # notation (parses as a string).
+    pos_encoding: geodesic
+    pos_encoding_kwargs:
+      coeff_init: -1.0
+    merge_op: concat
+
+dset:
+  training:
+    common:
+      is_eval: False
+      n_readers: 16
+      n_prefetch: 4
+      n_workers: 128
+    grid:
+      local_batch_size: 18  # concat + geodesic bias ~= 83 GB peak (NCCL-safe); batch 20 would land in the ~89.6 GB time-bomb zone.
+      file_name_shuffle_buffer: 64
+      examples_shuffle_buffer: 1024
+  validation:
+    n_batches: 100
+    common:
+      is_eval: True
+      n_readers: 8
+      n_prefetch: 2
+      n_workers: 16
+    grid:
+      local_batch_size: 16
+  eval:
+    common:
+      is_eval: True
+      n_readers: 16
+      n_prefetch: 2
+      n_workers: 128
+    grid:
+      local_batch_size: 16

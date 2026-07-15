@@ -1,0 +1,16 @@
+# Standard-NLA combined probes: like combined.yaml but without bta, for datasets built with
+# extended_nla: False (msfm configs/v17+). See lensing_nla.yaml for when (not) to use this.
+dset:
+  common:
+    with_lensing: True
+    with_clustering: True
+    with_cross_z: True
+    with_cross_probe: True
+    apply_norm: True
+  training:
+    params: [Om, s8, w0, Aia, n_Aia, bg1, bg2, bg3, bg4]
+  eval:
+    fiducial:
+      params: []
+    grid:
+      params: [Om, s8, w0, Aia, n_Aia, bg1, bg2, bg3, bg4]

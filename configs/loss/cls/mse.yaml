@@ -1,6 +1,0 @@
-loss_function: mse
-
-mse_loss:
-  # weight each parameter's squared error by 1/std**2 (computed from the training labels) so that
-  # parameters living on different scales contribute equally to the loss
-  standardize_labels: true

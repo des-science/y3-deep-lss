@@ -1,0 +1,21 @@
+# Standard-NLA variant of lensing_ext.yaml (extended VMIM target, no bta), for datasets built with
+# extended_nla: False (msfm configs/v17+). See lensing_ext.yaml for the extended-target rationale
+# and lensing_nla.yaml for when (not) to use the _nla configs.
+#
+# IMPORTANT: the params list must follow the all_params order from msfm parameters.get_parameters
+# (cosmo -> bary -> ia) because the Cls label gather in msi preprocessing.get_binned_power_spectra
+# returns columns in all_params order, NOT in the requested order.
+dset:
+  common:
+    with_lensing: True
+    with_clustering: False
+    with_cross_z: True
+    with_cross_probe: False
+    apply_norm: True
+  training:
+    params: [Om, s8, Ob, H0, ns, w0, bary_Mc, bary_nu, Aia, n_Aia]
+  eval:
+    fiducial:
+      params: []
+    grid:
+      params: [Om, s8, Ob, H0, ns, w0, bary_Mc, bary_nu, Aia, n_Aia]

@@ -1,0 +1,23 @@
+# Lensing with the VMIM target reduced to the cosmology-only vector (Om, s8, w0), implicitly
+# marginalizing the IA parameters at compression like the DES Y3 SBI reference papers do (their
+# flows are fit in this 3D space only). Dimensionality control for the lmax_1024 baseline: if the
+# 2d/3d FoM and marginals match the 6-param run, compression and density estimation are healthy
+# there and the ext-run degradation is a pure target/flow-dimensionality cost.
+#
+# IMPORTANT: the params list must follow the all_params order from msfm parameters.get_parameters
+# (cosmo -> bary -> ia) because the Cls label gather returns columns in all_params order, NOT in
+# the requested order.
+dset:
+  common:
+    with_lensing: True
+    with_clustering: False
+    with_cross_z: True
+    with_cross_probe: False
+    apply_norm: True
+  training:
+    params: [Om, s8, w0]
+  eval:
+    fiducial:
+      params: []
+    grid:
+      params: [Om, s8, w0]

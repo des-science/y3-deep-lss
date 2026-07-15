@@ -1,0 +1,51 @@
+# Optimizer probe: EMA weight averaging (momentum 0.999) on the baseline net + constant LR.
+# EMA usually acts as a cheap, near-free regularizer that smooths the final weights and can tighten
+# the posterior. NOTE the selection semantics change: with ema_momentum set, the app finalizes the
+# EMA weights and saves THOSE as the final network, superseding the early-stopping "best vali"
+# restore (early stopping still controls WHEN the loop stops). So this evaluates the EMA-averaged
+# weights, not the argmin-vali checkpoint.
+
+# Network architecture
+num_hidden_units: 1024
+num_layers: 4
+dropout_rate: 0.1
+normalization: layer
+activation: relu
+
+# Data
+scale_cut: hard_rebinned
+cls_n_bins: 16
+cls_transform: asinh_per_feature
+
+# PCA
+pca_components: null
+pca_whiten: false
+
+# Training
+n_steps: 1000000
+batch_size: 1024
+learning_rate: 1e-4
+weight_decay: 1e-2
+clip_by_global_norm: 1.0
+
+lr_schedule: constant
+lr_warmup_steps: 5000
+
+early_stopping:
+  patience: 15
+  min_delta: 5e-2
+  min_steps: 10000
+
+# EMA weight averaging
+ema_momentum: 0.999
+
+# Logging / checkpointing
+log_every: 100
+vali_every: 5000
+
+# Compilation
+xla: true
+
+# Reproducibility
+seed: 42
+deterministic_ops: false
