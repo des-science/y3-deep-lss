@@ -1,15 +1,31 @@
 # Nested hierarchical local-window transformer — combined probes, maps only.
-# No Cls branch (no `cls:` block): the transformer output is the summary statistic directly.
-# Architecture mirrors the lensing maps.yaml (base 32, 4 heads, 4 global blocks, no LayerScale,
-# input-norm layer + head dropout). Clustering is smoothed at nside 256 with its own kernel
-# (per-probe smooth_nside) and upsampled back; lensing stays at the native n_side.
+# No Cls branch (no `cls:` block, no map_feature_dim): the transformer output is the summary
+# statistic directly. Otherwise identical to combined/maps+cls.yaml — the benchmarked winning base,
+# bench_t8/default.yaml.
+# Multi-resolution map branch: clustering is smoothed at nside 256 and INJECTED into the transformer
+# hierarchy at the level already running at nside 256 (one merge below the nside-512 lensing input)
+# rather than upsampled, so the network is one level deeper for lensing than for clustering (see
+# HealpixMultiResMapEncoder).
+# NOTE: masked_attention is unavailable on this multi-resolution (split_probes) path — probe
+# injection and the token_valid attention mask are mutually exclusive in the core transformer, so
+# build_map_encoder raises if it is enabled here. It is available in the single-resolution
+# lensing/clustering configs.
 name: nested_transformer
 
 training:
-  # local_batch_size 20 is the max that comfortably fits (83 GB / 120 GB on a GH200; 24 OOMs) at
-  # full-res lensing — same memory envelope as the lensing maps.yaml. 120k steps (uniform across
-  # probes) ~= 9.5 h on 4 GPUs (~3.5 steps/s effective, ~9% slower/step than lensing per benchmark).
-  n_steps: 120000
+  # Sized for ~11 h of training on 4x GH200 (the 12 h wall leaves ~1 h for eval+inference).
+  # batch 20 -> 82.3 GB peak, ~294 ms/step -> 130k ~= 10.6 h. Do not raise the batch: 24 -> 96.4 GB
+  # is past the ~85 GB band above which the multi-GPU NCCL all-reduce deadlocks (mid-run, silently),
+  # and 28 OOMs. Injecting clustering rather than upsampling it costs only ~34k params over
+  # lensing-only (19.71 M vs 19.68 M map body), so the memory envelope matches lensing.
+  #
+  # This step time assumes the 8wl,32gc scale cut, and this config is the most exposed to that
+  # choice: it smooths both probes, and clustering gets its own base kernel applied repeatedly
+  # (scale_cuts.clustering.theta_fwhm_base). Smoothing is a sparse matmul that runs eagerly (XLA
+  # cannot compile tf.sparse.sparse_dense_matmul) and its non-zeros grow as theta_fwhm^2, so a
+  # coarser cut adds wall time directly — 8wl,40gc widens the clustering kernels ~1.6x in area and
+  # raises the rep count. Re-benchmark and re-pick n_steps before switching scales.
+  n_steps: 130000
   output_every: Null
   checkpoint_every: 10000
   vali_every: 1000
@@ -34,9 +50,10 @@ optimization:
 
 network:
   name: nested_transformer
-  # per-probe smoothing resolution: clustering (fwhm >= 57') is smoothed at nside 256 and
-  # upsampled back; lensing stays at the native n_side. See scale_cuts.clustering.theta_fwhm_base
-  # in the scales config for the matching base kernel choice.
+  # per-probe smoothing resolution: clustering (fwhm >= 57') is smoothed at nside 256 and injected
+  # into the hierarchy at its native scale (see HealpixMultiResMapEncoder); lensing stays at the
+  # native n_side. See scale_cuts.clustering.theta_fwhm_base in the scales config for the matching
+  # base kernel choice.
   smooth_nside:
     clustering: 256
   token_nside: 16
@@ -47,15 +64,24 @@ network:
   input_norm: true
   head:
     dropout_rate: 0.1
-  kwargs: # -> NestedHierarchicalLocalWindowTransformer
+  kwargs: # -> HealpixNestedHierarchicalLocalWindowTransformer
     base_embed_dim: 32
     growth: double
     num_heads: 4
     window_levels: 3
     local_blocks_per_level: 1
-    global_blocks: 4
+    global_blocks: 1
     mlp_ratio: 4
     layerscale_init: null
+    fp32_softmax: true
+    # residual-branch dropout inside every local and global block (variable-free)
+    block_dropout_rate: null
+    # positional encoding for the local window attention: null (position-free) or geodesic
+    # (distance-kernel attention bias, zero-init so it starts at the baseline)
+    pos_encoding: null
+    # patch merge: concat (order-sensitive concat+Dense) or deepsets (child-permutation-invariant,
+    # requires a pos_encoding)
+    merge_op: concat
 
 dset:
   training:
@@ -65,7 +91,7 @@ dset:
       n_prefetch: 4
       n_workers: 128
     grid:
-      local_batch_size: 20
+      local_batch_size: 20  # capped by the NCCL band, not by the OOM ceiling — see the n_steps note
       file_name_shuffle_buffer: 64
       examples_shuffle_buffer: 1024
   validation:

@@ -1,18 +1,17 @@
 # Nested hierarchical local-window transformer — lensing, maps + Cls.
-# The map transformer and the binned angular power spectra are embedded separately and fused before
-# the regression head. Architecture is the benchmarked winning base, bench_t8/default.yaml.
+# bench_t8 sweep: cosine-schedule counterpart of the bench_t6/bench_t7 architecture described
+# below. The ONLY change vs that source is scheduler: cosine (not Null) — cosine did well in
+# bench_t4, while t6/t7 used constant LR after warmup. Sizing (n_steps, batch) is unchanged
+# because the LR schedule affects neither step time nor memory (no re-benchmark needed).
+# bench_t5 baseline: identical to ../maps+cls.yaml. The other configs in this
+# directory each toggle one new feature on top of this base.
 name: nested_transformer
 
 training:
-  # Sized for ~11 h of training on 4x GH200 (the 12 h wall leaves ~1 h for eval+inference).
-  # batch 20 -> 81.6 GB peak, ~264 ms/step -> 150k ~= 11.0 h. Do not raise the batch: 24 -> 95.3 GB
-  # is past the ~85 GB band above which the multi-GPU NCCL all-reduce deadlocks (mid-run, silently),
-  # and 32 OOMs.
-  #
-  # This step time assumes the 8wl,32gc scale cut. Smoothing is a sparse matmul that runs eagerly
-  # (XLA cannot compile tf.sparse.sparse_dense_matmul), and its non-zeros grow as theta_fwhm^2, so
-  # a coarser cut adds wall time directly. The lighter cuts (lmax_1024, unsmoothed) leave this
-  # sizing conservative; re-benchmark and re-pick n_steps before running a coarser one.
+  # sized for ~11 h train on 4x GH200 at local_batch_size 20 (batch 20 -> 81.6 GB peak, in
+  # the NCCL-safe memory band; batch 24 -> 95.3 GB is a time-bomb, see benchmark_t6.sh).
+  # real ~264 ms/step (synthetic single-GPU 181.6 ms x K=1.45) -> 150k ~= 11.0 h
+  # (12 h wall leaves ~1 h for eval+inference).
   n_steps: 150000
   output_every: Null
   checkpoint_every: 10000
@@ -44,12 +43,12 @@ network:
   jit_compile_body: true
   precision: bfloat16
   input_norm: true
-  # exclude footprint-masked pixels from attention/merges/pooling (static mask constants only —
-  # no checkpoint variables, toggling keeps the checkpoint lineage)
+  # exclude footprint-masked pixels from attention/merges/pooling (static mask
+  # constants only — no checkpoint variables, toggling keeps the lineage)
   masked_attention: false
   map_feature_dim: 512
   head:
-    dropout_rate: 0.1
+    dropout_rate: null
   cls:
     n_bins: 16
     transform: asinh_per_feature
@@ -67,12 +66,12 @@ network:
     layerscale_init: null
     fp32_softmax: true
     # residual-branch dropout inside every local and global block (variable-free)
-    block_dropout_rate: null
-    # positional encoding for the local window attention: null (position-free) or geodesic
-    # (distance-kernel attention bias, zero-init so it starts at the baseline)
+    block_dropout_rate: 0.1
+    # positional encoding for the local window attention: null (position-free) or
+    # geodesic (distance-kernel attention bias, zero-init so it starts at the baseline)
     pos_encoding: null
-    # patch merge: concat (order-sensitive concat+Dense) or deepsets (child-permutation-invariant,
-    # requires a pos_encoding)
+    # patch merge: concat (order-sensitive concat+Dense) or deepsets
+    # (child-permutation-invariant, requires a pos_encoding)
     merge_op: concat
 
 dset:
@@ -83,7 +82,7 @@ dset:
       n_prefetch: 4
       n_workers: 128
     grid:
-      local_batch_size: 20  # capped by the NCCL band, not by the OOM ceiling — see the n_steps note
+      local_batch_size: 20 # 81.6 GB peak (NCCL-safe band); 24 -> 95.3 GB time-bomb, 32 OOMs. See benchmark_t6.sh.
       file_name_shuffle_buffer: 64
       examples_shuffle_buffer: 1024
   validation:

@@ -1,11 +1,19 @@
 # Nested hierarchical local-window transformer — clustering, maps + Cls.
-# Adds the Cls branch (`cls:` block + map_feature_dim) on top of clustering/maps.yaml: the map
-# transformer and the binned angular power spectra are embedded separately and fused before the
-# regression head. Architecture mirrors lensing/maps+cls.yaml; the map branch runs at nside 256
-# (clustering-only, so smooth_nside 256 is the finest smoothing resolution — no upsample back).
+# The map transformer and the binned angular power spectra are embedded separately and fused before
+# the regression head. Architecture is the benchmarked winning base, bench_t8/default.yaml, same as
+# lensing/maps+cls.yaml; the map branch runs at nside 256 (clustering-only, so smooth_nside 256 is
+# the finest smoothing resolution — no upsample back).
 name: nested_transformer
 
 training:
+  # ~10 h of training on 4x GH200 at batch 48, filling the 12 h wall with room for eval+inference.
+  # This run is I/O-bound, not compute-bound (see the local_batch_size note), so n_steps is set by
+  # the read rate rather than by the network.
+  #
+  # Step time assumes the 8wl,32gc scale cut. Smoothing is a sparse matmul that runs eagerly (XLA
+  # cannot compile tf.sparse.sparse_dense_matmul) and its non-zeros grow as theta_fwhm^2. Being
+  # I/O-bound, this config absorbs some extra smoothing for free, but a much coarser cut can push it
+  # compute-bound — 8wl,40gc widens the clustering kernels ~1.6x in area. Re-time before switching.
   n_steps: 120000
   output_every: Null
   checkpoint_every: 10000
@@ -42,6 +50,9 @@ network:
   jit_compile_body: true
   precision: bfloat16
   input_norm: true
+  # exclude footprint-masked pixels from attention/merges/pooling (static mask constants only —
+  # no checkpoint variables, toggling keeps the checkpoint lineage)
+  masked_attention: false
   map_feature_dim: 512
   head:
     dropout_rate: 0.1
@@ -51,15 +62,24 @@ network:
     asinh_default_scale: null
     embedding_layers: [512, 512, 512, 512]
     embedding_dropout_rate: 0.1
-  kwargs: # -> NestedHierarchicalLocalWindowTransformer
+  kwargs: # -> HealpixNestedHierarchicalLocalWindowTransformer
     base_embed_dim: 32
     growth: double
     num_heads: 4
     window_levels: 3
     local_blocks_per_level: 1
-    global_blocks: 4
+    global_blocks: 1
     mlp_ratio: 4
     layerscale_init: null
+    fp32_softmax: true
+    # residual-branch dropout inside every local and global block (variable-free)
+    block_dropout_rate: null
+    # positional encoding for the local window attention: null (position-free) or geodesic
+    # (distance-kernel attention bias, zero-init so it starts at the baseline)
+    pos_encoding: null
+    # patch merge: concat (order-sensitive concat+Dense) or deepsets (child-permutation-invariant,
+    # requires a pos_encoding)
+    merge_op: concat
 
 dset:
   training:
@@ -69,10 +89,9 @@ dset:
       n_prefetch: 4
       n_workers: 128
     grid:
-      # local_batch_size 48 (not 72): the run is I/O-bound, not compute-bound. Maps are read at
-      # native res then downsampled to 256, so the light nside-256 network starves — step time scales
-      # with the ~bytes/step (batch), and batch 72 gave ~2.2 steps/s => ~15 h for 120k. Batch 48
-      # (192 global) => ~3.3 steps/s => ~10 h, keeping n_steps uniform with the other probes.
+      # 48, not 72: the run is I/O-bound. Maps are read at native res then downsampled to 256, so the
+      # light nside-256 network starves and step time tracks bytes/step (i.e. batch). 72 gave ~2.2
+      # steps/s => ~15 h for 120k; 48 (192 global) gives ~3.3 steps/s => ~10 h.
       local_batch_size: 48
       file_name_shuffle_buffer: 64
       examples_shuffle_buffer: 1024
