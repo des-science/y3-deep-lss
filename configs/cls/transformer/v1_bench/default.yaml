@@ -1,0 +1,50 @@
+# Cls summary encoder — transformer over the auto/cross redshift-bin PAIR tokens. Each token is a
+# length-cls_n_bins power-spectrum curve, tagged with its structured tomographic identity
+# (learned z_i, z_j and probe-pair-type embeddings) so attention can exploit redshift structure.
+
+network:
+  name: cls_transformer
+  kwargs:
+    d_model: 128
+    num_heads: 4
+    num_layers: 4
+    mlp_ratio: 4
+    dropout_rate: 0.1
+    activation: gelu
+    stem: mlp                 # per-pair tokenizer: 'mlp' (Dense over bins) or 'conv'
+    pool: mean                # 'mean' over tokens, or 'cls' (learned class token)
+    layerscale_init: 1.0e-4   # null to disable; keep the 1.0e-4 form (bare 1e-4 parses as a string)
+
+# Data — channel nets require the fixed (bins, pairs) hard_rebinned layout; PCA is unsupported.
+scale_cut: hard_rebinned
+cls_n_bins: 16
+cls_transform: asinh_per_feature
+pca_components: null
+
+# Training
+# batch_size reduced from 1024 to roughly match the CNN/MLP step rate: the transformer's
+# per-step compute scales with batch while the data pipeline has a ~2.4 ms/step floor, so
+# batch 256 lifts the transformer from ~132 to ~272 it/s (CNN ~395, MLP ~470 at batch 1024).
+n_steps: 1000000
+batch_size: 256
+learning_rate: 1.0e-4
+weight_decay: 1.0e-2
+clip_by_global_norm: 1.0
+
+lr_schedule: constant
+lr_warmup_steps: 5000
+
+early_stopping:
+  patience: 15
+  min_delta: 5.0e-2
+  min_steps: 10000
+
+ema_momentum: null
+
+log_every: 100
+vali_every: 5000
+
+xla: true
+
+seed: 42
+deterministic_ops: false

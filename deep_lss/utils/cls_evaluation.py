@@ -36,12 +36,26 @@ def _obs_preprocessing_fn(scale_cut, cls_n_bins=None):
     return _OBS_PREPROC_FNS[scale_cut]
 
 
-def save_loss_curve(pred_dir, pred_file, train_steps, train_losses, vali_steps, vali_losses, log_every, vali_mse=None):
+def save_loss_curve(
+    pred_dir,
+    pred_file,
+    train_steps,
+    train_losses,
+    vali_steps,
+    vali_losses,
+    log_every,
+    vali_mse=None,
+    vali_nmse_cosmo=None,
+):
     train_steps = np.array(train_steps)
     train_losses = np.array(train_losses)
     vali_steps = np.array(vali_steps)
     vali_losses = np.array(vali_losses)
     vali_mse = np.array(vali_mse) if vali_mse else np.array([])
+    # Per-parameter-normalized MSE over the cosmological parameters only. vali_mse (physical units,
+    # unweighted over parameters) is ~99% Aia+n_Aia for the lensing target and is kept only for
+    # continuity; this is the one to read.
+    vali_nmse_cosmo = np.array(vali_nmse_cosmo) if vali_nmse_cosmo else np.array([])
 
     with h5py.File(pred_file, "a") as f:
         for key, arr in [
@@ -50,13 +64,15 @@ def save_loss_curve(pred_dir, pred_file, train_steps, train_losses, vali_steps, 
             ("loss/vali_steps", vali_steps),
             ("loss/vali_losses", vali_losses),
             ("loss/vali_mse", vali_mse),
+            ("loss/vali_nmse_cosmo", vali_nmse_cosmo),
         ]:
             if key in f:
                 del f[key]
             f.create_dataset(key, data=arr)
 
     has_vali = len(vali_steps) > 0
-    has_mse = len(vali_mse) > 0
+    has_nmse = len(vali_nmse_cosmo) > 0
+    has_mse = has_nmse or len(vali_mse) > 0
     n_panels = 1 + int(has_mse)
     fig, axes = plt.subplots(1, n_panels, figsize=(8 * n_panels, 4))
     if n_panels == 1:
@@ -73,9 +89,14 @@ def save_loss_curve(pred_dir, pred_file, train_steps, train_losses, vali_steps, 
 
     if has_mse:
         ax2 = axes[1]
-        ax2.plot(vali_steps, vali_mse, lw=1.5, marker="o", ms=3, color="C2", label="vali MSE")
+        if has_nmse:
+            ax2.plot(vali_steps, vali_nmse_cosmo, lw=1.5, marker="o", ms=3, color="C2", label="vali nMSE (cosmo)")
+            ax2.axhline(1.0, color="k", ls=":", lw=0.8, label="predict prior mean")
+            ax2.set_ylabel("normalized posterior mean MSE")
+        else:
+            ax2.plot(vali_steps, vali_mse, lw=1.5, marker="o", ms=3, color="C2", label="vali MSE")
+            ax2.set_ylabel("posterior mean MSE")
         ax2.set_xlabel("step")
-        ax2.set_ylabel("posterior mean MSE")
         ax2.legend()
 
     fig.tight_layout()

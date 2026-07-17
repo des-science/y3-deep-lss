@@ -16,7 +16,7 @@ cls_n_bins: 16
 cls_transform: asinh_per_feature
 
 # PCA (MLP-only; it rotates the flat feature vector — channel nets reject it)
-pca_components: null
+pca_components: 9999
 pca_whiten: false
 
 # Training
@@ -39,7 +39,13 @@ ema_momentum: null
 
 # Logging / checkpointing
 log_every: 100
-vali_every: 5000
+vali_every: 1000
+
+# Cap the eager full-test vali_loss (200k examples, ~76% of walltime) at a fixed random subset.
+# Must match configs/cls/transformer/default.yaml: early stopping fires on vali_loss, so a different
+# subsample size means a different stopping rule and the two are no longer comparable.
+vali_subsample: 10000
+n_vali_mse_examples: 8192
 
 # Compilation
 xla: true

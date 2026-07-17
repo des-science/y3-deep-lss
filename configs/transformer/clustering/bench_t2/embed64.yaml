@@ -1,0 +1,117 @@
+# Nested hierarchical local-window transformer — clustering, maps + Cls.
+# bench_t2 sweep: the t1_cls clustering reference (../maps+cls.yaml) underperforms both DeepSphere
+# (v8_cls) and its own v16-era transformer twins (t4/t5_cls at matched batch/steps); each config in
+# this directory toggles one knob on top of that base to isolate the cause.
+#
+# embed64: base_embed_dim 32 -> 64, matching the LENSING architecture stage-for-stage at the same
+# absolute nside. Lensing (nside 512, 5 nested levels, growth double) runs 512->32d, 256->64d,
+# 128->128d, 64->256d, 32->512d; clustering starts one level coarser (nside 256), so base 32 makes
+# every stage HALF the lensing width at the same physical resolution. Base 64 restores the match:
+# clustering becomes exactly "lensing minus its finest stage" (256->64d, 128->128d, 64->256d,
+# 32->512d). Physics motivation: clustering's beyond-2pt info (count-field higher moments that
+# break the s8-bg degeneracy) is small-scale and per-pixel S/N ~ O(1), so fine-stage width is where
+# the DeepSphere GCNN (128ch x 7 nonlinear layers at nside 256-64) most out-muscles the base-32
+# transformer stem.
+#
+# Sizing (batch 20 / 240k): batch from benchmark_t2_embed64.sh (job 2781545), steps from the real
+# measured rate. embed64 is ~1.45x the step time and ~4x the params (19.7M vs 5.0M) of base 32;
+# its compute rate lands just under the ~158 ex/s/GPU loader ceiling (measured 7.1 steps/s = 143
+# ex/s/GPU at b20 on 4x GH200, job 2781813), so throughput is ~flat in batch and a smaller batch
+# buys strictly more optimizer updates at the same wall and data volume. Batch 20 also matches
+# lensing maps+cls and the bench_t2 b20 run (width comparison at matched batch); peak memory ~33 GB,
+# far inside the ~85 GB NCCL-safe band (b48 = 79 GB, OOM at 64). The anchor-calibrated K=2.08
+# estimate (5.2 steps/s -> 180k) proved too conservative — the anchor's real wall bakes in I/O-bound
+# stalls that embed64's heavier compute hides; the measured overhead factor vs the synthetic bench
+# is ~1.5. 240k at 6.9-7.1 steps/s = 9.4-9.7 h (worst-case 6.5/s -> 10.3 h), leaving the
+# eval+inference tail room in the 12 h wall. 240k x 80 global = 19.2M examples, ~t1's 23M.
+name: nested_transformer
+
+training:
+  n_steps: 240000
+  output_every: Null
+  checkpoint_every: 10000
+  vali_every: 1000
+  eval_every: Null
+
+optimization:
+  optimizer: adam
+  gradient_clipping:
+    clip_by_value: null
+    clip_by_norm: null
+    clip_by_global_norm: 1.0
+  mutual_info_loss:
+    learning_rate: 1.0e-4
+    optimizer_kwargs:
+      beta_1: 0.9
+      beta_2: 0.999
+    scheduler: cosine
+    warmup_steps: 5000
+    warmup_init_learning_rate: 1.0e-5
+    decay_alpha: 0.0
+    ema_momentum: null
+
+network:
+  name: nested_transformer
+  # clustering-only, so nside 256 is the finest active smooth_nside and becomes the network's working
+  # resolution (resolve_smooth_nside): the pipeline downsamples the native-res maps to 256 and the
+  # transformer runs on those ~4x fewer pixels (no upsample back to native, unlike combined).
+  smooth_nside:
+    clustering: 256
+  token_nside: 16
+  z_bank_size: Null
+  max_checkpoints: 50
+  jit_compile_body: true
+  precision: bfloat16
+  input_norm: true
+  masked_attention: false
+  map_feature_dim: 512
+  head:
+    dropout_rate: 0.1
+  cls:
+    n_bins: 16
+    transform: asinh_per_feature
+    asinh_default_scale: null
+    embedding_layers: [512, 512, 512, 512]
+    embedding_dropout_rate: 0.1
+  kwargs: # -> HealpixNestedHierarchicalLocalWindowTransformer
+    base_embed_dim: 64
+    growth: double
+    num_heads: 4
+    window_levels: 3
+    local_blocks_per_level: 1
+    global_blocks: 1
+    mlp_ratio: 4
+    layerscale_init: null
+    fp32_softmax: true
+    block_dropout_rate: null
+    pos_encoding: null
+    merge_op: concat
+
+dset:
+  training:
+    common:
+      is_eval: False
+      n_readers: 16
+      n_prefetch: 4
+      n_workers: 128
+    grid:
+      local_batch_size: 20
+      file_name_shuffle_buffer: 64
+      examples_shuffle_buffer: 1024
+  validation:
+    n_batches: 100
+    common:
+      is_eval: True
+      n_readers: 8
+      n_prefetch: 2
+      n_workers: 16
+    grid:
+      local_batch_size: 16
+  eval:
+    common:
+      is_eval: True
+      n_readers: 16
+      n_prefetch: 2
+      n_workers: 128
+    grid:
+      local_batch_size: 16

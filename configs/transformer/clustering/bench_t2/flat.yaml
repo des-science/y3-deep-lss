@@ -1,0 +1,100 @@
+# Nested hierarchical local-window transformer — clustering, maps + Cls.
+# bench_t2 sweep: the t1_cls clustering reference (../maps+cls.yaml) underperforms both DeepSphere
+# (v8_cls) and its own v16-era transformer twins (t4/t5_cls at matched batch/steps); each config in
+# this directory toggles one knob on top of that base to isolate the cause.
+#
+# flat: identical to t1_cls (../maps+cls.yaml, batch 48 / 120k steps) but with the constant
+# post-warmup LR that every strong v16 clustering run used (v8_cls, t4_cls), instead of cosine.
+# The v16 t4-vs-t5 pair bundles {LR schedule, cls dropout}; this isolates the schedule alone on
+# v17. Sizing unchanged from t1_cls (schedule affects neither step time nor memory).
+name: nested_transformer
+
+training:
+  n_steps: 120000
+  output_every: Null
+  checkpoint_every: 10000
+  vali_every: 1000
+  eval_every: Null
+
+optimization:
+  optimizer: adam
+  gradient_clipping:
+    clip_by_value: null
+    clip_by_norm: null
+    clip_by_global_norm: 1.0
+  mutual_info_loss:
+    learning_rate: 1.0e-4
+    optimizer_kwargs:
+      beta_1: 0.9
+      beta_2: 0.999
+    scheduler: Null
+    warmup_steps: 5000
+    warmup_init_learning_rate: 1.0e-5
+    decay_alpha: 0.0
+    ema_momentum: null
+
+network:
+  name: nested_transformer
+  # clustering-only, so nside 256 is the finest active smooth_nside and becomes the network's working
+  # resolution (resolve_smooth_nside): the pipeline downsamples the native-res maps to 256 and the
+  # transformer runs on those ~4x fewer pixels (no upsample back to native, unlike combined).
+  smooth_nside:
+    clustering: 256
+  token_nside: 16
+  z_bank_size: Null
+  max_checkpoints: 50
+  jit_compile_body: true
+  precision: bfloat16
+  input_norm: true
+  masked_attention: false
+  map_feature_dim: 512
+  head:
+    dropout_rate: 0.1
+  cls:
+    n_bins: 16
+    transform: asinh_per_feature
+    asinh_default_scale: null
+    embedding_layers: [512, 512, 512, 512]
+    embedding_dropout_rate: 0.1
+  kwargs: # -> HealpixNestedHierarchicalLocalWindowTransformer
+    base_embed_dim: 32
+    growth: double
+    num_heads: 4
+    window_levels: 3
+    local_blocks_per_level: 1
+    global_blocks: 1
+    mlp_ratio: 4
+    layerscale_init: null
+    fp32_softmax: true
+    block_dropout_rate: null
+    pos_encoding: null
+    merge_op: concat
+
+dset:
+  training:
+    common:
+      is_eval: False
+      n_readers: 16
+      n_prefetch: 4
+      n_workers: 128
+    grid:
+      local_batch_size: 48
+      file_name_shuffle_buffer: 64
+      examples_shuffle_buffer: 1024
+  validation:
+    n_batches: 100
+    common:
+      is_eval: True
+      n_readers: 8
+      n_prefetch: 2
+      n_workers: 16
+    grid:
+      local_batch_size: 16
+  eval:
+    common:
+      is_eval: True
+      n_readers: 16
+      n_prefetch: 2
+      n_workers: 128
+    grid:
+      local_batch_size: 16

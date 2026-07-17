@@ -1,0 +1,49 @@
+# Baseline reference for the transformer size ladder: the canonical MLP (configs/cls/mlp/default.yaml)
+# re-run with this bench's validation settings (vali_subsample, n_vali_mse_examples) so its
+# vali_nmse_cosmo is measured on exactly the same examples as the transformer rungs. Lives in this
+# directory for bench parity even though it is not a transformer; the architecture is unchanged.
+# ~3.32M params, 3.31M MACs/sample -- the FLOP unit the ladder is quoted against.
+
+network:
+  name: mlp
+  kwargs:
+    num_hidden_units: 1024
+    num_layers: 4
+    dropout_rate: 0.1
+    normalization: layer
+    activation: relu
+
+# Data
+scale_cut: hard_rebinned
+cls_n_bins: 16
+cls_transform: asinh_per_feature
+pca_components: null
+pca_whiten: false
+
+# Training
+n_steps: 1000000
+batch_size: 1024
+learning_rate: 1.0e-4
+weight_decay: 1.0e-2
+clip_by_global_norm: 1.0
+
+lr_schedule: constant
+lr_warmup_steps: 5000
+
+early_stopping:
+  patience: 15
+  min_delta: 5.0e-2
+  min_steps: 10000
+
+ema_momentum: null
+
+log_every: 100
+vali_every: 1000
+
+vali_subsample: 20000
+n_vali_mse_examples: 8192
+
+xla: true
+
+seed: 43
+deterministic_ops: false

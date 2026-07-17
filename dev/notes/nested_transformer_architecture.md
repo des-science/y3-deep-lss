@@ -14,6 +14,18 @@ Reference geometry used throughout: **nside=512, token_nside=16** ⇒ `L=5` nest
 levels, `4^5 = 1024` pixels/token, **N=448 occupied DES-Y3 footprint tokens**
 (partial sky — *not* the full-sky `12·16² = 3072`), padding-free.
 
+**As trained by `submissions/clariden/training.sh`** (the production run, `ARCH=transformer`,
+`MODEL=t4_cls_dropout`): the maps+Cls variant, config
+`configs/transformer/lensing/maps+cls.yaml`. That config is *not* the base-16 reference
+baseline used for the tensor-flow walkthrough below — it runs `base_embed_dim=32`,
+`growth=double` (final dim 1024), `global_blocks=4`, `local_blocks_per_level=1`, `num_heads=4`,
+`window_levels=3`, and — notably — `layerscale_init: null` (**LayerScale off**; stability comes
+from the fp32 LayerNorm + cosine warmup + `clip_by_global_norm=1.0` instead). It adds
+`map_feature_dim=512`, a 16-bin `asinh_per_feature` Cls branch with a `[512,512,512,512]`
+embedding MLP, `input_norm: true`, `jit_compile_body: true`, `precision: bfloat16`, and 0.1
+head/embedding dropout. Trains for 120k steps at `local_batch_size=20` on 4×A100 under
+`mirrored`.
+
 ---
 
 ## 1. Pipeline, step by step
@@ -190,3 +202,69 @@ padding-free, N=448):
 
 ⚠ The `maps_wide.yaml`/`maps_coarse_tokens.yaml` header comments quote the
 full-sky `N = 12·16² = 3072`; the real occupied count is **448**.
+
+---
+
+## 6. Relation to the other `deep_lss.nets` architectures
+
+The nested transformer is one of a **family of learned-summary networks** in
+`deep_lss/nets/`, all with the same job: map a HEALPix map `(B, P, C)` to a low-dim
+summary `(B, num_outputs)` for the VMIM loss. They share two things and differ in the
+**spatial-mixing core**:
+
+- **Shared front-end:** every one of them optionally prepends `HealpySmoothing`
+  (the DeepSphere Gaussian smoother) — the transformer uses the *identical* layer
+  (`_build_fp32_smoothing`), so the maps entering the mixing core are preprocessed the
+  same way across all architectures.
+- **Shared back-end:** all end in a small regression head to `out_features`
+  (`get_regression_head` for the layer-list nets; a plain `LayerNorm → Dense` here).
+
+The registry lives in `deep_lss/nets/__init__.py`: the four `NETWORKS` entries are built
+as DeepSphere `HealpyGCNN` layer-lists, whereas `nested_transformer` is the sole member of
+`TRANSFORMER_NETWORKS` — a pre-assembled `tf.keras.Model` passed to `BaseModel` with
+`n_side=None` (no GCNN graph is constructed).
+
+### Comparison table
+
+| Network (`__init__` key) | File / class | Spatial-mixing core | Uses sphere graph? | Rotation-equivariant? | Downsampling | Relation to nested transformer |
+|---|---|---|---|---|---|---|
+| **DeepSphere ResNet** (`resnet`) | `resnet.py` / `ResNetLayers` | Chebyshev **graph** convolutions + residual blocks (Janis' KiDS-1000 fiducial net) | **yes** (PyGSP graph) | approx. (graph conv) | `HealpyPseudoConv` (p=1, ×½ nside) | the incumbent baseline the transformer competes against (`ARCH=deepsphere` in `training.sh`) |
+| **Vision Transformer** (`vision_transformer`) | `transformer.py` / `ViTLayers` → `Healpy_ViT` | **flat** ViT: one patch scale (superpixel = `4^p` block), global MHA over all patches | no (NEST order only) | no | optional `HealpyPseudoConv` pre-patching | **direct ancestor.** Same "NEST superpixel = token" idea; the nested transformer generalizes it from a *single* patch scale + global-only attention into a *hierarchy* of windowed-local stages + one global stage |
+| **Graph Transformer** (`graph_transformer`) | `transformer.py` / `GTLayers` → `Healpy_Transformer` | graph attention after graph downsampling | **yes** | approx. | `HealpyPseudoConv` | attention-based like the transformer, but attends over graph neighborhoods rather than NEST quadtree windows |
+| **1D CNN** (`one_d_conv`) | `one_d_conv.py` / `OneDConvLayers` | 1D conv over the NEST-flattened pixel sequence + residual blocks | no (NEST order only) | no | `HealpyPseudoConv` | shares the "structure enters only through NEST ordering, no graph" philosophy; conv kernels vs. windowed attention for local mixing |
+| **Maps+Cls fusion** | `maps_plus_cls_network.py` / `MapsPlusCLSNetwork` | `HealpyGCNN` map branch ⊕ binned-Cls branch → fused head | yes (map branch) | approx. | GCNN | the transformer's `TransformerMapsPlusCLSNetwork` (§4) is a **direct clone** of this two-branch design with the GCNN map branch swapped for the nested transformer |
+| **Nested transformer** (`nested_transformer`) | `nested_transfomer.py` / `transformer_networks.py` | Swin-style hierarchical **local-window attention on the NEST quadtree** + one global stage | no (NEST order only) | no | learned `NestedPatchMerge4` (concat-4 + Dense) | — |
+
+### Lineage and borrowings
+
+- **Closest relative: `ViTLayers` / `Healpy_ViT`.** Both tokenize by treating a
+  `token_nside` superpixel as a token via NEST ordering, and neither uses the DeepSphere
+  graph (spatial structure enters *only* through NEST contiguity → **not** rotation
+  equivariant, unlike the GCNN nets). The nested transformer is essentially "`Healpy_ViT`
+  made hierarchical": instead of collapsing each superpixel to one token and running
+  global attention, it keeps the `4^L` fine children and interleaves **windowed local
+  attention** with **patch merges**, running global attention only once at the coarsest
+  level.
+- **Patch merging ≈ learned `HealpyPseudoConv`.** `NestedPatchMerge4` coarsens resolution
+  by exactly the same ×4 (½ nside) factor as the `HealpyPseudoConv` downsampling used by
+  the ResNet / GT / 1D-CNN nets, but replaces average-pooling with a learned
+  `concat(4 children) → LayerNorm → Dense`. So the transformer's stage structure mirrors
+  the "downsample-and-widen" ladder of the graph nets, only with attention instead of
+  graph convs between merges.
+- **maps+Cls twin.** `TransformerMapsPlusCLSNetwork` reuses `MapsPlusCLSNetwork`'s exact
+  recipe — independent `LayerNorm` per branch, a shared `ClsBinningAndTransformLayer` Cls
+  branch, concat → regression head — with the only change being the map encoder.
+- **External references:** Swin Transformer (Liu et al. 2021, arXiv:2103.14030) for the
+  hierarchical local-window + patch-merge design; ViT (Dosovitskiy et al. 2020,
+  arXiv:2010.11929) for the underlying tokens-as-patches encoder (also cited in
+  `ViTLayers`); LayerScale (Touvron et al. 2021, arXiv:2103.17239) for the residual-branch
+  scaling in `TransformerBlock` (though **disabled** in the as-trained config).
+
+### Why it exists (vs. the GCNN baseline)
+
+The DeepSphere `ResNetLayers` is the established fiducial encoder; the nested transformer
+is the attention-based challenger. It trades the graph's approximate rotation equivariance
+for (i) content-dependent long-range mixing via the global attention stage and (ii) a
+much cheaper, XLA-clean forward pass — smoothing aside, the whole tokenizer→transformer
+body is `tf.gather` + dense/attention/reshape ops with **no sparse graph Laplacian**, so
+it jit-compiles into few fused kernels (`jit_compile_body`), which the graph nets cannot.

@@ -58,6 +58,7 @@ from deep_lss.models.grid_model import GridLossModel
 from deep_lss.utils.distribute import HorovodStrategy
 from deep_lss.nets import NETWORKS, TRANSFORMER_NETWORKS
 from deep_lss.nets.composite.resnet_maps_plus_cls import ResNetMapsPlusCLSNetwork
+from deep_lss.nets.encoders.maps.gcnn.resnet_multires import ResNetMultiResEncoder
 from deep_lss.nets.encoders.maps.transformer.network import HealpixTransformerNetwork
 from deep_lss.nets.composite.transformer_maps_plus_cls import TransformerMapsPlusCLSNetwork
 from deep_lss.nets.layers.maps.input_normalization import compute_input_norm_stats
@@ -197,8 +198,10 @@ def setup():
     parser.add_argument(
         "--summary_every",
         type=int,
-        default=1,
-        help="log step_time and global_step summaries every N training steps (set to 1 to keep previous behavior)",
+        default=100,
+        help="log step_time and global_step summaries every N training steps. This gates the only "
+        "per-step host<->device sync (get_step's .numpy() at write time), so the default of 100 "
+        "avoids syncing every step; set to 1 to restore the previous per-step behavior.",
     )
 
     parser.add_argument("--wandb", action="store_true", help="log to weights & biases, otherwise log to tensorboard")
@@ -481,15 +484,48 @@ def training(args=None):
         net_conf, dlss_conf, msfm_conf
     )
 
+    # the grid tfrecords store bary_Mc raw (CosmoGrid convention, ~1e12 - 1e15) while the priors,
+    # fiducials and inference all use log10(Mc) -- convert the label column(s) at load time. This
+    # is the tf.data mirror of parameters.raw_to_prior_units (used on the numpy label gathers in
+    # deep_lss.utils.cls_preprocessing and msi.utils.preprocessing); both are driven by the shared
+    # parameters.LOG10_PARAMS list, so theta reaches the loss in prior units as the theta
+    # standardization below assumes.
+    def _log10_label_columns(pipeline_params):
+        idxs = [pipeline_params.index(p) for p in parameters.LOG10_PARAMS if p in pipeline_params]
+        if not idxs:
+            return None
+
+        def _convert(*batch):
+            *rest, cosmo, index = batch
+            log10 = tf.math.log(tf.constant(10.0, cosmo.dtype))
+            for i in idxs:
+                col = cosmo[:, i]
+                assert_raw = tf.debugging.assert_greater(
+                    tf.reduce_min(col),
+                    tf.constant(parameters.LOG10_RAW_MIN, cosmo.dtype),
+                    message="expected raw bary_Mc labels, got log10(Mc)?",
+                )
+                with tf.control_dependencies([assert_raw]):
+                    log_col = tf.math.log(col[:, None]) / log10
+                cosmo = tf.concat([cosmo[:, :i], log_col, cosmo[:, i + 1 :]], axis=1)
+            return (*rest, cosmo, index)
+
+        return _convert
+
     # every train/vali/adapt dataset uses the same in-network nside downsampling; specify it once
     def build_dset(pipeline, tfr_pattern, ds_kwargs, input_context=None):
-        return pipeline.get_dset(
+        dset = pipeline.get_dset(
             tfr_pattern=tfr_pattern,
             **ds_kwargs,
             input_context=input_context,
             downsample_nside=smooth_nside if parent_output_idx is not None else None,
             parent_output_idx=parent_output_idx,
         )
+        if isinstance(pipeline, GridPipeline):
+            convert = _log10_label_columns(pipeline.params)
+            if convert is not None:
+                dset = dset.map(convert)
+        return dset
 
     # constants: deep_lss
     params = dlss_conf["dset"]["training"]["params"]
@@ -609,6 +645,27 @@ def training(args=None):
 
         is_transformer = net_conf["network"]["name"] in TRANSFORMER_NETWORKS
 
+        # A mixed per-probe smooth_nside mapping (combined probes, e.g. clustering at 256) yields
+        # a split_probes smoothing spec. On the GCNN path it selects ResNetMultiResEncoder: the
+        # coarse probe is smoothed at its own nside and injected (concat+Dense, the transformer
+        # injection idiom) after the pooling layer that already runs at that nside, instead of
+        # being smoothed with the shared base kernel at full resolution.
+        is_multires_gcnn = (not is_transformer) and "split_probes" in smoothing_kwargs
+        if is_multires_gcnn and net_conf["network"]["name"] != "resnet":
+            raise ValueError(
+                "Per-probe smooth_nside on the GCNN path is only supported for network.name=resnet "
+                "(ResNetMultiResEncoder)"
+            )
+
+        # `input_norm: true` standardizes the smoothed maps with statistics measured from
+        # training data on fresh runs and restored from the checkpoint otherwise (see the
+        # measurement block below). Supported by the transformer encoders, ResNetLayers, and
+        # ResNetMultiResEncoder; adds checkpoint variables — keep it consistent with the run's
+        # lineage.
+        input_norm = bool(net_conf["network"].get("input_norm", False))
+        # set per branch below; owns the smooth_groups/masks/load_input_norm_stats interface
+        norm_owner = None
+
         if is_transformer:
             # Nested hierarchical local-window transformer. The maps are smoothed (same
             # HealpySmoothing front-end as the GCNNs) and reordered into nested superpixel
@@ -632,11 +689,6 @@ def training(args=None):
                     "head.fused_layers is set but there is no cls: block — a maps-only run has "
                     "nothing to fuse. Remove head.fused_layers or add a cls: block."
                 )
-
-            # `input_norm: true` standardizes the smoothed maps with statistics measured from
-            # training data on fresh runs and restored from the checkpoint otherwise. Adds
-            # checkpoint variables — keep it consistent with the run's lineage.
-            input_norm = bool(net_conf["network"].get("input_norm", False))
 
             # `masked_attention: true` excludes footprint-masked pixels from the transformer's
             # attention/merges/pooling (static mask constants, no checkpoint variables).
@@ -720,8 +772,17 @@ def training(args=None):
 
         elif return_cls:
             net_spec = NETWORKS[net_conf["network"]["name"]](
-                out_features=n_output, smoothing_kwargs=smoothing_kwargs, **net_conf["network"]["kwargs"]
+                out_features=n_output,
+                # multi-res: smoothing and input norm move into ResNetMultiResEncoder, which
+                # consumes the split_probes spec; the spec then only provides the layer lists
+                smoothing_kwargs=None if is_multires_gcnn else smoothing_kwargs,
+                # only passed when enabled: input_norm is a ResNetLayers feature, and the other
+                # NETWORKS specs keep their signatures (they fail loudly if it is requested)
+                **({"input_norm": True} if input_norm and not is_multires_gcnn else {}),
+                **({"smoothing_external": True} if is_multires_gcnn else {}),
+                **net_conf["network"]["kwargs"],
             )
+            norm_owner = net_spec
             LOGGER.info(f"Loaded a network specification of type {NETWORKS[net_conf['network']['name']]}")
             LOGGER.info(f"Network kwargs including regularization: {net_conf['network']['kwargs']}")
             # Build a ResNetMapsPlusCLSNetwork: HealpyGCNN for maps + binned log-Cls concatenated.
@@ -730,30 +791,47 @@ def training(args=None):
             n_cls_bins = cls_conf.get("n_bins", 16)
             cls_emb_widths = cls_conf.get("embedding_layers", [512, 512, 512, 512])
             cls_emb_dropout = cls_conf.get("embedding_dropout_rate", None)
+            map_encoder = None
+            if is_multires_gcnn:
+                map_encoder = ResNetMultiResEncoder(
+                    smoothing_kwargs=smoothing_kwargs,
+                    layers=net_spec.get_conv_layers(),
+                    nside=smooth_nside,
+                    n_neighbors=net_conf["network"]["n_neighbors"],
+                    max_batch_size=effective_local_batch_size,
+                    input_norm=input_norm,
+                )
+                norm_owner = map_encoder
             network = ResNetMapsPlusCLSNetwork(
-                conv_layers=net_spec.get_conv_layers(),
+                conv_layers=None if is_multires_gcnn else net_spec.get_conv_layers(),
                 cls_embedding_layers=get_cls_embedding_layers(
                     cls_emb_widths,
                     dropout_rate=cls_emb_dropout,
                     dropout_per_layer=cls_conf.get("embedding_dropout_per_layer", True),
                 ),
                 regression_head_layers=net_spec.get_head_layers_no_flatten(),
-                n_side=smooth_nside,
+                n_side=None if is_multires_gcnn else smooth_nside,
                 tfr_n_side=n_side,
-                indices=smooth_indices,
+                indices=None if is_multires_gcnn else smooth_indices,
                 n_neighbors=net_conf["network"]["n_neighbors"],
                 max_batch_size=effective_local_batch_size,
-                initial_Fin=n_z_bins,
+                initial_Fin=None if is_multires_gcnn else n_z_bins,
                 n_cls_bins=n_cls_bins,
                 l_min_per_pair=l_min_per_pair,
                 l_max_per_pair=l_max_per_pair,
                 cls_transform=cls_transform,
+                # optional map-branch bottleneck before fusion, mirroring the transformer
+                # composite; None = legacy raw flattened GCNN features (old checkpoint lineage)
+                map_feature_dim=net_conf["network"].get("map_feature_dim", None),
+                map_encoder=map_encoder,
             )
             # HealpySmoothing is a tf.keras.Model whose build() must be called before
             # setup_grid_loss_step accesses trainable_variables. BaseModel skips this
             # because input_shape=None is passed below (tuple inputs can't use the
             # standard build path). Build the inner GCNN directly with the map shape.
-            network.gcnn.build((effective_local_batch_size, len(smooth_indices), n_z_bins))
+            # (multi-res: the encoder is a subclassed Model built by the trace below instead)
+            if network.gcnn is not None:
+                network.gcnn.build((effective_local_batch_size, len(smooth_indices), n_z_bins))
             # Trace the full ResNetMapsPlusCLSNetwork so that network.built=True and BaseModel
             # can call network.summary(). gcnn.build() only builds the map branch.
             network(
@@ -780,20 +858,44 @@ def training(args=None):
             )
         else:
             net_spec = NETWORKS[net_conf["network"]["name"]](
-                out_features=n_output, smoothing_kwargs=smoothing_kwargs, **net_conf["network"]["kwargs"]
+                out_features=n_output,
+                # multi-res: smoothing and input norm move into ResNetMultiResEncoder (see the
+                # maps+cls branch above)
+                smoothing_kwargs=None if is_multires_gcnn else smoothing_kwargs,
+                # only passed when enabled: input_norm is a ResNetLayers feature, and the other
+                # NETWORKS specs keep their signatures (they fail loudly if it is requested)
+                **({"input_norm": True} if input_norm and not is_multires_gcnn else {}),
+                **({"smoothing_external": True} if is_multires_gcnn else {}),
+                **net_conf["network"]["kwargs"],
             )
+            norm_owner = net_spec
             LOGGER.info(f"Loaded a network specification of type {NETWORKS[net_conf['network']['name']]}")
             LOGGER.info(f"Network kwargs including regularization: {net_conf['network']['kwargs']}")
-            network = net_spec.get_layers()
+            if is_multires_gcnn:
+                # prebuilt keras.Model (encoder incl. the regression head, which HealpyGCNN passes
+                # through) — BaseModel uses it directly, like the transformer maps-only path
+                network = ResNetMultiResEncoder(
+                    smoothing_kwargs=smoothing_kwargs,
+                    layers=net_spec.get_layers(),
+                    nside=smooth_nside,
+                    n_neighbors=net_conf["network"]["n_neighbors"],
+                    max_batch_size=effective_local_batch_size,
+                    input_norm=input_norm,
+                )
+                norm_owner = network
+                # trace so network.built=True before BaseModel.summary()
+                network(tf.zeros((2, len(smooth_indices), n_z_bins)), training=False)
+            else:
+                network = net_spec.get_layers()
             model = Model(
                 network=network,
-                n_side=smooth_nside,
-                indices=smooth_indices,
+                n_side=None if is_multires_gcnn else smooth_nside,
+                indices=None if is_multires_gcnn else smooth_indices,
                 n_neighbors=net_conf["network"]["n_neighbors"],
                 z_bank_size=net_conf["network"]["z_bank_size"],
                 max_checkpoints=net_conf["network"]["max_checkpoints"],
                 optimizer=optimizer,
-                input_shape=(None, len(smooth_indices), n_z_bins),
+                input_shape=None if is_multires_gcnn else (None, len(smooth_indices), n_z_bins),
                 max_batch_size=effective_local_batch_size,
                 checkpoint_dir=checkpoint_dir,
                 summary_dir=summary_dir,
@@ -830,23 +932,30 @@ def training(args=None):
             )
             network.cls_layer.set_scale(scale)
 
-        # Measure the empirical input-map normalization (post-smoothing mean map + per-channel
-        # std) from training batches and load it into the (checkpointed) layer. Only for fresh
-        # transformer runs — on restore the statistics return with the checkpoint. Under Horovod
-        # only rank 0 measures (its data shard differs from the other ranks'), then broadcasts,
-        # so all replicas start from identical values.
-        if is_transformer and input_norm and not args.restore_checkpoint:
+        # Measure the empirical input-map normalization (post-smoothing per-channel mean/std)
+        # from training batches and load it into the (checkpointed) layer. Only for fresh runs —
+        # on restore the statistics return with the checkpoint. Under Horovod only rank 0
+        # measures (its data shard differs from the other ranks'), then broadcasts, so all
+        # replicas start from identical values. The transformer encoders (single- and
+        # multi-resolution, on network.map_encoder), the GCNN spec (ResNetLayers, whose layer
+        # objects are the same instances that live inside the built network), and
+        # ResNetMultiResEncoder all expose the same smooth_groups/masks/load_input_norm_stats
+        # interface, so one code path covers every architecture and resolution (one or more
+        # input-norm groups). norm_owner is set in the branches above.
+        if input_norm and not args.restore_checkpoint:
+            if is_transformer:
+                norm_owner = network.map_encoder
             input_norm_stats = None
             if not isinstance(strategy, HorovodStrategy) or hvd.rank() == 0:
                 adapt_dset = build_dset(train_pipeline, args.train_tfr_pattern, dset_kwargs)
                 # 32 batches x local_batch_size maps: per-pixel mean SE ~ std/sqrt(n_maps),
                 # a fixed (sim=data) offset field; the per-channel std is exact at this n
                 input_norm_stats = compute_input_norm_stats(
-                    network.smoothing, adapt_dset, n_batches=32, mask=network.input_norm.mask
+                    norm_owner.smooth_groups, adapt_dset, n_batches=32, masks=norm_owner.masks
                 )
             if isinstance(strategy, HorovodStrategy):
                 input_norm_stats = strategy.broadcast_object(input_norm_stats, root_rank=0)
-            network.input_norm.load_stats(*input_norm_stats)
+            norm_owner.load_input_norm_stats(input_norm_stats)
 
         # training step, fiducial pipeline
         if args.loss_function == "delta":
@@ -881,11 +990,33 @@ def training(args=None):
                 likelihood_kwargs = {}
 
             if args.loss_function == "mutual_info":
+                mi_conf = loss_conf["mutual_info_loss"]
+
+                # standardize theta inside the variational head (head models z = (theta - mean) / std;
+                # log_prob stays in physical units via the constant log-Jacobian). The MI-bound optimum
+                # is affine-invariant, so ANY reasonable affine map fixes the head conditioning (~30x
+                # scale spread between Om and n_Aia under-trains the tight directions; measured +30%
+                # mock FoM on the Cls pipeline 2026-07-12). Unlike the Cls app there is no gathered
+                # label table here, so use analytic stats of the uniform priors the grid is
+                # Sobol-sampled from. Labels arrive in prior units: the raw bary_Mc tfrecord label is
+                # converted to log10(Mc) at load time in build_dset.
+                theta_shift, theta_scale = None, None
+                if mi_conf.get("standardize_theta", True):
+                    prior_intervals = parameters.get_prior_intervals(params, conf=msfm_conf)
+                    theta_shift = prior_intervals.mean(axis=1).astype("float32")
+                    theta_scale = ((prior_intervals[:, 1] - prior_intervals[:, 0]) / (12.0**0.5)).astype("float32")
+                    LOGGER.info(f"VMIM head theta standardization: shift = {theta_shift}, scale = {theta_scale}")
+
                 mutual_info_kwargs = {
                     "dim_summary": n_output,
-                    **loss_conf["mutual_info_loss"]["regu"],
-                    "mutual_info_estimator": loss_conf["mutual_info_loss"]["estimator"],
-                    "mutual_info_kwargs": loss_conf["mutual_info_loss"]["kwargs"],
+                    **mi_conf["regu"],
+                    "mutual_info_estimator": mi_conf["estimator"],
+                    "mutual_info_kwargs": {
+                        "density_estimator": mi_conf.get("density_estimator", "gmm"),
+                        "theta_shift": theta_shift,
+                        "theta_scale": theta_scale,
+                        **mi_conf["kwargs"],
+                    },
                 }
             else:
                 mutual_info_kwargs = {}
@@ -893,8 +1024,9 @@ def training(args=None):
             # A static input_signature (dim_x set) only fits the plain map path. When
             # return_cls=True the network takes a (maps, cls) tuple, and the transformer
             # reshapes its own input (and its map width = len(smooth_indices) which differs
-            # from len(data_vec_pix) under downsampling); in both cases trace dynamically.
-            dynamic_input = return_cls or is_transformer
+            # from len(data_vec_pix) under downsampling); the multi-res GCNN encoder is a
+            # prebuilt subclassed Model too — in all these cases trace dynamically.
+            dynamic_input = return_cls or is_transformer or is_multires_gcnn
             model.setup_grid_loss_step(
                 loss=args.loss_function,
                 batch_size=local_batch_size,
@@ -1060,6 +1192,21 @@ def training(args=None):
 
                 return dset
 
+            # Per-parameter normalization for the vali RMSE. An unweighted mean of squared errors in
+            # PHYSICAL units is dominated by the widest priors: on the lensing target
+            # (Om, s8, w0, Aia, n_Aia) the prior variances span [0.009 ... 8.3], so Aia+n_Aia carry
+            # ~99% of the metric and Om ~0.1% -- it tracks IA nuisance recovery, not the cosmology the
+            # FoM is built on. Normalize each parameter by its prior std (so 1.0 = no better than
+            # predicting the prior mean) and average only the cosmological parameters. Computed
+            # independently of standardize_theta, which rescales the head rather than the metric.
+            _prior_iv = parameters.get_prior_intervals(params, conf=msfm_conf)
+            vali_mse_scale = tf.constant(((_prior_iv[:, 1] - _prior_iv[:, 0]) / (12.0**0.5)).astype("float32"))
+            _cosmo_names = msfm_conf["analysis"]["params"]["cosmo"]
+            _fom_idx = [i for i, p in enumerate(params) if p in _cosmo_names]
+            LOGGER.info(f"vali nrmse_cosmo over {[params[i] for i in _fom_idx]} (of {params})")
+            vali_fom_idx = tf.constant(_fom_idx, dtype=tf.int32)
+            _has_fom_params = len(_fom_idx) > 0
+
             if args.loss_function == "mutual_info":
 
                 @tf.function
@@ -1067,9 +1214,10 @@ def training(args=None):
                     preds = model(x, training=False)
                     with tf.summary.record_if(False):
                         loss = model.vali_loss_fn(preds, cosmo)
-                    if hasattr(model, "vali_posterior_mean_fn"):
+                    if hasattr(model, "vali_posterior_mean_fn") and _has_fom_params:
                         posterior_mean = model.vali_posterior_mean_fn(preds)
-                        rmse = tf.sqrt(tf.reduce_mean(tf.square(posterior_mean - tf.cast(cosmo, tf.float32))))
+                        err = (posterior_mean - tf.cast(cosmo, tf.float32)) / vali_mse_scale
+                        rmse = tf.sqrt(tf.reduce_mean(tf.square(tf.gather(err, vali_fom_idx, axis=-1))))
                     else:
                         rmse = tf.constant(float("nan"))
                     return loss, rmse
@@ -1092,7 +1240,7 @@ def training(args=None):
             # consistency with the fiducial validation path
             validation_loop = make_validation_loop(
                 dist_vali_dset, vali_step_fn, n_vali_batches,
-                [("loss/vali_total", 0), ("loss/vali_rmse", 1)],
+                [("loss/vali_total", 0), ("loss/vali_nrmse_cosmo", 1)],
             )
 
     LOGGER.info(f"Starting training")

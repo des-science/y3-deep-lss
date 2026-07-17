@@ -10,10 +10,12 @@ Empirical per-channel input normalization for the smoothed HEALPix maps.
 mean/std measured from training data at the start of a fresh run and frozen into the checkpoint,
 then re-applies the footprint mask so masked pixels stay exactly zero. Channels of very different
 physical scale (lensing shear vs clustering counts) thus enter the downstream network balanced.
-``compute_input_norm_stats`` measures those per-channel statistics from a stream of training maps.
+``compute_input_norm_stats`` measures those per-channel statistics from a stream of training maps,
+via the map encoder's ``smooth_groups`` interface so a single code path covers both the single- and
+multi-resolution encoders.
 
-Kept independent of any particular network body (used by the transformer networks in
-``transformer_networks.py``) so it can be reused.
+Kept independent of any particular network body (used by the transformer map encoders in
+``encoders/maps/transformer/network.py``) so it can be reused.
 """
 
 import numpy as np
@@ -72,54 +74,62 @@ class EmpiricalInputNormalization(tf.keras.layers.Layer):
         return x
 
 
-def compute_input_norm_stats(smoothing, dset, n_batches, mask=None):
+def compute_input_norm_stats(smooth_fn, dset, n_batches, masks):
     """Measure the ``EmpiricalInputNormalization`` per-channel statistics from training maps.
 
-    Streams ``n_batches`` batches from ``dset`` (elements with the maps first, as yielded by the
-    msfm pipelines), applies the network's own smoothing front-end, and accumulates per-pixel
-    first/second moments in float64. ``mask`` is the footprint the maps are standardized over (the
-    input-norm layer's own mask): statistics are pooled over its active pixels AND over maps, so
-    each channel's footprint is standardized to ~unit variance while the masked fraction never
-    dilutes the scale. When ``mask`` is None the footprint falls back to the pixels that ever vary
-    (exactly zero in every map == outside the footprint).
+    Works for both resolutions through the map encoder's ``smooth_groups`` interface: the
+    single-resolution encoder emits a one-element group list, the multi-resolution encoder one
+    tensor per resolution group (probes at their own nside). Streams ``n_batches`` batches from
+    ``dset`` (elements with the maps first, as yielded by the msfm pipelines), applies
+    ``smooth_fn(maps)`` (i.e. ``map_encoder.smooth_groups``) and accumulates per-pixel first/second
+    moments per group in float64. ``masks`` is the matching list of per-group footprint masks (each
+    ``(P_g, C_g)`` or None, i.e. ``map_encoder.masks``): statistics are pooled over each group's
+    active pixels AND over maps, so each channel's footprint is standardized to ~unit variance while
+    the masked fraction never dilutes the scale. When a group's mask is None the footprint falls
+    back to the pixels that ever vary (exactly zero in every map == outside the footprint).
 
     Returns:
-        tuple: ``(mean, inv_std)`` float32 arrays of shape ``(n_channels,)``.
+        list: one ``(mean, inv_std)`` float32 tuple per group, in the order of ``masks``.
     """
+    n_groups = len(masks)
     n_maps = 0
-    moment1 = None
-    moment2 = None
+    moment1 = [None] * n_groups
+    moment2 = [None] * n_groups
     for element in dset.take(n_batches):
-        maps = element[0]
-        if smoothing is not None:
-            maps = smoothing(maps, training=False)
-        maps = np.asarray(maps, dtype=np.float64)
-        if moment1 is None:
-            moment1 = maps.sum(axis=0)
-            moment2 = np.square(maps).sum(axis=0)
-        else:
-            moment1 += maps.sum(axis=0)
-            moment2 += np.square(maps).sum(axis=0)
-        n_maps += maps.shape[0]
+        groups = smooth_fn(element[0])
+        if len(groups) != n_groups:
+            raise ValueError(f"smooth_fn returned {len(groups)} groups, expected {n_groups}")
+        batch_n = 0
+        for g, maps in enumerate(groups):
+            maps = np.asarray(maps, dtype=np.float64)
+            batch_n = maps.shape[0]
+            if moment1[g] is None:
+                moment1[g] = maps.sum(axis=0)
+                moment2[g] = np.square(maps).sum(axis=0)
+            else:
+                moment1[g] += maps.sum(axis=0)
+                moment2[g] += np.square(maps).sum(axis=0)
+        n_maps += batch_n
     assert n_maps > 1, f"Got only {n_maps} maps from {n_batches} batches — cannot measure input normalization"
 
-    # active footprint: the passed survey mask, else the pixels that ever vary (exactly zero in
-    # every map == outside the footprint)
-    active = np.asarray(mask) > 0 if mask is not None else moment2 > 0.0
-    n_active = active.sum(axis=0)
-    assert np.all(n_active > 0), f"Channels without any active pixels: n_active per channel = {n_active}"
+    stats = []
+    for g in range(n_groups):
+        mask = masks[g]
+        active = np.asarray(mask) > 0 if mask is not None else moment2[g] > 0.0
+        n_active = active.sum(axis=0)
+        assert np.all(n_active > 0), f"Group {g}: channels without any active pixels: n_active = {n_active}"
 
-    # per-channel scalars pooled over the active pixels and over maps
-    count = n_maps * n_active
-    mean = (moment1 * active).sum(axis=0) / count
-    channel_var = np.maximum((moment2 * active).sum(axis=0) / count - np.square(mean), 0.0)
-    assert np.all(channel_var > 0.0), f"Degenerate (zero-variance) channel(s): channel_var = {channel_var}"
-    inv_std = 1.0 / np.sqrt(channel_var)
+        count = n_maps * n_active
+        mean = (moment1[g] * active).sum(axis=0) / count
+        channel_var = np.maximum((moment2[g] * active).sum(axis=0) / count - np.square(mean), 0.0)
+        assert np.all(channel_var > 0.0), f"Group {g}: degenerate (zero-variance) channel(s): {channel_var}"
+        inv_std = 1.0 / np.sqrt(channel_var)
 
-    LOGGER.warning(
-        f"Input normalization measured from {n_maps} maps: per-channel std = "
-        f"{np.array2string(np.sqrt(channel_var), precision=4)}, per-channel mean = "
-        f"{np.array2string(mean, precision=4)}, "
-        f"active pixel fraction = {np.array2string(n_active / active.shape[0], precision=3)}"
-    )
-    return mean.astype(np.float32), inv_std.astype(np.float32)
+        LOGGER.warning(
+            f"Input normalization group {g} measured from {n_maps} maps: per-channel std = "
+            f"{np.array2string(np.sqrt(channel_var), precision=4)}, per-channel mean = "
+            f"{np.array2string(mean, precision=4)}, "
+            f"active pixel fraction = {np.array2string(n_active / active.shape[0], precision=3)}"
+        )
+        stats.append((mean.astype(np.float32), inv_std.astype(np.float32)))
+    return stats

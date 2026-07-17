@@ -22,6 +22,7 @@ from deep_lss.utils import configuration, distribute, evaluation
 from deep_lss.models.base_model import BaseModel
 from deep_lss.nets import NETWORKS, TRANSFORMER_NETWORKS
 from deep_lss.nets.composite.resnet_maps_plus_cls import ResNetMapsPlusCLSNetwork
+from deep_lss.nets.encoders.maps.gcnn.resnet_multires import ResNetMultiResEncoder
 from deep_lss.nets.encoders.maps.transformer.network import HealpixTransformerNetwork
 from deep_lss.nets.composite.transformer_maps_plus_cls import TransformerMapsPlusCLSNetwork
 from deep_lss.nets.heads.regression_head import get_regression_head
@@ -219,6 +220,15 @@ if __name__ == "__main__":
 
     is_transformer = net_conf["network"]["name"] in TRANSFORMER_NETWORKS
 
+    # mirror run_training.py: a mixed per-probe smooth_nside (split_probes spec) on the GCNN path
+    # selects ResNetMultiResEncoder (per-probe smoothing + coarse-probe injection)
+    is_multires_gcnn = (not is_transformer) and "split_probes" in smoothing_kwargs
+    if is_multires_gcnn and net_conf["network"]["name"] != "resnet":
+        raise ValueError(
+            "Per-probe smooth_nside on the GCNN path is only supported for network.name=resnet "
+            "(ResNetMultiResEncoder)"
+        )
+
     # create all of the variables within the strategy's scope, such that they are mirrored
     with strategy.scope():
         if is_transformer:
@@ -319,8 +329,16 @@ if __name__ == "__main__":
                 strategy=strategy,
             )
         else:
+            input_norm = bool(net_conf["network"].get("input_norm", False))
             net_spec = NETWORKS[net_conf["network"]["name"]](
-                out_features=n_output, smoothing_kwargs=smoothing_kwargs, **net_conf["network"]["kwargs"]
+                out_features=n_output,
+                # multi-res: smoothing and input norm live in ResNetMultiResEncoder instead
+                smoothing_kwargs=None if is_multires_gcnn else smoothing_kwargs,
+                # mirror run_training.py: input_norm rebuilds the EmpiricalInputNormalization
+                # layer, whose statistics (measured at training time) restore from the checkpoint
+                **({"input_norm": True} if input_norm and not is_multires_gcnn else {}),
+                **({"smoothing_external": True} if is_multires_gcnn else {}),
+                **net_conf["network"]["kwargs"],
             )
             LOGGER.info(f"Loaded a network specification of type {NETWORKS[net_conf['network']['name']]}")
 
@@ -329,26 +347,40 @@ if __name__ == "__main__":
                 n_cls_bins = cls_conf.get("n_bins", 16)
                 cls_emb_widths = cls_conf.get("embedding_layers", [512, 512, 512, 512])
                 cls_emb_dropout = cls_conf.get("embedding_dropout_rate", None)
+                map_encoder = None
+                if is_multires_gcnn:
+                    map_encoder = ResNetMultiResEncoder(
+                        smoothing_kwargs=smoothing_kwargs,
+                        layers=net_spec.get_conv_layers(),
+                        nside=smooth_nside,
+                        n_neighbors=net_conf["network"]["n_neighbors"],
+                        max_batch_size=max_batch_size,
+                        input_norm=input_norm,
+                    )
                 network = ResNetMapsPlusCLSNetwork(
-                    conv_layers=net_spec.get_conv_layers(),
+                    conv_layers=None if is_multires_gcnn else net_spec.get_conv_layers(),
                     cls_embedding_layers=get_cls_embedding_layers(
                         cls_emb_widths,
                         dropout_rate=cls_emb_dropout,
                         dropout_per_layer=cls_conf.get("embedding_dropout_per_layer", True),
                     ),
                     regression_head_layers=net_spec.get_head_layers_no_flatten(),
-                    n_side=smooth_nside,
+                    n_side=None if is_multires_gcnn else smooth_nside,
                     tfr_n_side=n_side,
-                    indices=smooth_indices,
+                    indices=None if is_multires_gcnn else smooth_indices,
                     n_neighbors=net_conf["network"]["n_neighbors"],
                     max_batch_size=max_batch_size,
-                    initial_Fin=n_z_bins,
+                    initial_Fin=None if is_multires_gcnn else n_z_bins,
                     n_cls_bins=n_cls_bins,
                     l_min_per_pair=l_min_per_pair,
                     l_max_per_pair=l_max_per_pair,
                     cls_transform=cls_conf.get("transform", "asinh_per_feature"),
+                    # must match the training-time setting for the checkpoint to restore
+                    map_feature_dim=net_conf["network"].get("map_feature_dim", None),
+                    map_encoder=map_encoder,
                 )
-                network.gcnn.build((max_batch_size, len(smooth_indices), n_z_bins))
+                if network.gcnn is not None:
+                    network.gcnn.build((max_batch_size, len(smooth_indices), n_z_bins))
                 # Trace the full ResNetMapsPlusCLSNetwork so that network.built=True and BaseModel
                 # can call network.summary(). gcnn.build() only builds the map branch.
                 network(
@@ -367,18 +399,41 @@ if __name__ == "__main__":
                     strategy=strategy,
                 )
             else:
-                network = net_spec.get_layers()
-                model = BaseModel(
-                    network=network,
-                    n_side=smooth_nside,
-                    indices=smooth_indices,
-                    n_neighbors=net_conf["network"]["n_neighbors"],
-                    input_shape=(None, len(smooth_indices), n_z_bins),
-                    max_batch_size=max_batch_size,
-                    checkpoint_dir=checkpoint_dir,
-                    restore_checkpoint=True,
-                    strategy=strategy,
-                )
+                if is_multires_gcnn:
+                    # prebuilt keras.Model (encoder incl. the regression head) — mirror run_training.py
+                    network = ResNetMultiResEncoder(
+                        smoothing_kwargs=smoothing_kwargs,
+                        layers=net_spec.get_layers(),
+                        nside=smooth_nside,
+                        n_neighbors=net_conf["network"]["n_neighbors"],
+                        max_batch_size=max_batch_size,
+                        input_norm=input_norm,
+                    )
+                    network(tf.zeros((2, len(smooth_indices), n_z_bins)), training=False)
+                    model = BaseModel(
+                        network=network,
+                        n_side=None,
+                        indices=None,
+                        n_neighbors=net_conf["network"]["n_neighbors"],
+                        input_shape=None,
+                        max_batch_size=max_batch_size,
+                        checkpoint_dir=checkpoint_dir,
+                        restore_checkpoint=True,
+                        strategy=strategy,
+                    )
+                else:
+                    network = net_spec.get_layers()
+                    model = BaseModel(
+                        network=network,
+                        n_side=smooth_nside,
+                        indices=smooth_indices,
+                        n_neighbors=net_conf["network"]["n_neighbors"],
+                        input_shape=(None, len(smooth_indices), n_z_bins),
+                        max_batch_size=max_batch_size,
+                        checkpoint_dir=checkpoint_dir,
+                        restore_checkpoint=True,
+                        strategy=strategy,
+                    )
 
     # Build a numpy-level model callable for individual observation evaluation.
     # Includes downsampling when smooth_nside < n_side.

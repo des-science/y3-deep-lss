@@ -37,70 +37,49 @@ import numpy as np
 import healpy as hp
 import tensorflow as tf
 
-from deepsphere import healpy_layers
-
 from msfm.utils import logger
 
 from .healpix_transformer import HealpixNestedHierarchicalLocalWindowTransformer
-from deep_lss.nets.layers.maps.smoothing import PerProbeSmoothing
+from deep_lss.nets.encoders.maps.multires import MultiResEncoderMixin
+from deep_lss.nets.layers.maps.smoothing import HealpySmoothing, fp32_policy_scope
 from deep_lss.nets.layers.maps.input_normalization import EmpiricalInputNormalization
 
 LOGGER = logger.get_logger(__file__)
 
 
 def _build_fp32_smoothing(smoothing_kwargs):
-    """Construct the smoothing front-end in float32 regardless of the active global policy.
+    """Construct the single-resolution ``HealpySmoothing`` front-end in float32.
 
-    ``HealpySmoothing`` reads ``tf.keras.mixed_precision.global_policy()`` at construction to pick
-    the dtype of its sparse kernel. Under a bf16/fp16 mixed-precision policy that makes the (eager)
-    ``tf.sparse.sparse_dense_matmul`` run in low precision, which has no fast cuSPARSE kernel and is
-    ~10x slower (benchmarked). Forcing float32 keeps the sparse smoothing fast; the network casts
-    the smoothed maps to the transformer body's compute dtype afterwards, so the body still gets the
-    bf16 speed/memory benefit. This mirrors how smoothing is kept outside the XLA region — the
-    sparse op is the one component that does not follow the rest of the network.
-
-    A ``{"split_probes": [...]}`` spec (mixed per-probe smooth_nside, see
-    ``configuration.get_smoothing_kwargs``) builds a ``PerProbeSmoothing`` with one kernel per
-    probe instead of a single ``HealpySmoothing``.
-    """
-    if not smoothing_kwargs:
-        return None
-    prev_policy = tf.keras.mixed_precision.global_policy()
-    tf.keras.mixed_precision.set_global_policy("float32")
-    try:
-        if "split_probes" in smoothing_kwargs:
-            return PerProbeSmoothing(smoothing_kwargs["split_probes"])
-        return healpy_layers.HealpySmoothing(**smoothing_kwargs)
-    finally:
-        tf.keras.mixed_precision.set_global_policy(prev_policy)
-
-
-def _input_norm_footprint(smoothing_kwargs):
-    """Per-channel survey footprint ``(n_pix, n_channels)`` at the smoothing output resolution.
-
-    Returns the same mask the smoothing front-end applies — its single ``mask`` for a plain
-    ``HealpySmoothing``, or, for the ``split_probes`` (``PerProbeSmoothing``) case, the per-probe
-    masks upsampled to the output nside and concatenated in channel order (matching how
-    ``PerProbeSmoothing`` upsamples and concatenates its outputs). Handed to
-    ``EmpiricalInputNormalization`` so the two front-ends share one footprint (see its docstring).
-    Returns None when smoothing applies no mask (full sky), so the input-norm skips the re-mask.
+    The ``{"split_probes": [...]}`` (mixed per-probe smooth_nside) case is handled by
+    ``HealpixMultiResMapEncoder``, which builds its own ``PerProbeSmoothing``; this helper only
+    ever sees a single-kernel spec on the single-resolution path.
     """
     if not smoothing_kwargs:
         return None
     if "split_probes" in smoothing_kwargs:
-        parts = []
-        for spec in smoothing_kwargs["split_probes"]:
-            mask = spec["smoothing_kwargs"].get("mask")
-            if mask is None:
-                return None
-            mask = np.asarray(mask)
-            parent_output_idx = spec.get("parent_output_idx")
-            if parent_output_idx is not None:
-                # upsample the probe's coarse footprint to the output nside (each parent's value
-                # repeated to its children), the identical upsampling PerProbeSmoothing applies
-                mask = mask[parent_output_idx]
-            parts.append(mask)
-        return np.concatenate(parts, axis=-1)
+        raise ValueError(
+            "_build_fp32_smoothing received a split_probes spec — the multi-resolution "
+            "encoder (HealpixMultiResMapEncoder) owns per-probe smoothing."
+        )
+    with fp32_policy_scope():
+        return HealpySmoothing(**smoothing_kwargs)
+
+
+def _input_norm_footprint(smoothing_kwargs):
+    """Per-channel survey footprint ``(n_pix, n_channels)`` for the single-resolution front-end.
+
+    Returns the single ``HealpySmoothing`` ``mask`` handed to ``EmpiricalInputNormalization`` so
+    the two front-ends share one footprint (see its docstring), or None when no mask is applied
+    (full sky). The ``split_probes`` (multi-resolution) case builds per-group masks inside
+    ``HealpixMultiResMapEncoder`` instead.
+    """
+    if not smoothing_kwargs:
+        return None
+    if "split_probes" in smoothing_kwargs:
+        raise ValueError(
+            "_input_norm_footprint received a split_probes spec — the multi-resolution "
+            "encoder (HealpixMultiResMapEncoder) builds per-group input-norm masks."
+        )
     mask = smoothing_kwargs.get("mask")
     return None if mask is None else np.asarray(mask)
 
@@ -249,12 +228,31 @@ class HealpixNestedTokenizer(tf.keras.layers.Layer):
         return tf.gather(x, self.gather_idx, axis=1)
 
 
-class HealpixTransformerNetwork(tf.keras.Model):
-    """Maps-only nested transformer: smoothing -> tokenizer -> transformer.
+class HealpixMapEncoder(tf.keras.Model):
+    """Common interface for the transformer map branch (smooth -> normalize -> tokenize -> transform).
 
-    The Gaussian smoothing is the identical ``HealpySmoothing`` front-end used by the
-    DeepSphere networks, so the maps seen by the transformer are preprocessed the same
-    way. Returns the ``(B, num_outputs)`` summary directly.
+    Both concrete encoders — ``HealpixSingleResMapEncoder`` (one kernel, all probes at one nside)
+    and ``HealpixMultiResMapEncoder`` (per-probe nsides with injection) — implement the same four
+    methods so the rest of the pipeline is resolution-agnostic:
+
+      - ``call(maps, training)``          -> ``(B, num_outputs)`` map feature / summary.
+      - ``smooth_groups(maps, training)`` -> list of per-resolution-group smoothed maps (fp32).
+      - ``masks`` (property)              -> matching list of per-group footprint masks.
+      - ``load_input_norm_stats(stats)``  -> load a list of ``(mean, inv_std)`` into the group layers.
+
+    The last three drive the empirical input-norm measurement in ``run_training`` through a single
+    code path (``compute_input_norm_stats``), regardless of resolution.
+    """
+
+
+class HealpixSingleResMapEncoder(HealpixMapEncoder):
+    """Single-resolution map branch: smoothing -> input-norm -> tokenizer -> transformer.
+
+    Used when smoothing resolves to a single kernel (all active probes share one nside). The
+    Gaussian smoothing is the identical ``HealpySmoothing`` front-end used by the DeepSphere
+    networks, so the maps seen by the transformer are preprocessed the same way. Returns
+    ``(B, num_outputs)`` — the summary for maps-only, or the ``map_feature_dim`` feature for the
+    maps+cls composite, matching the transformer's ``num_outputs``.
     """
 
     def __init__(
@@ -282,14 +280,15 @@ class HealpixTransformerNetwork(tf.keras.Model):
         # via compute_input_norm_stats; resumes/evaluation restore the two checkpointed mean/inv_std
         # variables) — adds variables, so toggling changes the checkpoint lineage. The footprint
         # mask is the same config geometry handed to the smoothing front-end (see the layer).
+        self._input_norm_mask = _input_norm_footprint(smoothing_kwargs)
         self.input_norm = (
-            EmpiricalInputNormalization(in_channels, _input_norm_footprint(smoothing_kwargs)) if input_norm else None
+            EmpiricalInputNormalization(in_channels, self._input_norm_mask) if input_norm else None
         )
 
         self.tokenizer = HealpixNestedTokenizer(smooth_indices, nside, token_nside, in_channels)
-        # masked_attention: exclude masked pixels from the transformer's attention/merges/
-        # pooling instead of feeding them through as zeros (see _masked_attention_token_valid).
-        # Mask constants only — no variables, so toggling keeps the checkpoint lineage.
+        # masked_attention: exclude masked pixels from the transformer's attention/merges/pooling
+        # instead of feeding them through as zeros (see _masked_attention_token_valid). Mask
+        # constants only — no variables, so toggling keeps the checkpoint lineage.
         self.transformer = HealpixNestedHierarchicalLocalWindowTransformer(
             num_pixels=self.tokenizer.num_pixels,
             nside=nside,
@@ -300,12 +299,26 @@ class HealpixTransformerNetwork(tf.keras.Model):
             token_valid=_masked_attention_token_valid(masked_attention, smoothing_kwargs, self.tokenizer),
             **transformer_kwargs,
         )
-        # smoothing (sparse, XLA-incompatible) stays eager; the tokenizer->transformer body
-        # is optionally fused with XLA — see _make_transformer_body.
+        # smoothing (sparse, XLA-incompatible) stays eager; the tokenizer->transformer body is
+        # optionally fused with XLA — see _make_transformer_body.
         self._body = _make_transformer_body(self.tokenizer, self.transformer, jit_compile_body)
         # compute dtype of the body (bf16 under a mixed policy, else float32); the fp32-smoothed
         # maps are cast to it before the body so the transformer runs in the mixed-precision dtype.
         self._body_compute_dtype = tf.keras.mixed_precision.global_policy().compute_dtype
+
+    def smooth_groups(self, maps, training=False):
+        """Smoothed maps (fp32) as a one-element list, used to measure the input-norm statistics."""
+        return [maps if self.smoothing is None else self.smoothing(maps, training=training)]
+
+    @property
+    def masks(self):
+        """Footprint mask as a one-element list (aligned with ``smooth_groups``)."""
+        return [self._input_norm_mask]
+
+    def load_input_norm_stats(self, stats):
+        """Load the single ``(mean, inv_std)`` group into the input-norm layer."""
+        (mean, inv_std), = stats
+        self.input_norm.load_stats(mean, inv_std)
 
     def call(self, maps, training=False):
         x = maps
@@ -315,3 +328,206 @@ class HealpixTransformerNetwork(tf.keras.Model):
             x = self.input_norm(x)
         x = tf.cast(x, self._body_compute_dtype)
         return self._body(x, training=training)
+
+
+class HealpixMultiResMapEncoder(MultiResEncoderMixin, HealpixMapEncoder):
+    """Multi-resolution map branch: per-probe smoothing at native nsides -> per-group input-norm
+    -> per-group tokenizers -> one nested transformer that takes the finest probe as its main
+    input and injects each coarser probe at the hierarchy level already running at that nside.
+    The smoothing/grouping/input-norm plumbing is the shared ``MultiResEncoderMixin`` (also used
+    by the GCNN ``ResNetMultiResEncoder``).
+
+    Used in place of the inline smoothing/input-norm/tokenizer/body path when smoothing resolves
+    to a ``{"split_probes": [...]}`` spec (mixed per-probe ``smooth_nside``, i.e. combined
+    probes). The coarser probe (clustering @256) is never upsampled — it enters the hierarchy at
+    its own scale, so the network is one level deeper for the finer probe (lensing @512).
+
+    Returns ``(B, num_outputs)`` (the summary for maps-only, or the ``map_feature_dim`` feature
+    for the maps+cls composite, matching the transformer's ``num_outputs``).
+    """
+
+    def __init__(
+        self,
+        smoothing_kwargs,
+        nside,
+        token_nside,
+        num_outputs,
+        transformer_kwargs,
+        jit_compile_body=False,
+        head_dropout_rate=None,
+        input_norm=False,
+    ):
+        super().__init__()
+
+        # per-probe fp32 smoothing + grouping by nside (finest first) — shared mixin plumbing;
+        # the finest nside == the output nside is the transformer's main input, coarser nsides
+        # are injections.
+        groups = self._init_smoothing_and_groups(smoothing_kwargs)
+        self._fine_group_idx = 0
+        if groups[0]["nside"] != nside:
+            raise ValueError(
+                f"finest probe nside {groups[0]['nside']} != output nside {nside}; the main "
+                "transformer input must be at the output nside."
+            )
+        if len(groups) < 2:
+            raise ValueError("HealpixMultiResMapEncoder needs at least two resolution groups.")
+
+        # one tokenizer per group; all must tile the same N top-level tokens
+        self.tokenizers = [
+            HealpixNestedTokenizer(g["indices"], g["nside"], token_nside, g["n_channels"]) for g in groups
+        ]
+        n_tokens = self.tokenizers[0].num_top_level_tokens
+        for tok, g in zip(self.tokenizers, groups):
+            if tok.num_top_level_tokens != n_tokens:
+                raise ValueError(
+                    f"group nside {g['nside']} has {tok.num_top_level_tokens} top-level tokens, "
+                    f"expected {n_tokens} (footprints must share the same token_nside superpixels)."
+                )
+
+        fine_channels = groups[0]["n_channels"]
+        injection_specs = [{"nside": g["nside"], "in_channels": g["n_channels"]} for g in groups[1:]]
+
+        self.transformer = HealpixNestedHierarchicalLocalWindowTransformer(
+            num_pixels=self.tokenizers[0].num_pixels,
+            nside=nside,
+            nside_down=token_nside,
+            in_channels=fine_channels,
+            num_outputs=num_outputs,
+            head_dropout_rate=head_dropout_rate,
+            injections=injection_specs,
+            **transformer_kwargs,
+        )
+
+        # per-group input normalization (shared mixin plumbing, own mask per group)
+        self._init_group_input_norm(input_norm)
+
+        self._body_compute_dtype = tf.keras.mixed_precision.global_policy().compute_dtype
+        self._body = self._make_body(jit_compile_body)
+
+        LOGGER.warning(
+            f"HealpixMultiResMapEncoder: fine group nside={nside} ({fine_channels} ch), coarse "
+            f"groups {[(g['nside'], g['n_channels']) for g in groups[1:]]}, N={n_tokens} "
+            f"top-level tokens, num_outputs={num_outputs}, input_norm={input_norm}"
+        )
+
+    def _make_body(self, jit_compile_body):
+        # tokenize each group and run the transformer with the coarse groups as injections; the
+        # fp32 smoothing/input-norm stay outside (kept eager, like the single-resolution body).
+        def body(group_tensors, training):
+            tokens = [tok(t) for tok, t in zip(self.tokenizers, group_tensors)]
+            injections = {
+                self._groups[gi]["nside"]: tokens[gi]
+                for gi in range(len(self._groups))
+                if gi != self._fine_group_idx
+            }
+            return self.transformer(
+                tokens[self._fine_group_idx], injections=injections, training=training
+            )
+
+        if jit_compile_body:
+            LOGGER.warning("Compiling the multi-res tokenizer->transformer body with jit_compile=True (XLA)")
+            return tf.function(body, jit_compile=True)
+        return body
+
+    def call(self, maps, training=False):
+        group_tensors = self.smooth_groups(maps, training=training)
+        if self.input_norms is not None:
+            group_tensors = [norm(t) for norm, t in zip(self.input_norms, group_tensors)]
+        group_tensors = [tf.cast(t, self._body_compute_dtype) for t in group_tensors]
+        return self._body(group_tensors, training=training)
+
+
+def build_map_encoder(
+    smoothing_kwargs,
+    smooth_indices,
+    nside,
+    token_nside,
+    in_channels,
+    num_outputs,
+    transformer_kwargs,
+    jit_compile_body=False,
+    head_dropout_rate=None,
+    input_norm=False,
+    masked_attention=False,
+):
+    """Build the transformer map branch, dispatching on the smoothing spec.
+
+    A ``{"split_probes": [...]}`` spec (mixed per-probe ``smooth_nside``, i.e. combined probes)
+    selects ``HealpixMultiResMapEncoder`` — per-probe smoothing with the coarser probe(s) injected
+    into the hierarchy rather than upsampled; ``masked_attention`` is unsupported there (injection
+    and ``token_valid`` are mutually exclusive) and raises. Any other spec (all active probes at a
+    single nside) selects ``HealpixSingleResMapEncoder``.
+
+    Both encoders return ``(B, num_outputs)`` and share the ``smooth_groups`` / ``masks`` /
+    ``load_input_norm_stats`` input-norm interface (see ``HealpixMapEncoder``).
+    """
+    if "split_probes" in (smoothing_kwargs or {}):
+        if masked_attention:
+            raise ValueError(
+                "masked_attention is not supported with multi-resolution (split_probes) smoothing."
+            )
+        return HealpixMultiResMapEncoder(
+            smoothing_kwargs=smoothing_kwargs,
+            nside=nside,
+            token_nside=token_nside,
+            num_outputs=num_outputs,
+            transformer_kwargs=transformer_kwargs,
+            jit_compile_body=jit_compile_body,
+            head_dropout_rate=head_dropout_rate,
+            input_norm=input_norm,
+        )
+    return HealpixSingleResMapEncoder(
+        smoothing_kwargs=smoothing_kwargs,
+        smooth_indices=smooth_indices,
+        nside=nside,
+        token_nside=token_nside,
+        in_channels=in_channels,
+        num_outputs=num_outputs,
+        transformer_kwargs=transformer_kwargs,
+        jit_compile_body=jit_compile_body,
+        head_dropout_rate=head_dropout_rate,
+        input_norm=input_norm,
+        masked_attention=masked_attention,
+    )
+
+
+class HealpixTransformerNetwork(tf.keras.Model):
+    """Maps-only nested transformer: a thin wrapper over a single ``map_encoder``.
+
+    Delegates the whole map branch (smoothing -> input-norm -> tokenizer -> transformer, single- or
+    multi-resolution) to the encoder built by ``build_map_encoder`` and returns its
+    ``(B, num_outputs)`` summary directly. The empirical input-norm statistics are measured through
+    ``self.map_encoder`` in ``run_training``.
+    """
+
+    def __init__(
+        self,
+        smoothing_kwargs,
+        smooth_indices,
+        nside,
+        token_nside,
+        in_channels,
+        num_outputs,
+        transformer_kwargs,
+        jit_compile_body=False,
+        head_dropout_rate=None,
+        input_norm=False,
+        masked_attention=False,
+    ):
+        super().__init__()
+        self.map_encoder = build_map_encoder(
+            smoothing_kwargs=smoothing_kwargs,
+            smooth_indices=smooth_indices,
+            nside=nside,
+            token_nside=token_nside,
+            in_channels=in_channels,
+            num_outputs=num_outputs,
+            transformer_kwargs=transformer_kwargs,
+            jit_compile_body=jit_compile_body,
+            head_dropout_rate=head_dropout_rate,
+            input_norm=input_norm,
+            masked_attention=masked_attention,
+        )
+
+    def call(self, maps, training=False):
+        return self.map_encoder(maps, training=training)

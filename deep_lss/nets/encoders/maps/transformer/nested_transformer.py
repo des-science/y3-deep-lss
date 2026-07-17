@@ -782,6 +782,7 @@ class NestedHierarchicalLocalWindowTransformer(tf.keras.Model):
         local_dist_bins=None,
         pos_coeff_init=0.0,
         token_valid=None,
+        injections=None,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -1062,6 +1063,42 @@ class NestedHierarchicalLocalWindowTransformer(tf.keras.Model):
             for level in range(body_levels)
         ]
 
+        # injections: optional secondary inputs entering the hierarchy at a coarser body
+        # level than the main (finest) input — e.g. a probe whose maps live at a lower nside
+        # (clustering @256 vs lensing @512) joins the residual stream at the body level that
+        # already runs at that nside, so the network is one level deeper for the fine probe.
+        # Each entry is {"level": body-loop level L (1..body_levels-1), "in_channels": C_inj};
+        # the tensor arrives already tiling the same N top-level tokens with body_levels-L
+        # nested axes. At the start of level L its C_inj features are embedded to
+        # channel_dims[L], concatenated with the merged fine stream, and a Dense fuses the
+        # concat back to channel_dims[L] (the same concat+Dense idiom as the patch merges).
+        # Masked attention (token_valid) is not supported alongside injections.
+        self.injections_spec = list(injections or [])
+        if self.injections_spec and token_valid is not None:
+            raise ValueError(
+                "injections are not supported together with masked attention (token_valid)."
+            )
+        self.injection_proj = {}
+        self.injection_fuse = {}
+        self._injection_channels = {}
+        for inj in self.injections_spec:
+            level = int(inj["level"])
+            if not (1 <= level <= body_levels - 1):
+                raise ValueError(
+                    f"injection level {level} out of range: expected 1..{body_levels - 1} "
+                    f"(body_levels={body_levels})."
+                )
+            if str(level) in self.injection_proj:
+                raise ValueError(f"duplicate injection at level {level}.")
+            dim = self.channel_dims[level]
+            self.injection_proj[str(level)] = tf.keras.layers.Dense(
+                dim, name=f"injection_proj_{level}"
+            )
+            self.injection_fuse[str(level)] = tf.keras.layers.Dense(
+                dim, name=f"injection_fuse_{level}"
+            )
+            self._injection_channels[level] = int(inj["in_channels"])
+
         # Final global attention over the N basic-patch tokens.
         final_dim = self.channel_dims[-1]
         self.global_blocks = [
@@ -1155,10 +1192,12 @@ class NestedHierarchicalLocalWindowTransformer(tf.keras.Model):
                 f"valid top-level tokens={int(self._pool_count)}"
             )
 
-    def call(self, x, training=None):
+    def call(self, x, training=None, injections=None):
         """
         Input:
             x: (B, C, N, 4, 4, ..., 4)
+            injections: optional {body-loop level L: (B, C_inj, N, 4, ..., 4)} with
+                body_levels - L nested axes, tiling the same N top-level tokens as x.
 
         Output:
             y: (B, num_outputs)
@@ -1210,6 +1249,24 @@ class NestedHierarchicalLocalWindowTransformer(tf.keras.Model):
             [batch_dim, token_dim, *([4] * self.num_nested_levels), self.in_channels]
         )
 
+        # Move each injection's channels to the end as well, mirroring the main input:
+        #   (B, C_inj, N, 4, ..., 4) -> (B, N, 4, ..., 4, C_inj)
+        injections = injections or {}
+        if set(injections) != set(self._injection_channels):
+            raise ValueError(
+                f"injections keys {sorted(injections)} do not match the configured "
+                f"injection levels {sorted(self._injection_channels)}."
+            )
+        injections_cl = {}
+        for level, inj in injections.items():
+            inj_ndim = 3 + (self.body_levels - level)
+            inj_perm = [0] + list(range(2, inj_ndim)) + [1]
+            inj = tf.transpose(inj, perm=inj_perm)
+            inj.set_shape(
+                [batch_dim, token_dim, *([4] * (self.body_levels - level)), self._injection_channels[level]]
+            )
+            injections_cl[level] = inj
+
         if self.stem_levels > 0:
             if self._stem_valid is not None:
                 # zero masked fine pixels before they are linearly mixed into a patch
@@ -1237,6 +1294,13 @@ class NestedHierarchicalLocalWindowTransformer(tf.keras.Model):
         # Hierarchical local processing.
         readout_features = []
         for level in range(self.body_levels):
+            # Inject a coarser secondary input that enters at this body level: embed its
+            # channels to channel_dims[level], concatenate with the merged fine stream, and
+            # fuse back to channel_dims[level] before the local attention sees the level.
+            if level in injections_cl:
+                inj = self.injection_proj[str(level)](injections_cl[level])
+                x = self.injection_fuse[str(level)](tf.concat([x, inj], axis=-1))
+
             for block in self.local_stages[level]:
                 x = block(x, training=training)
 

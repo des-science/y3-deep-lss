@@ -266,7 +266,8 @@ def _get_split_probe_specs(
 
         if probe_nside < output_nside:
             # maps the output footprint (what the network and pipeline run at) to this probe's
-            # coarse footprint, for the in-network down/upsampling around the smoothing
+            # coarse footprint, for the in-network downsampling before the smoothing (the coarse
+            # probe is injected into the transformer hierarchy at its own scale, never upsampled)
             probe_indices_out, parent_output_idx = get_smooth_nside_indices(
                 output_indices, output_nside, probe_nside
             )

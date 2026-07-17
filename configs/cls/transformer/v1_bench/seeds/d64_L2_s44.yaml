@@ -1,0 +1,62 @@
+# Cls transformer size ladder, rung: d_model=64, num_layers=2  (~102k params, ~0.31x the MLP's FLOPs/sample)
+# Still cheaper than the MLP in FLOPs.
+#
+# Attention runs over 10 lensing pair-tokens of 16 bins each (160 values in, 5 summaries out), so a
+# SINGLE layer already gives every token full receptive field -- depth here buys refinement, not
+# mixing range, while costing kernel launches and eager-vali dispatch. Everything except d_model and
+# num_layers is held fixed across the ladder (mlp_ratio, dropout, heads, stem, pool, optimizer).
+# layerscale is disabled: its 1e-4 init came from deep map-transformer stacks and at this depth it
+# only zeroes the residual branches at init (slow start) while changing the summary scale, which
+# perturbs the unstandardized flow-head context.
+
+network:
+  name: cls_transformer
+  kwargs:
+    d_model: 64
+    num_heads: 4
+    num_layers: 2
+    mlp_ratio: 4
+    dropout_rate: 0.1
+    activation: gelu
+    stem: mlp
+    pool: mean
+    layerscale_init: null
+
+# Data — channel nets require the fixed (bins, pairs) hard_rebinned layout; PCA is unsupported.
+scale_cut: hard_rebinned
+cls_n_bins: 16
+cls_transform: asinh_per_feature
+pca_components: null
+
+# Training — identical to configs/cls/mlp/default.yaml so this ladder varies ONLY the architecture.
+# batch_size is 1024 (not the 256 of the shipped transformer default): the nets are latency-bound on
+# 10-token/160-feature inputs, so a bigger batch costs little per step, and the eager vali loop is
+# per-batch-overhead-bound, so it gets ~4x cheaper too.
+n_steps: 1000000
+batch_size: 1024
+learning_rate: 1.0e-4
+weight_decay: 1.0e-2
+clip_by_global_norm: 1.0
+
+lr_schedule: constant
+lr_warmup_steps: 5000
+
+early_stopping:
+  patience: 15
+  min_delta: 5.0e-2
+  min_steps: 10000
+
+ema_momentum: null
+
+log_every: 100
+vali_every: 1000
+
+# Screening speed: cap the eager full-test vali_loss (200k examples, ~76% of walltime) at a fixed
+# random subset. Rank on vali_nmse_cosmo, logged over n_vali_mse_examples random test examples.
+vali_subsample: 20000
+n_vali_mse_examples: 8192
+
+xla: true
+
+seed: 44
+deterministic_ops: false

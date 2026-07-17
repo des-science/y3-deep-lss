@@ -39,10 +39,19 @@ network:
   max_checkpoints: 50
   save_second_to_last_layer: False
   z_bank_size: Null
+  # standardize the smoothed maps with per-channel statistics measured from training data on
+  # fresh runs and restored from the checkpoint otherwise (EmpiricalInputNormalization, same layer
+  # and placement as the transformer encoders). Adds checkpoint variables -- remove only to restore
+  # checkpoints from the pre-input-norm lineage.
+  input_norm: true
   # Maps+Cls: the presence of this `cls:` block enables the Cls branch (MapsPlusCLSNetwork); the
   # map GCNN and the binned angular power spectra are embedded separately and concatenated before
-  # the regression head. Same schema as configs/transformer/clustering/maps+cls.yaml — but note
-  # that `map_feature_dim` is transformer-only and is intentionally omitted here.
+  # the regression head. Same schema as configs/transformer/clustering/maps+cls.yaml.
+  # Map-branch fusion: the flattened GCNN features (448 pixels x 128 channels = 57344 at nside 256
+  # with 2 downsampling layers) enter the concatenation raw (LayerNorm per branch, no bottleneck) —
+  # same fusion as the maps-only dense head and the v8_cls runs. Setting map_feature_dim: <width>
+  # would insert a linear Dense projection before the branch LayerNorm instead (~29M params at 512,
+  # and a separate checkpoint lineage).
   cls:
     # number of ell bins per cross pair
     n_bins: 16

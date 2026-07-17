@@ -180,8 +180,14 @@ def run_single(args):
         )
 
     n_param_weights = int(sum(int(np.prod(v.shape)) for v in model.trainable_variables))
-    n_tokens = int(network.tokenizer.num_top_level_tokens)
-    pix_per_token = int(network.tokenizer.num_pixels // max(n_tokens, 1))
+    # The tokenizer now lives inside network.map_encoder (build_map_encoder refactor). The
+    # single-resolution encoder exposes one `tokenizer`; the multi-resolution encoder
+    # (HealpixMultiResMapEncoder, combined split_probes) exposes a list `tokenizers`, whose fine
+    # group (index 0) sets the top-level token count. Report that primary tokenizer's geometry.
+    encoder = network.map_encoder
+    tokenizer = getattr(encoder, "tokenizer", None) or encoder.tokenizers[0]
+    n_tokens = int(tokenizer.num_top_level_tokens)
+    pix_per_token = int(tokenizer.num_pixels // max(n_tokens, 1))
 
     # synthetic batch (content is irrelevant for memory/timing)
     x = tf.random.normal((batch_size, len(smooth_indices), n_z_bins))

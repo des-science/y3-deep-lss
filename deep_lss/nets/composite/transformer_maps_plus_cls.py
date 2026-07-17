@@ -15,17 +15,7 @@ import tensorflow as tf
 
 from msfm.utils import logger
 
-from deep_lss.nets.encoders.maps.transformer.network import (
-    _build_fp32_smoothing,
-    _input_norm_footprint,
-    _make_transformer_body,
-    _masked_attention_token_valid,
-    HealpixNestedTokenizer,
-)
-from deep_lss.nets.encoders.maps.transformer.healpix_transformer import (
-    HealpixNestedHierarchicalLocalWindowTransformer,
-)
-from deep_lss.nets.layers.maps.input_normalization import EmpiricalInputNormalization
+from deep_lss.nets.encoders.maps.transformer.network import build_map_encoder
 from deep_lss.nets.layers.cls.binning import ClsBinningAndTransformLayer
 
 LOGGER = logger.get_logger(__file__)
@@ -61,38 +51,23 @@ class TransformerMapsPlusCLSNetwork(tf.keras.Model):
     ):
         super().__init__()
 
-        # sparse smoothing stays in float32 (no fast bf16 cuSPARSE kernel) — see _build_fp32_smoothing
-        self.smoothing = _build_fp32_smoothing(smoothing_kwargs)
-        if self.smoothing is None:
-            LOGGER.warning("No smoothing layer is included in the transformer network")
-
-        # standardize the smoothed fp32 maps with per-channel statistics (fresh runs measure them
-        # via compute_input_norm_stats; resumes/evaluation restore the two checkpointed mean/inv_std
-        # variables) — adds variables, so toggling changes the checkpoint lineage. The footprint
-        # mask is the same config geometry handed to the smoothing front-end (see the layer).
-        self.input_norm = (
-            EmpiricalInputNormalization(in_channels, _input_norm_footprint(smoothing_kwargs)) if input_norm else None
-        )
-
-        self.tokenizer = HealpixNestedTokenizer(smooth_indices, nside, token_nside, in_channels)
-        # masked_attention: exclude masked pixels from the transformer's attention/merges/
-        # pooling instead of feeding them through as zeros (see _masked_attention_token_valid).
-        # Mask constants only — no variables, so toggling keeps the checkpoint lineage.
-        self.transformer = HealpixNestedHierarchicalLocalWindowTransformer(
-            num_pixels=self.tokenizer.num_pixels,
+        # Map branch: single- or multi-resolution encoder returning the (B, map_feature_dim)
+        # feature. The post-fusion head dropout is applied here (not inside the transformer), so the
+        # encoder's own head dropout is None. build_map_encoder dispatches on the smoothing spec and
+        # rejects masked_attention on the multi-resolution (split_probes) path.
+        self.map_encoder = build_map_encoder(
+            smoothing_kwargs=smoothing_kwargs,
+            smooth_indices=smooth_indices,
             nside=nside,
-            nside_down=token_nside,
+            token_nside=token_nside,
             in_channels=in_channels,
             num_outputs=map_feature_dim,
-            token_valid=_masked_attention_token_valid(masked_attention, smoothing_kwargs, self.tokenizer),
-            **transformer_kwargs,
+            transformer_kwargs=transformer_kwargs,
+            jit_compile_body=jit_compile_body,
+            head_dropout_rate=None,
+            input_norm=input_norm,
+            masked_attention=masked_attention,
         )
-        # smoothing (sparse, XLA-incompatible) stays eager; the tokenizer->transformer body
-        # is optionally fused with XLA — see _make_transformer_body.
-        self._body = _make_transformer_body(self.tokenizer, self.transformer, jit_compile_body)
-        # compute dtype of the body (bf16 under a mixed policy, else float32); the fp32-smoothed
-        # maps are cast to it before the body so the transformer runs in the mixed-precision dtype.
-        self._body_compute_dtype = tf.keras.mixed_precision.global_policy().compute_dtype
 
         self.cls_layer = ClsBinningAndTransformLayer(
             n_ell=3 * tfr_n_side,
@@ -118,14 +93,9 @@ class TransformerMapsPlusCLSNetwork(tf.keras.Model):
     def call(self, inputs, training=False):
         maps, cls = inputs
 
-        # Map branch: smoothing (fp32) -> input norm (fp32) -> cast -> tokenizer -> transformer -> normalise
-        x = maps
-        if self.smoothing is not None:
-            x = self.smoothing(x, training=training)
-        if self.input_norm is not None:
-            x = self.input_norm(x)
-        x = tf.cast(x, self._body_compute_dtype)
-        x = self._body(x, training=training)  # (B, map_feature_dim)
+        # Map branch: smoothing (fp32) -> input norm (fp32) -> cast -> tokenizer -> transformer,
+        # single- or multi-resolution, via the shared encoder -> (B, map_feature_dim) -> normalise.
+        x = self.map_encoder(maps, training=training)
         x = self.map_norm(x, training=training)
 
         # Cls branch: per-pair bin + log transform -> normalise -> embed

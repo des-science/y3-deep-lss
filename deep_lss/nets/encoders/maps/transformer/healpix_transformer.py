@@ -128,6 +128,7 @@ class HealpixNestedHierarchicalLocalWindowTransformer(
         pos_encoding=None,
         pos_encoding_kwargs=None,
         bias_ref_windows=64,
+        injections=None,
         **kwargs,
     ):
         if nside <= nside_down:
@@ -207,6 +208,37 @@ class HealpixNestedHierarchicalLocalWindowTransformer(
         nested_shape = (4,) * num_nested_levels
         full_nested_shape = (in_channels, num_top_level_tokens, *nested_shape)
 
+        # injections: secondary inputs whose maps live at a coarser nside than the main input
+        # (e.g. clustering @256 with a lensing @512 main input). Each {"nside", "in_channels"}
+        # joins the hierarchy at the body level already running at that nside. Translate the
+        # nside into the core's body-loop level and precompute the (C_inj, N, 4, ..., 4) nested
+        # shape used to reshape each coarse flat input in call().
+        injection_nested = {}
+        core_injections = []
+        for spec in injections or []:
+            nside_inj = int(spec["nside"])
+            if not (nside_down < nside_inj < nside):
+                raise ValueError(
+                    f"injection nside {nside_inj} must satisfy nside_down ({nside_down}) "
+                    f"< nside_inj < nside ({nside})."
+                )
+            inject_nested_level = int(hp.nside2order(nside) - hp.nside2order(nside_inj))
+            body_level = inject_nested_level - stem_levels
+            if body_level < 1:
+                raise ValueError(
+                    f"injection nside {nside_inj} falls at or inside the patchified stem "
+                    f"(stem_levels={stem_levels}); it must join a coarser body level."
+                )
+            coarse_nested_shape = (
+                int(spec["in_channels"]),
+                num_top_level_tokens,
+                *((4,) * (num_nested_levels - inject_nested_level)),
+            )
+            # keyed by injection nside (what the encoder passes); value carries the core
+            # body-loop level and the (C_inj, N, 4, ..., 4) shape used to reshape the flat input
+            injection_nested[nside_inj] = (body_level, coarse_nested_shape)
+            core_injections.append({"level": body_level, "in_channels": int(spec["in_channels"])})
+
         body_nsides = [nside >> level for level in range(stem_levels, num_nested_levels)]
         LOGGER.warning(
             f"HealpixNestedHierarchicalLocalWindowTransformer: nside={nside} "
@@ -237,6 +269,7 @@ class HealpixNestedHierarchicalLocalWindowTransformer(
         super().__init__(
             num_nested_levels=num_nested_levels,
             in_channels=in_channels,
+            injections=core_injections,
             **kwargs,
         )
 
@@ -247,9 +280,20 @@ class HealpixNestedHierarchicalLocalWindowTransformer(
         self.pos_encoding = pos_encoding
         self.pos_encoding_kwargs = pos_encoding_kwargs
         self.bias_ref_windows = bias_ref_windows
+        # {injection nside: (body-loop level, (C_inj, N, 4, ..., 4) nested shape)}, for call()
+        self._injection_nested = injection_nested
 
-    def batch_flat_to_nested(self, batch: tf.Tensor) -> tf.Tensor:
-        """Convert pipeline batch shaped ``(B, P, C)`` to nested transformer input."""
+    def _flat_to_nested(self, batch: tf.Tensor, nested_shape) -> tf.Tensor:
+        """Reshape a flat ``(B, P, C)`` batch to nested ``(B, C, N, 4, ..., 4)``.
+
+        ``nested_shape`` is the target ``(C, N, 4, ..., 4)`` (channels first, then the N
+        top-level tokens and the size-4 nested axes); the expected flat pixel count is
+        ``P = N * 4^L`` and channel count ``C = nested_shape[0]``. Used for both the main
+        input (``self.nested_shape``) and each coarser injection.
+        """
+        num_pixels = int(np.prod(nested_shape[1:]))
+        in_channels = int(nested_shape[0])
+
         rank = batch.shape.rank
         if rank is not None and rank != 3:
             raise ValueError(f"Expected batch with shape (B, P, C), got {batch.shape}.")
@@ -265,30 +309,26 @@ class HealpixNestedHierarchicalLocalWindowTransformer(
             )
 
         pixel_dim = batch.shape[1]
-        if pixel_dim is not None and pixel_dim != self.num_pixels:
-            raise ValueError(
-                f"Expected {self.num_pixels} pixels, got {pixel_dim}."
-            )
+        if pixel_dim is not None and pixel_dim != num_pixels:
+            raise ValueError(f"Expected {num_pixels} pixels, got {pixel_dim}.")
         if pixel_dim is None:
             assertions.append(
                 tf.debugging.assert_equal(
                     tf.shape(batch)[1],
-                    tf.cast(self.num_pixels, tf.shape(batch).dtype),
-                    message=f"Expected {self.num_pixels} pixels.",
+                    tf.cast(num_pixels, tf.shape(batch).dtype),
+                    message=f"Expected {num_pixels} pixels.",
                 )
             )
 
         channel_dim = batch.shape[2]
-        if channel_dim is not None and channel_dim != self.in_channels:
-            raise ValueError(
-                f"Expected {self.in_channels} channels, got {channel_dim}."
-            )
+        if channel_dim is not None and channel_dim != in_channels:
+            raise ValueError(f"Expected {in_channels} channels, got {channel_dim}.")
         if channel_dim is None:
             assertions.append(
                 tf.debugging.assert_equal(
                     tf.shape(batch)[2],
-                    tf.cast(self.in_channels, tf.shape(batch).dtype),
-                    message=f"Expected {self.in_channels} channels.",
+                    tf.cast(in_channels, tf.shape(batch).dtype),
+                    message=f"Expected {in_channels} channels.",
                 )
             )
 
@@ -303,13 +343,26 @@ class HealpixNestedHierarchicalLocalWindowTransformer(
         target_shape = tf.concat(
             [
                 tf.reshape(tf.shape(batch)[0], [1]),
-                tf.constant(self.nested_shape, dtype=tf.shape(batch).dtype),
+                tf.constant(nested_shape, dtype=tf.shape(batch).dtype),
             ],
             axis=0,
         )
         nested = tf.reshape(batch, target_shape)
-        nested.set_shape([batch.shape[0], *self.nested_shape])
+        nested.set_shape([batch.shape[0], *nested_shape])
         return nested
 
-    def call(self, x, training=None):
-        return super().call(self.batch_flat_to_nested(x), training=training)
+    def batch_flat_to_nested(self, batch: tf.Tensor) -> tf.Tensor:
+        """Convert pipeline batch shaped ``(B, P, C)`` to nested transformer input."""
+        return self._flat_to_nested(batch, self.nested_shape)
+
+    def call(self, x, training=None, injections=None):
+        """``injections``: optional ``{injection nside: (B, P_c, C_c)}`` flat coarse inputs."""
+        nested_injections = None
+        if injections:
+            nested_injections = {}
+            for nside_inj, flat in injections.items():
+                body_level, nested_shape = self._injection_nested[nside_inj]
+                nested_injections[body_level] = self._flat_to_nested(flat, nested_shape)
+        return super().call(
+            self.batch_flat_to_nested(x), training=training, injections=nested_injections
+        )

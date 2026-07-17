@@ -1,0 +1,45 @@
+# Cls summary encoder — 1D CNN over the ell-bin axis with the auto/cross redshift-bin pairs as
+# channels. Shares a filter over the (soft scale-aligned) bin axis; cheap baseline for "does
+# scale-local weight-sharing help" vs. the flat MLP.
+
+network:
+  name: cls_cnn
+  kwargs:
+    base_channels: 128
+    num_blocks: 3
+    kernel_size: 3
+    dropout_rate: 0.1
+    activation: relu
+    pool: mean          # 'mean', 'max' or 'flatten' over the bin axis
+    head_units: []      # optional dense stack before the output layer
+
+# Data — channel nets require the fixed (bins, pairs) hard_rebinned layout; PCA is unsupported.
+scale_cut: hard_rebinned
+cls_n_bins: 16
+cls_transform: asinh_per_feature
+pca_components: null
+
+# Training
+n_steps: 1000000
+batch_size: 1024
+learning_rate: 1.0e-4
+weight_decay: 1.0e-2
+clip_by_global_norm: 1.0
+
+lr_schedule: constant
+lr_warmup_steps: 5000
+
+early_stopping:
+  patience: 15
+  min_delta: 5.0e-2
+  min_steps: 10000
+
+ema_momentum: null
+
+log_every: 100
+vali_every: 5000
+
+xla: true
+
+seed: 42
+deterministic_ops: false

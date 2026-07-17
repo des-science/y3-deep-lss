@@ -66,7 +66,9 @@ def _build_bin_weights_all_pairs(n_ell, n_bins, n_z_lensing, n_z_clustering, l_m
 
     # Log summary table.
     type_w = max(len(f"{r[3]}×{r[4]}") for r in rows)
-    header = f"  {'pair':>4}  {'zi':>2}  {'zj':>2}  {'type':<{type_w}}  {'l_min':>5}  {'l_max':>5}  {'n_ells':>6}  ells/bin"
+    header = (
+        f"  {'pair':>4}  {'zi':>2}  {'zj':>2}  {'type':<{type_w}}  {'l_min':>5}  {'l_max':>5}  {'n_ells':>6}  ells/bin"
+    )
     LOGGER.info(f"Bin weights (n_bins={n_bins}, n_ell={n_ell}, n_pairs={n_total_pairs}):")
     LOGGER.info(header)
     empty_bins = []
@@ -74,11 +76,15 @@ def _build_bin_weights_all_pairs(n_ell, n_bins, n_z_lensing, n_z_clustering, l_m
         epb_str = "[" + " ".join(f"{v:2d}" for v in epb) + "]"
         n_empty = epb.count(0)
         flag = "  *** empty bins" if n_empty > 0 else ""
-        LOGGER.info(f"  {k:4d}  {i:2d}  {j:2d}  {pi}×{pj:<{type_w - len(pi) - 1}}  {lmin_p:5.0f}  {lmax_p:5.0f}  {n_used:6d}  {epb_str}{flag}")
+        LOGGER.info(
+            f"  {k:4d}  {i:2d}  {j:2d}  {pi}×{pj:<{type_w - len(pi) - 1}}  {lmin_p:5.0f}  {lmax_p:5.0f}  {n_used:6d}  {epb_str}{flag}"
+        )
         if n_empty > 0:
             empty_bins.append((k, i, j, n_empty))
     if empty_bins:
-        LOGGER.warning(f"{len(empty_bins)} pairs have empty bins — check l_min/l_max config: {[(k,i,j) for k,i,j,_ in empty_bins]}")
+        LOGGER.warning(
+            f"{len(empty_bins)} pairs have empty bins — check l_min/l_max config: {[(k,i,j) for k,i,j,_ in empty_bins]}"
+        )
     return W
 
 
@@ -369,7 +375,7 @@ def get_rebinned_cls_dsets(
         return_fiducial=False,
         return_grid=True,
     )
-    grid_cosmos = meta_dict["grid/cosmo"]   # (n_cosmos, n_examples, n_params_all)
+    grid_cosmos = meta_dict["grid/cosmo"]  # (n_cosmos, n_examples, n_params_all)
     grid_i_sobols = meta_dict["grid/i_sobol"]  # (n_cosmos, n_examples)
     grid_i_signals = meta_dict["grid/i_signal"]
     grid_i_noises = meta_dict["grid/i_noise"]
@@ -377,10 +383,32 @@ def get_rebinned_cls_dsets(
     # Filter cosmo to the requested training params.
     if params is not None:
         from msfm.utils import parameters as msfm_params
+
         all_params = msfm_params.get_parameters(None, msfm_conf)
         requested = msfm_params.get_parameters(params, msfm_conf)
+
+        # The gather below is an intersection, so a requested param the dataset does not carry would
+        # silently vanish from the label table instead of failing here. That mismatch then surfaces
+        # far downstream as an opaque shape error when the loss head, built with dim_theta =
+        # len(params), meets the narrower cosmos array. Fail loudly at the source instead.
+        missing = [p for p in requested if p not in all_params]
+        if missing:
+            raise ValueError(
+                f"Requested training params {missing} are not in the dataset's parameter list. "
+                f"The msfm config defines all_params={list(all_params)}; the probes config asks for "
+                f"{list(requested)}. This usually means the probes config does not match the dataset "
+                f"-- e.g. a bta-containing probes config on a standard-NLA dataset built with "
+                f"extended_nla: False (msfm configs/v17+), which needs the configs/probes/*_nla.yaml "
+                f"variants."
+            )
+
         param_indices = [i for i, p in enumerate(all_params) if p in requested]
         grid_cosmos = grid_cosmos[..., param_indices]
+
+        # the stored label table follows the CosmoGrid convention where bary_Mc is raw (1e12 - 1e15),
+        # while the priors, fiducials and inference all use log10(Mc) -- convert via the shared helper
+        selected_params = [all_params[i] for i in param_indices]
+        grid_cosmos = msfm_params.raw_to_prior_units(grid_cosmos, selected_params, copy=False)
 
     # Sort cosmologies by first example's Sobol index (same as existing pipeline).
     i_sort = np.argsort(grid_i_sobols, axis=0)[:, 0]
@@ -553,6 +581,7 @@ def preprocess_obs_hard_rebinned(
 
     if obs_cl is None:
         from msfm.utils import observation
+
         _, obs_cl, _ = observation.forward_model_observation_map(
             wl_gamma_map=wl_gamma_map,
             gc_count_map=gc_count_map,
@@ -677,9 +706,7 @@ def load_rebinned_cls_grid(
     meta = input_output.load_human_summaries(
         data_dir, "cls", return_raw_cls=False, return_fiducial=False, return_grid=True
     )
-    real_idx = np.stack(
-        [meta["grid/i_sobol"], meta["grid/i_signal"], meta["grid/i_noise"]], axis=-1
-    ).reshape(-1, 3)
+    real_idx = np.stack([meta["grid/i_sobol"], meta["grid/i_signal"], meta["grid/i_noise"]], axis=-1).reshape(-1, 3)
 
     cosmo_params = msfm_params.get_parameters(None, msfm_conf)  # column order of grid/cosmo
     cosmos = meta["grid/cosmo"].reshape(-1, meta["grid/cosmo"].shape[-1]).astype(np.float32)
@@ -688,9 +715,9 @@ def load_rebinned_cls_grid(
         f"metadata rows ({real_idx.shape[0]}/{cosmos.shape[0]}) do not match cache rows "
         f"({cls_flat.shape[0]}); the rebinned cache and the grid HDF5 are out of sync."
     )
-    assert cosmos.shape[1] == len(cosmo_params), (
-        f"stored cosmo has {cosmos.shape[1]} columns but get_parameters lists {len(cosmo_params)}."
-    )
+    assert cosmos.shape[1] == len(
+        cosmo_params
+    ), f"stored cosmo has {cosmos.shape[1]} columns but get_parameters lists {len(cosmo_params)}."
     return cls_flat, real_idx, cosmos, cosmo_params
 
 
@@ -754,3 +781,66 @@ def get_rebinned_pair_info(
     ell_centers = np.stack([all_centers[k] for k in bin_indices], axis=0)
     ell_ranges = np.array([all_ranges[k] for k in bin_indices], dtype=float)
     return labels, ell_centers, ell_ranges
+
+
+def get_selected_pair_identity(
+    msfm_conf,
+    dlss_conf,
+    with_lensing=True,
+    with_clustering=True,
+    with_cross_z=True,
+    with_cross_probe=None,
+    lenses_before_sources=False,
+):
+    """Per-pair tomographic identity for the selected probe, in data-vector (pair) flatten order.
+
+    Used to give each pair-token in ClsTransformer its structured identity: the global redshift-bin
+    indices (lensing bins 0..n_z_lensing-1 first, then clustering) of the two spectra forming the
+    pair, plus a probe-pair-type code. The pair order matches the pair axis of the flat Cls vector
+    (ascending global-k, i.e. the same order as get_cross_bin_indices / get_rebinned_pair_info).
+
+    Returns (pair_zi, pair_zj, pair_ptype, n_z):
+        pair_zi, pair_zj: (n_selected_pairs,) int global bin indices of the two spectra (i <= j),
+            each in [0, n_z); WL bin b is index b, GC bin b is index n_z_lensing + b.
+        pair_ptype: (n_selected_pairs,) int probe-pair-type, 0 = WLxWL, 1 = WLxGC (cross), 2 = GCxGC.
+        n_z: total number of tomographic bins (n_z_lensing + n_z_clustering), i.e. the size of the
+            shared redshift-bin embedding table.
+    """
+    from msfm.utils import files, cross_statistics
+
+    msfm_conf = files.load_config(msfm_conf)
+    n_z_lensing = len(msfm_conf["survey"]["metacal"]["z_bins"])
+    n_z_clustering = len(msfm_conf["survey"]["maglim"]["z_bins"])
+    n_z = n_z_lensing + n_z_clustering
+
+    # Enumerate all (i<=j) pairs in the same global-k order as get_cross_bin_indices, recording each
+    # pair's (i, j, probe-pair-type), then select the requested pairs.
+    all_zi, all_zj, all_ptype = [], [], []
+    for i in range(n_z):
+        for j in range(n_z):
+            if i <= j:
+                i_is_gc = i >= n_z_lensing
+                j_is_gc = j >= n_z_lensing
+                if not i_is_gc and not j_is_gc:
+                    ptype = 0  # WL x WL
+                elif i_is_gc and j_is_gc:
+                    ptype = 2  # GC x GC
+                else:
+                    ptype = 1  # WL x GC (cross probe)
+                all_zi.append(i)
+                all_zj.append(j)
+                all_ptype.append(ptype)
+
+    bin_indices, _ = cross_statistics.get_cross_bin_indices(
+        n_z_lensing=n_z_lensing,
+        n_z_clustering=n_z_clustering,
+        with_lensing=with_lensing,
+        with_clustering=with_clustering,
+        with_cross_z=with_cross_z,
+        with_cross_probe=with_cross_probe,
+        lenses_before_sources=lenses_before_sources,
+    )
+    pair_zi = np.array([all_zi[k] for k in bin_indices], dtype=np.int32)
+    pair_zj = np.array([all_zj[k] for k in bin_indices], dtype=np.int32)
+    pair_ptype = np.array([all_ptype[k] for k in bin_indices], dtype=np.int32)
+    return pair_zi, pair_zj, pair_ptype, n_z

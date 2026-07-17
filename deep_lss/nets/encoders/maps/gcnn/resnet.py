@@ -9,6 +9,7 @@ import tensorflow as tf
 from deepsphere import healpy_layers
 
 from deep_lss.nets.heads.regression_head import get_regression_head
+from deep_lss.nets.layers.maps.input_normalization import EmpiricalInputNormalization
 from msfm.utils import logger
 
 LOGGER = logger.get_logger(__file__)
@@ -36,6 +37,8 @@ class ResNetLayers:
         norm_kwargs={},
         activation=tf.nn.relu,
         smoothing_kwargs=None,
+        input_norm=False,
+        smoothing_external=False,
     ) -> None:
         """Class used to build the layers of the ResNet network, which was used as the fiducial architecture in Janis'
         KiDS1000 analysis.
@@ -63,17 +66,50 @@ class ResNetLayers:
                 tf.nn.relu.
             smoothing_kwargs (dict, optional): Keyword arguments to be passed to the smoothing layer. Defaults to None,
                 then no smoothing is performed within the network.
+            input_norm (bool, optional): Standardize the smoothed maps with an EmpiricalInputNormalization
+                layer placed right after the smoothing front-end (same placement as the transformer map
+                encoders): per-channel mean/inv_std measured from training data on fresh runs
+                (``compute_input_norm_stats`` via the ``smooth_groups``/``masks``/``load_input_norm_stats``
+                interface below) and restored from the checkpoint otherwise. Adds checkpoint variables —
+                a checkpoint trained with one setting can only be restored with the same one. Requires
+                ``smoothing_kwargs`` (channel count and footprint mask). Defaults to False.
+            smoothing_external (bool, optional): Set by ``ResNetMultiResEncoder`` when it builds
+                this spec with ``smoothing_kwargs=None`` because smoothing (and input norm) live in
+                the encoder instead — silences the missing-smoothing warning. Defaults to False.
         """
         self.layers = []
+
+        self.smoothing_layer = None
+        self.input_norm_layer = None
+        self._input_norm_mask = None
 
         if smoothing_kwargs is not None:
             if "split_probes" in smoothing_kwargs:
                 raise ValueError(
-                    "Per-probe smooth_nside (split smoothing) is only supported by the nested transformer networks"
+                    "Per-probe smooth_nside (split_probes) is not consumed by ResNetLayers directly — "
+                    "run_training dispatches it to ResNetMultiResEncoder, which owns the smoothing and "
+                    "builds this spec with smoothing_kwargs=None"
                 )
-            self.layers.append(healpy_layers.HealpySmoothing(**smoothing_kwargs))
+            self.smoothing_layer = healpy_layers.HealpySmoothing(**smoothing_kwargs)
+            self.layers.append(self.smoothing_layer)
+        elif smoothing_external:
+            LOGGER.info("Smoothing (and input norm) handled externally by ResNetMultiResEncoder")
         else:
             LOGGER.warning("No smoothing layer is included in the network")
+
+        if input_norm:
+            if smoothing_kwargs is None:
+                raise ValueError(
+                    "input_norm requires smoothing_kwargs (per-channel fwhm for the channel count and the "
+                    "footprint mask)"
+                )
+            # same config geometry as the smoothing front-end (cf. _input_norm_footprint for the
+            # transformer encoders); the layer binarizes it to a 0/1 indicator itself
+            self._input_norm_mask = smoothing_kwargs.get("mask")
+            self.input_norm_layer = EmpiricalInputNormalization(
+                len(smoothing_kwargs["fwhm"]), self._input_norm_mask
+            )
+            self.layers.append(self.input_norm_layer)
 
         # downsampling and increasing channels
         n_channels = base_channels
@@ -119,6 +155,25 @@ class ResNetLayers:
 
     def get_layers(self):
         return self.layers
+
+    # --- empirical input-norm interface, mirroring the transformer map encoders
+    # (HealpixMapEncoder) so run_training measures the statistics through a single code path.
+    # The layer objects below are the SAME instances that live in self.layers, so loading the
+    # statistics through this spec reaches the layer inside the built network / composite.
+
+    def smooth_groups(self, maps, training=False):
+        """Smoothed maps (fp32) as a one-element list, used to measure the input-norm statistics."""
+        return [maps if self.smoothing_layer is None else self.smoothing_layer(maps, training=training)]
+
+    @property
+    def masks(self):
+        """Footprint mask as a one-element list (aligned with ``smooth_groups``)."""
+        return [self._input_norm_mask]
+
+    def load_input_norm_stats(self, stats):
+        """Load the single ``(mean, inv_std)`` group into the input-norm layer."""
+        (mean, inv_std), = stats
+        self.input_norm_layer.load_stats(mean, inv_std)
 
     def get_conv_layers(self):
         """Return only the graph-convolution layers, without the regression head."""
