@@ -4,16 +4,13 @@
 name: nested_transformer
 
 training:
-  # Sized for ~11 h of training on 4x GH200 (the 12 h wall leaves ~1 h for eval+inference).
-  # batch 20 -> 81.6 GB peak, ~264 ms/step -> 150k ~= 11.0 h. Do not raise the batch: 24 -> 95.3 GB
-  # is past the ~85 GB band above which the multi-GPU NCCL all-reduce deadlocks (mid-run, silently),
-  # and 32 OOMs.
-  #
-  # This step time assumes the 8wl,32gc scale cut. Smoothing is a sparse matmul that runs eagerly
-  # (XLA cannot compile tf.sparse.sparse_dense_matmul), and its non-zeros grow as theta_fwhm^2, so
-  # a coarser cut adds wall time directly. The lighter cuts (lmax_1024, unsmoothed) leave this
-  # sizing conservative; re-benchmark and re-pick n_steps before running a coarser one.
-  n_steps: 150000
+  # Unified cross-probe recipe — see dev/notes/transformer_v17_unified_recipe_2026-07-19.md.
+  # 250k steps at batch 20 = ~18 h at the measured 3.85 it/s: run as two chained 12 h jobs (job 1
+  # TIMEOUTs mid-training as expected; resubmit with RUN_NUM=2 — n_steps is the total budget).
+  # Do not raise the batch: 24 -> 95.3 GB is past the ~85 GB NCCL-deadlock band, and 32 OOMs.
+  # Step time assumes the 8wl,32gc scale cut; smoothing runs eagerly (sparse matmul, no XLA) and
+  # grows as theta_fwhm^2 — re-benchmark before a coarser cut.
+  n_steps: 250000
   output_every: Null
   checkpoint_every: 10000
   vali_every: 1000

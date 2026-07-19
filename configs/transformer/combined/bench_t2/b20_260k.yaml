@@ -1,4 +1,13 @@
 # Nested hierarchical local-window transformer — combined probes, maps + Cls.
+# bench_t2 (combined): optimize the healthy t1_cls combined reference (mock FoM 3297 / grid_med
+# 2405 / DES 1845, already ~1.4x the DeepSphere v8_cls best) with the knobs that transferred from
+# the clustering bench_t2 sweep. Each config here toggles knobs on top of ../maps+cls.yaml.
+#
+# b20_260k: the matched-updates lever — 2x the base's n_steps at the same batch and cosine
+# schedule, spread over two chained jobs. Buys 2x optimizer updates AND 2x examples with no
+# small-batch efficiency loss (contrast b10.yaml: 2x updates at ~0.85x examples/s in one job),
+# and is the fairest comparison against the v8_cls DeepSphere ladder, which kept improving with
+# steps (clustering 600k; combined flow @250k). Costs 2x GPU hours and a serialized ~24 h.
 # The map transformer and the binned angular power spectra (lensing + clustering + cross pairs) are
 # embedded separately and fused before the regression head. Architecture is the benchmarked winning
 # base, bench_t8/default.yaml, same as lensing/maps+cls.yaml.
@@ -13,15 +22,29 @@
 name: nested_transformer
 
 training:
-  # Unified cross-probe recipe — see dev/notes/transformer_v17_unified_recipe_2026-07-19.md.
-  # 250k steps at batch 20 = ~20 h at the measured ~3.5 it/s: run as two chained 12 h jobs (job 1
-  # TIMEOUTs mid-training as expected; resubmit with RUN_NUM=2 — n_steps is the total budget).
-  # Do not raise the batch: 24 -> 96.4 GB is past the ~85 GB NCCL-deadlock band, and 28 OOMs.
-  # Step time assumes the 8wl,32gc scale cut (both probes smoothed here); smoothing runs eagerly
-  # (sparse matmul, no XLA) and grows as theta_fwhm^2 — re-benchmark before a coarser cut.
-  n_steps: 250000
+  # TWO CHAINED 12 h JOBS, not one: 260k at b20 (~294 ms/step real) is ~21 h of training. Submit
+  # job 1 normally and job 2 with RUN_NUM=2 --dependency=afterany:<job1>. Job 1 trains flat out
+  # (~146k steps), is killed at the wall (TIMEOUT is expected, its eval tail never runs); job 2
+  # restores the last checkpoint and run_training resumes from the restored step (n_steps is the
+  # TOTAL budget), trains the remaining ~115-120k (~9.8 h), then runs the eval+inference tail.
+  # The cosine span is n_steps, and the restored optimizer.iterations puts the LR back on the
+  # curve, so the schedule is seamless across the handoff.
+  # checkpoint_every is halved to 5000 (~25 min of work at risk at the wall kill instead of ~50).
+  #
+  # Memory note from the base: batch 20 -> 82.3 GB peak. Do not raise the batch: 24 -> 96.4 GB
+  # is past the ~85 GB band above which the multi-GPU NCCL all-reduce deadlocks (mid-run, silently),
+  # and 28 OOMs. Injecting clustering rather than upsampling it costs only ~34k params over
+  # lensing-only (19.71 M vs 19.68 M map body), so the memory envelope matches lensing.
+  #
+  # This step time assumes the 8wl,32gc scale cut, and this config is the most exposed to that
+  # choice: it smooths both probes, and clustering gets its own base kernel applied repeatedly
+  # (scale_cuts.clustering.theta_fwhm_base). Smoothing is a sparse matmul that runs eagerly (XLA
+  # cannot compile tf.sparse.sparse_dense_matmul) and its non-zeros grow as theta_fwhm^2, so a
+  # coarser cut adds wall time directly — 8wl,40gc widens the clustering kernels ~1.6x in area and
+  # raises the rep count. Re-benchmark and re-pick n_steps before switching scales.
+  n_steps: 260000
   output_every: Null
-  checkpoint_every: 10000
+  checkpoint_every: 5000
   vali_every: 1000
   eval_every: Null
 

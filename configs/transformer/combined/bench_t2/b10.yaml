@@ -1,7 +1,12 @@
-# Nested hierarchical local-window transformer — combined probes, maps only.
-# No Cls branch (no `cls:` block, no map_feature_dim): the transformer output is the summary
-# statistic directly. Otherwise identical to combined/maps+cls.yaml — the benchmarked winning base,
-# bench_t8/default.yaml.
+# Nested hierarchical local-window transformer — combined probes, maps + Cls.
+# bench_t2 (combined): optimize the healthy t1_cls combined reference (mock FoM 3297 / grid_med
+# 2405 / DES 1845, already ~1.4x the DeepSphere v8_cls best) with the knobs that transferred from
+# the clustering bench_t2 sweep: head-dropout removal and more optimizer updates at fixed wall.
+# Each config here toggles knobs on top of ../maps+cls.yaml.
+# b10: batch 20 -> 10, n_steps resized to the same ~11 h wall; see the sizing note below.
+# The map transformer and the binned angular power spectra (lensing + clustering + cross pairs) are
+# embedded separately and fused before the regression head. Architecture is the benchmarked winning
+# base, bench_t8/default.yaml, same as lensing/maps+cls.yaml.
 # Multi-resolution map branch: clustering is smoothed at nside 256 and INJECTED into the transformer
 # hierarchy at the level already running at nside 256 (one merge below the nside-512 lensing input)
 # rather than upsampled, so the network is one level deeper for lensing than for clustering (see
@@ -13,13 +18,18 @@
 name: nested_transformer
 
 training:
-  # Unified cross-probe recipe — see dev/notes/transformer_v17_unified_recipe_2026-07-19.md.
-  # 250k steps at batch 20 = ~20 h at the measured ~3.5 it/s: run as two chained 12 h jobs (job 1
-  # TIMEOUTs mid-training as expected; resubmit with RUN_NUM=2 — n_steps is the total budget).
-  # Do not raise the batch: 24 -> 96.4 GB is past the ~85 GB NCCL-deadlock band, and 28 OOMs.
-  # Step time assumes the 8wl,32gc scale cut (both probes smoothed here); smoothing runs eagerly
-  # (sparse matmul, no XLA) and grows as theta_fwhm^2 — re-benchmark before a coarser cut.
-  n_steps: 250000
+  # Sizing (batch 10 / 210k): the original 240k sizing (bench job 2790192: b10 = 108.0 ms synthetic
+  # x K = 1.47 -> ~6.3 steps/s -> 10.6 h) proved OPTIMISTIC in the real runs — jobs 2790213/2790214
+  # averaged 5.65/5.91 it/s (240k = 11:48 training), so both hit the 12 h wall before the eval +
+  # inference tail (~35 min) and needed a RUN_NUM=2 resubmit to finish. Resized 240k -> 210k off the
+  # measured worst case: 210k / 5.65 it/s = 10.3 h + tail = ~11 h, ~1 h margin.
+  # Batch 20 -> 10 rationale: the cleanest clustering bench_t2 lesson was that optimizer updates
+  # beat examples seen (b20/250k beat b48/120k with FEWER examples), and the token dimension, not
+  # the batch, fills the GPU, so throughput is near-flat in batch (90.0 ex/s at b8 -> 99.9 at b20):
+  # a smaller batch buys almost pure update count. 210k x 40 global = 1.62x the base's updates at
+  # 0.81x its examples. Peak memory 41.7 GB, far inside the ~85 GB NCCL band; loader headroom ample
+  # (63 ex/s/GPU vs the ~158 ceiling).
+  n_steps: 210000
   output_every: Null
   checkpoint_every: 10000
   vali_every: 1000
@@ -56,8 +66,15 @@ network:
   jit_compile_body: true
   precision: bfloat16
   input_norm: true
+  map_feature_dim: 512
   head:
     dropout_rate: 0.1
+  cls:
+    n_bins: 16
+    transform: asinh_per_feature
+    asinh_default_scale: null
+    embedding_layers: [512, 512, 512, 512]
+    embedding_dropout_rate: 0.1
   kwargs: # -> HealpixNestedHierarchicalLocalWindowTransformer
     base_embed_dim: 32
     growth: double
@@ -85,7 +102,7 @@ dset:
       n_prefetch: 4
       n_workers: 128
     grid:
-      local_batch_size: 20  # capped by the NCCL band, not by the OOM ceiling — see the n_steps note
+      local_batch_size: 10  # halved from the base's 20 to buy optimizer updates — see the n_steps note
       file_name_shuffle_buffer: 64
       examples_shuffle_buffer: 1024
   validation:

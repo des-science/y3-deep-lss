@@ -2,7 +2,20 @@
 name: deepsphere_default
 
 training:
-  n_steps: 50000
+  # Sized for ~11 h of training on 4x GH200, same recipe as configs/transformer
+  # (project_transformer_bench_sizing_recipe): n_steps via a K=1.45 synthetic-single-GPU ->
+  # real-4-GPU-mirrored factor (inherited from the transformer calibration; not independently
+  # re-measured for this GCNN).
+  #
+  # Not memory-bound (batch 32 -> only 7.0 GB peak, the multi-res ResNetMultiResEncoder body, with
+  # clustering injected at its native nside 256 -- confirmed via benchmark_resnet.py's multires=True
+  # -- rather than upsampled, keeping the combined body only ~12% costlier than lensing-only at this
+  # batch). Throughput is close to flat with batch, so batch 32 was kept rather than the
+  # benchmarked-safe ceiling of 128 (see project_resnet_gcnn_bench_sizing) and only n_steps was
+  # retuned for 11 h.
+  #
+  # batch 32 -> 7.0 GB / 314.8 ms synthetic step -> real ~456.5 ms/step (x1.45) -> 87k steps ~= 11.0 h.
+  n_steps: 87000
   output_every: Null
   checkpoint_every: 10000
   vali_every: 1000
@@ -21,7 +34,7 @@ optimization:
     optimizer_kwargs:
       beta_1: 0.9
       beta_2: 0.999
-    scheduler: Null
+    scheduler: cosine
     warmup_steps: 5000
     warmup_init_learning_rate: 1.0e-5
     decay_alpha: 0.0
@@ -67,7 +80,7 @@ dset:
       n_prefetch: 4
       n_workers: Null
     grid:
-      local_batch_size: 24
+      local_batch_size: 32
       file_name_shuffle_buffer: 64
       examples_shuffle_buffer: 256
   validation:

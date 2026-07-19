@@ -2,7 +2,19 @@
 name: deepsphere_default
 
 training:
-  n_steps: 200000
+  # Sized for ~11 h of training on 4x GH200, same recipe as configs/transformer
+  # (project_transformer_bench_sizing_recipe): n_steps via a K=1.45 synthetic-single-GPU ->
+  # real-4-GPU-mirrored factor (inherited from the transformer calibration; not independently
+  # re-measured for this GCNN).
+  #
+  # Not memory-bound (batch 32 -> only 4.3 GB peak) and throughput is close to flat with batch, so
+  # batch 32 was kept rather than the benchmarked-safe ceiling of 128 (see
+  # project_resnet_gcnn_bench_sizing) and only n_steps was retuned for 11 h.
+  # Re-benchmarked after base_channels 32->64 (below) widened the network -- step time is higher
+  # than the original base_channels=32 sizing (160.8 ms synthetic).
+  #
+  # batch 32 -> 4.3 GB / 278.1 ms synthetic step -> real ~403.2 ms/step (x1.45) -> 98k steps ~= 11.0 h.
+  n_steps: 98000
   output_every: Null
   checkpoint_every: 10000
   vali_every: 1000
@@ -21,7 +33,7 @@ optimization:
     optimizer_kwargs:
       beta_1: 0.9
       beta_2: 0.999
-    scheduler: Null
+    scheduler: cosine
     warmup_steps: 5000
     warmup_init_learning_rate: 1.0e-5
     decay_alpha: 0.0
@@ -47,11 +59,15 @@ network:
   # Maps+Cls: the presence of this `cls:` block enables the Cls branch (MapsPlusCLSNetwork); the
   # map GCNN and the binned angular power spectra are embedded separately and concatenated before
   # the regression head. Same schema as configs/transformer/clustering/maps+cls.yaml.
-  # Map-branch fusion: the flattened GCNN features (448 pixels x 128 channels = 57344 at nside 256
-  # with 2 downsampling layers) enter the concatenation raw (LayerNorm per branch, no bottleneck) —
-  # same fusion as the maps-only dense head and the v8_cls runs. Setting map_feature_dim: <width>
-  # would insert a linear Dense projection before the branch LayerNorm instead (~29M params at 512,
-  # and a separate checkpoint lineage).
+  # Map-branch fusion: v1_cls concatenated the flattened GCNN features raw (114688-dim, 448 pixels
+  # x 256 channels at nside 256 with 2 downsampling layers, base_channels=64) against the Cls
+  # branch's 512-dim embedding -- a ~225x dimensionality mismatch at the concat. v2_cls balances
+  # this: map_feature_dim inserts a Dense(114688->32) projection before map_norm, and the Cls
+  # embedding_layers below is resized to end at 32 too, so both branches contribute equally-sized
+  # vectors to the concat. Counter-intuitively this ADDS params overall (the 114688->32 projection
+  # alone is ~3.67M) despite each branch being smaller after fusion -- see
+  # project_maps_cls_dimensionality_balance memory. New checkpoint lineage.
+  map_feature_dim: 32
   cls:
     # number of ell bins per cross pair
     n_bins: 16
@@ -61,10 +77,14 @@ network:
     # fallback uniform scale used only if the Cls cache is absent; null => require the cache
     asinh_default_scale: null
     # MLP widths for the Cls embedding branch (Dense→LN per entry); [] to disable
-    embedding_layers: [512, 512, 512, 512]
+    # last entry = 32 to match map_feature_dim above (see comment there)
+    embedding_layers: [512, 512, 512, 32]
     embedding_dropout_rate: 0.1
   kwargs:
-    base_channels: 32
+    # 64, not 32: with only 2 downsampling_layers (vs lensing/combined's 3, matched to this probe's
+    # coarser native nside 256), the default base_channels=32 tops out at 128 channels deep instead
+    # of lensing's 256 -- doubled here so the deepest feature width matches (64*2^2 == 32*2^3).
+    base_channels: 64
     # depth
     downsampling_layers: 2
     cheby_layers: 2
@@ -83,7 +103,7 @@ dset:
       n_prefetch: 8
       n_workers: Null
     grid:
-      local_batch_size: 20
+      local_batch_size: 32
       file_name_shuffle_buffer: 64
       examples_shuffle_buffer: 256
   validation:

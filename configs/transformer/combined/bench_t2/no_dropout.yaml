@@ -1,7 +1,16 @@
-# Nested hierarchical local-window transformer — combined probes, maps only.
-# No Cls branch (no `cls:` block, no map_feature_dim): the transformer output is the summary
-# statistic directly. Otherwise identical to combined/maps+cls.yaml — the benchmarked winning base,
-# bench_t8/default.yaml.
+# Nested hierarchical local-window transformer — combined probes, maps + Cls.
+# bench_t2 (combined): optimize the healthy t1_cls combined reference (mock FoM 3297 / grid_med
+# 2405 / DES 1845, already ~1.4x the DeepSphere v8_cls best) with the knobs that transferred from
+# the clustering bench_t2 sweep: head-dropout removal and more optimizer updates at fixed wall.
+# Each config here toggles knobs on top of ../maps+cls.yaml.
+# no_dropout: head dropout 0.1 -> null, everything else = the base (b20/130k cosine). In the
+# clustering sweep this was the only knob that helped every metric (mock +50% over its base) and
+# gave the best transformer DES FoM; here it measures the dropout cost in an already-healthy
+# regime. Cls embedding dropout stays 0.1 (the clustering control toggled the head only).
+# Sizing unchanged from the base: dropout has no memory or step-time cost.
+# The map transformer and the binned angular power spectra (lensing + clustering + cross pairs) are
+# embedded separately and fused before the regression head. Architecture is the benchmarked winning
+# base, bench_t8/default.yaml, same as lensing/maps+cls.yaml.
 # Multi-resolution map branch: clustering is smoothed at nside 256 and INJECTED into the transformer
 # hierarchy at the level already running at nside 256 (one merge below the nside-512 lensing input)
 # rather than upsampled, so the network is one level deeper for lensing than for clustering (see
@@ -13,13 +22,19 @@
 name: nested_transformer
 
 training:
-  # Unified cross-probe recipe — see dev/notes/transformer_v17_unified_recipe_2026-07-19.md.
-  # 250k steps at batch 20 = ~20 h at the measured ~3.5 it/s: run as two chained 12 h jobs (job 1
-  # TIMEOUTs mid-training as expected; resubmit with RUN_NUM=2 — n_steps is the total budget).
-  # Do not raise the batch: 24 -> 96.4 GB is past the ~85 GB NCCL-deadlock band, and 28 OOMs.
-  # Step time assumes the 8wl,32gc scale cut (both probes smoothed here); smoothing runs eagerly
-  # (sparse matmul, no XLA) and grows as theta_fwhm^2 — re-benchmark before a coarser cut.
-  n_steps: 250000
+  # Sized for ~11 h of training on 4x GH200 (the 12 h wall leaves ~1 h for eval+inference).
+  # batch 20 -> 82.3 GB peak, ~294 ms/step -> 130k ~= 10.6 h. Do not raise the batch: 24 -> 96.4 GB
+  # is past the ~85 GB band above which the multi-GPU NCCL all-reduce deadlocks (mid-run, silently),
+  # and 28 OOMs. Injecting clustering rather than upsampling it costs only ~34k params over
+  # lensing-only (19.71 M vs 19.68 M map body), so the memory envelope matches lensing.
+  #
+  # This step time assumes the 8wl,32gc scale cut, and this config is the most exposed to that
+  # choice: it smooths both probes, and clustering gets its own base kernel applied repeatedly
+  # (scale_cuts.clustering.theta_fwhm_base). Smoothing is a sparse matmul that runs eagerly (XLA
+  # cannot compile tf.sparse.sparse_dense_matmul) and its non-zeros grow as theta_fwhm^2, so a
+  # coarser cut adds wall time directly — 8wl,40gc widens the clustering kernels ~1.6x in area and
+  # raises the rep count. Re-benchmark and re-pick n_steps before switching scales.
+  n_steps: 130000
   output_every: Null
   checkpoint_every: 10000
   vali_every: 1000
@@ -56,8 +71,15 @@ network:
   jit_compile_body: true
   precision: bfloat16
   input_norm: true
+  map_feature_dim: 512
   head:
-    dropout_rate: 0.1
+    dropout_rate: null
+  cls:
+    n_bins: 16
+    transform: asinh_per_feature
+    asinh_default_scale: null
+    embedding_layers: [512, 512, 512, 512]
+    embedding_dropout_rate: 0.1
   kwargs: # -> HealpixNestedHierarchicalLocalWindowTransformer
     base_embed_dim: 32
     growth: double

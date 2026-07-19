@@ -2,7 +2,19 @@
 name: deepsphere_default
 
 training:
-  n_steps: 100000
+  # Sized for ~11 h of training on 4x GH200 (the 12 h wall leaves ~1 h for eval+inference), same
+  # recipe as configs/transformer (project_transformer_bench_sizing_recipe): n_steps via a K=1.45
+  # synthetic-single-GPU -> real-4-GPU-mirrored factor (inherited from the transformer calibration;
+  # not independently re-measured for this GCNN).
+  #
+  # UNLIKE the transformer, this network is nowhere near memory-bound (batch 32 -> only 5.6 GB peak
+  # on a 120 GB GPU) and throughput is close to flat with batch (deep_lss/apps/benchmark_resnet.py
+  # measured 113 -> 125 ex/s from batch 32 to the confirmed-safe ceiling of 192 -- see
+  # project_resnet_gcnn_bench_sizing), so batch 32 was kept (not the benchmarked ceiling) and only
+  # n_steps was retuned to fill 11 h at this batch.
+  #
+  # batch 32 -> 5.6 GB / 281.8 ms synthetic step -> real ~408.6 ms/step (x1.45) -> 97k steps ~= 11.0 h.
+  n_steps: 97000
   output_every: Null
   checkpoint_every: 10000
   vali_every: 1000
@@ -21,7 +33,7 @@ optimization:
     optimizer_kwargs:
       beta_1: 0.9
       beta_2: 0.999
-    scheduler: Null
+    scheduler: cosine
     warmup_steps: 5000
     warmup_init_learning_rate: 1.0e-5
     decay_alpha: 0.0

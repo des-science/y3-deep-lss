@@ -6,15 +6,11 @@
 name: nested_transformer
 
 training:
-  # ~10 h of training on 4x GH200 at batch 48, filling the 12 h wall with room for eval+inference.
-  # This run is I/O-bound, not compute-bound (see the local_batch_size note), so n_steps is set by
-  # the read rate rather than by the network.
-  #
-  # Step time assumes the 8wl,32gc scale cut. Smoothing is a sparse matmul that runs eagerly (XLA
-  # cannot compile tf.sparse.sparse_dense_matmul) and its non-zeros grow as theta_fwhm^2. Being
-  # I/O-bound, this config absorbs some extra smoothing for free, but a much coarser cut can push it
-  # compute-bound — 8wl,40gc widens the clustering kernels ~1.6x in area. Re-time before switching.
-  n_steps: 120000
+  # Unified cross-probe recipe — see dev/notes/transformer_v17_unified_recipe_2026-07-19.md.
+  # 250k steps at batch 20 = 9.5 h at the measured 7.34 it/s + eval+inference tail: fits one 12 h
+  # job (no chaining, unlike lensing/combined). Step time assumes the 8wl,32gc scale cut — re-time
+  # before a much coarser one.
+  n_steps: 250000
   output_every: Null
   checkpoint_every: 10000
   vali_every: 1000
@@ -89,10 +85,9 @@ dset:
       n_prefetch: 4
       n_workers: 128
     grid:
-      # 48, not 72: the run is I/O-bound. Maps are read at native res then downsampled to 256, so the
-      # light nside-256 network starves and step time tracks bytes/step (i.e. batch). 72 gave ~2.2
-      # steps/s => ~15 h for 120k; 48 (192 global) gives ~3.3 steps/s => ~10 h.
-      local_batch_size: 48
+      # I/O-bound (step time tracks bytes/step), so the smaller batch buys nearly free updates
+      # (48 -> 3.3 it/s, 20 -> 7.34 it/s); b20/250k beat every b48/120k variant of the bench_t2 sweep
+      local_batch_size: 20
       file_name_shuffle_buffer: 64
       examples_shuffle_buffer: 1024
   validation:

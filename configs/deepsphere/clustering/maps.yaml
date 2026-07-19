@@ -2,7 +2,19 @@
 name: deepsphere_default
 
 training:
-  n_steps: 200000
+  # Sized for ~11 h of training on 4x GH200, same recipe as configs/transformer
+  # (project_transformer_bench_sizing_recipe): n_steps via a K=1.45 synthetic-single-GPU ->
+  # real-4-GPU-mirrored factor (inherited from the transformer calibration; not independently
+  # re-measured for this GCNN).
+  #
+  # Not memory-bound (batch 32 -> only 4.1 GB peak, this probe running at the coarser nside 256)
+  # and throughput is close to flat with batch, so batch 32 was kept rather than the benchmarked-safe
+  # ceiling of 192 (see project_resnet_gcnn_bench_sizing) and only n_steps was retuned for 11 h.
+  # Re-benchmarked after base_channels 32->64 (below) widened the network -- step time is higher
+  # than the original base_channels=32 sizing (160.9 ms synthetic).
+  #
+  # batch 32 -> 4.1 GB / 276.8 ms synthetic step -> real ~401.4 ms/step (x1.45) -> 99k steps ~= 11.0 h.
+  n_steps: 99000
   output_every: Null
   checkpoint_every: 10000
   vali_every: 1000
@@ -21,7 +33,7 @@ optimization:
     optimizer_kwargs:
       beta_1: 0.9
       beta_2: 0.999
-    scheduler: Null
+    scheduler: cosine
     warmup_steps: 5000
     warmup_init_learning_rate: 1.0e-5
     decay_alpha: 0.0
@@ -45,7 +57,10 @@ network:
   # checkpoints from the pre-input-norm lineage.
   input_norm: true
   kwargs:
-    base_channels: 32
+    # 64, not 32: with only 2 downsampling_layers (vs lensing/combined's 3, matched to this probe's
+    # coarser native nside 256), the default base_channels=32 tops out at 128 channels deep instead
+    # of lensing's 256 -- doubled here so the deepest feature width matches (64*2^2 == 32*2^3).
+    base_channels: 64
     # depth
     downsampling_layers: 2
     cheby_layers: 2
@@ -64,7 +79,7 @@ dset:
       n_prefetch: 8
       n_workers: Null
     grid:
-      local_batch_size: 20
+      local_batch_size: 32
       file_name_shuffle_buffer: 64
       examples_shuffle_buffer: 256
   validation:
