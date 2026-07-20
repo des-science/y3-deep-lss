@@ -14,7 +14,7 @@ LOGGER = logger.get_logger(__file__)
 from deep_lss.models.grid_model import GridLossModel
 from deep_lss.nets import CLS_NETWORKS, MultiLayerPerceptron
 from deep_lss.nets.layers.cls.whitening import AsinhScaleLayer, PCAWhiteningLayer
-from deep_lss.utils import cls_evaluation, configuration, evaluation
+from deep_lss.utils import cls_evaluation, configuration, evaluation, training_helpers
 
 from msi.utils import dataset
 
@@ -476,10 +476,9 @@ def main():
         # (raw theta feeds the coupling MLPs directly). Default ON; computed from the physical training labels.
         theta_shift, theta_scale = None, None
         if mi.get("standardize_theta", True):
-            _cosmos_train = np.asarray(out_dict["grid/cosmos/train"], dtype=np.float32)
-            _cosmos_train = _cosmos_train.reshape(-1, _cosmos_train.shape[-1])
-            theta_shift = _cosmos_train.mean(axis=0)
-            theta_scale = _cosmos_train.std(axis=0)
+            theta_shift, theta_scale = training_helpers.theta_standardization_from_samples(
+                out_dict["grid/cosmos/train"]
+            )
             LOGGER.info(f"VMIM head theta standardization: shift = {theta_shift}, scale = {theta_scale}")
 
         model.setup_grid_loss_step(
@@ -570,8 +569,7 @@ def main():
     # only the cosmological parameters and is the quantity to rank quick screening runs on.
     _cosmos_train_flat = np.asarray(out_dict["grid/cosmos/train"], dtype=np.float32).reshape(-1, n_params)
     mse_scale_tf = tf.constant(np.maximum(_cosmos_train_flat.std(axis=0), 1e-12), dtype=tf.float32)
-    _cosmo_names = msfm_conf["analysis"]["params"]["cosmo"]
-    fom_param_idx = [i for i, p in enumerate(params) if p in _cosmo_names]
+    fom_param_idx = training_helpers.cosmo_param_indices(params, msfm_conf["analysis"]["params"]["cosmo"])
     LOGGER.info(
         f"vali MSE: {_n_eval} random test examples; vali_nmse_cosmo over "
         f"{[params[i] for i in fom_param_idx]} (of {params})"

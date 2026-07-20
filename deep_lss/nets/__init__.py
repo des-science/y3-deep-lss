@@ -1,4 +1,8 @@
 from .encoders.maps.gcnn.resnet import ResNetLayers
+
+# ResNetMultiResEncoder is intentionally NOT in any registry below: it is selected implicitly by
+# run_training.py when a per-probe (split_probes) smoothing spec is present, and built from the
+# `resnet` spec's layer lists — not chosen by network.name.
 from .encoders.maps.gcnn.resnet_multires import ResNetMultiResEncoder
 from .encoders.maps.legacy.vit import ViTLayers, GTLayers
 from .encoders.maps.legacy.one_d_conv import OneDConvLayers

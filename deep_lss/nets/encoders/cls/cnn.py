@@ -60,6 +60,19 @@ class ClsConv1D(tf.keras.Model):
         self.head_dense = [tf.keras.layers.Dense(u, activation=act) for u in (head_units or [])]
         self.output_layer = tf.keras.layers.Dense(output_size, name="output")
 
+    def build(self, input_shape):
+        # The (B, n_cls) -> (B, cls_n_bins, n_pairs) reshape in call() requires the flat feature
+        # dim to be exactly cls_n_bins * n_pairs. Fail here with a clear message instead of an
+        # opaque reshape error if the class is constructed directly with a mismatched n_cls.
+        n_cls = input_shape[-1]
+        if n_cls is not None:
+            expected = self.cls_n_bins * self.n_pairs
+            assert n_cls == expected, (
+                f"input feature dim {n_cls} != cls_n_bins*n_pairs = {self.cls_n_bins}*{self.n_pairs} "
+                f"= {expected}; the (bins, pairs) reshape requires the hard_rebinned layout."
+            )
+        super().build(input_shape)
+
     def call(self, inputs, training=False):
         x = self.input_transform(inputs) if self.input_transform is not None else inputs
         # flat (B, n_cls) -> (B, cls_n_bins, n_pairs); bin-major / pair-minor matches preprocessing.

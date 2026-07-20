@@ -89,6 +89,7 @@ class ClsTransformer(tf.keras.Model):
         pair_ptype,
         n_z,
         input_transform=None,
+        input_norm=False,
         d_model=64,
         num_heads=4,
         num_layers=3,
@@ -107,6 +108,13 @@ class ClsTransformer(tf.keras.Model):
         self.d_model = d_model
         self.pool = pool
         act = tf.keras.activations.get(activation)
+
+        # Optional per-pair-token input normalization, for parity with MultiLayerPerceptron and
+        # ClsConv1D (which both normalize before their first learned layer). Applied after the
+        # transpose to pair-tokens (B, n_pairs, cls_n_bins) with axis=-1, i.e. each pair's
+        # length-cls_n_bins curve is normalized on its own before tokenization. Default OFF so
+        # existing cls_transformer checkpoints (object-based) keep an unchanged variable lineage.
+        self.input_norm = tf.keras.layers.LayerNormalization(axis=-1) if input_norm else None
 
         assert len(pair_zi) == len(pair_zj) == len(pair_ptype) == n_pairs, (
             f"pair identity arrays (len {len(pair_zi)}/{len(pair_zj)}/{len(pair_ptype)}) must match "
@@ -146,11 +154,26 @@ class ClsTransformer(tf.keras.Model):
         self.head_dense = [tf.keras.layers.Dense(u, activation=act) for u in (head_units or [])]
         self.output_layer = tf.keras.layers.Dense(output_size, name="output")
 
+    def build(self, input_shape):
+        # The (B, n_cls) -> (B, cls_n_bins, n_pairs) reshape in call() requires the flat feature
+        # dim to be exactly cls_n_bins * n_pairs. Fail here with a clear message instead of an
+        # opaque reshape error if the class is constructed directly with a mismatched n_cls.
+        n_cls = input_shape[-1]
+        if n_cls is not None:
+            expected = self.cls_n_bins * self.n_pairs
+            assert n_cls == expected, (
+                f"input feature dim {n_cls} != cls_n_bins*n_pairs = {self.cls_n_bins}*{self.n_pairs} "
+                f"= {expected}; the (bins, pairs) reshape requires the hard_rebinned layout."
+            )
+        super().build(input_shape)
+
     def call(self, inputs, training=False):
         x = self.input_transform(inputs) if self.input_transform is not None else inputs
         # flat (B, n_cls) -> (B, cls_n_bins, n_pairs) -> tokens (B, n_pairs, cls_n_bins)
         x = tf.reshape(x, (-1, self.cls_n_bins, self.n_pairs))
         x = tf.transpose(x, perm=[0, 2, 1])
+        if self.input_norm is not None:
+            x = self.input_norm(x)
 
         # Tokenize each pair-curve to d_model.
         if self.stem == "mlp":

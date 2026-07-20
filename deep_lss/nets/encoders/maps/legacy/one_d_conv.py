@@ -20,8 +20,11 @@ class OneDResidualBlock(tf.keras.Model):
 
         self.activation = activation
 
-        self.conv1 = tf.keras.layers.Conv1D(filters, kernel_size, strides=1, padding="same", activation=activation)
-        self.conv2 = tf.keras.layers.Conv1D(filters, kernel_size, strides=1, padding="same", activation=activation)
+        # No activation inside the convs: the block applies self.activation explicitly after each
+        # norm (conv -> norm -> activation), as the docstring states. Passing activation= here as
+        # well would double the nonlinearity (relu(LayerNorm(relu(conv)))).
+        self.conv1 = tf.keras.layers.Conv1D(filters, kernel_size, strides=1, padding="same")
+        self.conv2 = tf.keras.layers.Conv1D(filters, kernel_size, strides=1, padding="same")
 
         if norm_type == "layer_norm":
             self.norm1 = tf.keras.layers.LayerNormalization(axis=-1, **norm_kwargs)

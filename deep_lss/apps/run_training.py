@@ -52,7 +52,7 @@ from msfm.fiducial_pipeline import FiducialPipeline
 from msfm.grid_pipeline import GridPipeline
 from msfm.utils import logger, input_output, files, parameters
 
-from deep_lss.utils import distribute, configuration, evaluation, optimization, delta_loss
+from deep_lss.utils import distribute, configuration, evaluation, optimization, delta_loss, training_helpers
 from deep_lss.models.delta_model import DeltaLossModel
 from deep_lss.models.grid_model import GridLossModel
 from deep_lss.utils.distribute import HorovodStrategy
@@ -643,7 +643,14 @@ def training(args=None):
     with strategy.scope():
         optimizer = optimization.get_optimizer(net_conf, args.loss_function, args.restore_checkpoint)
 
-        is_transformer = net_conf["network"]["name"] in TRANSFORMER_NETWORKS
+        # Validate the network name up front with a friendly error (mirrors the Cls app); the
+        # bare NETWORKS[...] lookups below would otherwise raise an opaque KeyError.
+        net_name = net_conf["network"]["name"]
+        valid_net_names = set(NETWORKS) | set(TRANSFORMER_NETWORKS)
+        if net_name not in valid_net_names:
+            raise ValueError(f"Unknown network.name={net_name!r}; expected one of {sorted(valid_net_names)}")
+
+        is_transformer = net_name in TRANSFORMER_NETWORKS
 
         # A mixed per-probe smooth_nside mapping (combined probes, e.g. clustering at 256) yields
         # a split_probes smoothing spec. On the GCNN path it selects ResNetMultiResEncoder: the
@@ -729,12 +736,22 @@ def training(args=None):
                     input_norm=input_norm,
                     masked_attention=masked_attention,
                 )
-                # trace so network.built=True before BaseModel.summary()
-                network(
-                    (tf.zeros((2, len(smooth_indices), n_z_bins)),
-                     tf.zeros((2, 3 * n_side, len(l_min_per_pair)))),
-                    training=False,
-                )
+                # trace so network.built=True before BaseModel.summary(). Under
+                # MultiWorkerMirroredStrategy the eager call runs in the /job:localhost context
+                # while the in-scope variables live on /job:worker/.../GPU:0, which the
+                # jit-compiled body cannot bridge (XLA cross-device resource access) — route the
+                # trace through strategy.run there.
+                def _build_trace():
+                    return network(
+                        (tf.zeros((2, len(smooth_indices), n_z_bins)),
+                         tf.zeros((2, 3 * n_side, len(l_min_per_pair)))),
+                        training=False,
+                    )
+
+                if isinstance(strategy, tf.distribute.MultiWorkerMirroredStrategy):
+                    strategy.run(_build_trace)
+                else:
+                    _build_trace()
             else:
                 network = HealpixTransformerNetwork(
                     smoothing_kwargs=smoothing_kwargs,
@@ -749,7 +766,15 @@ def training(args=None):
                     input_norm=input_norm,
                     masked_attention=masked_attention,
                 )
-                network(tf.zeros((2, len(smooth_indices), n_z_bins)), training=False)
+
+                # same MultiWorkerMirroredStrategy trace routing as the maps+cls branch above
+                def _build_trace():
+                    return network(tf.zeros((2, len(smooth_indices), n_z_bins)), training=False)
+
+                if isinstance(strategy, tf.distribute.MultiWorkerMirroredStrategy):
+                    strategy.run(_build_trace)
+                else:
+                    _build_trace()
 
             LOGGER.info(f"Built transformer network {net_conf['network']['name']} (return_cls={return_cls})")
             model = Model(
@@ -1003,8 +1028,9 @@ def training(args=None):
                 theta_shift, theta_scale = None, None
                 if mi_conf.get("standardize_theta", True):
                     prior_intervals = parameters.get_prior_intervals(params, conf=msfm_conf)
-                    theta_shift = prior_intervals.mean(axis=1).astype("float32")
-                    theta_scale = ((prior_intervals[:, 1] - prior_intervals[:, 0]) / (12.0**0.5)).astype("float32")
+                    theta_shift, theta_scale = training_helpers.theta_standardization_from_prior_intervals(
+                        prior_intervals
+                    )
                     LOGGER.info(f"VMIM head theta standardization: shift = {theta_shift}, scale = {theta_scale}")
 
                 mutual_info_kwargs = {
@@ -1201,8 +1227,7 @@ def training(args=None):
             # independently of standardize_theta, which rescales the head rather than the metric.
             _prior_iv = parameters.get_prior_intervals(params, conf=msfm_conf)
             vali_mse_scale = tf.constant(((_prior_iv[:, 1] - _prior_iv[:, 0]) / (12.0**0.5)).astype("float32"))
-            _cosmo_names = msfm_conf["analysis"]["params"]["cosmo"]
-            _fom_idx = [i for i, p in enumerate(params) if p in _cosmo_names]
+            _fom_idx = training_helpers.cosmo_param_indices(params, msfm_conf["analysis"]["params"]["cosmo"])
             LOGGER.info(f"vali nrmse_cosmo over {[params[i] for i in _fom_idx]} (of {params})")
             vali_fom_idx = tf.constant(_fom_idx, dtype=tf.int32)
             _has_fom_params = len(_fom_idx) > 0
@@ -1243,6 +1268,17 @@ def training(args=None):
                 [("loss/vali_total", 0), ("loss/vali_nrmse_cosmo", 1)],
             )
 
+    # A restored run resumes from the checkpointed step, so n_steps is the TOTAL step budget across
+    # chained jobs (submit the follow-up with RUN_NUM=2 and --dependency=afterany): the restored
+    # optimizer.iterations keeps the LR schedule, whose span is n_steps, on its curve, and the loop
+    # trains only the remainder. If the budget is already exhausted the loop is empty and the run
+    # falls through to the final-checkpoint logic.
+    start_step = int(model.get_step()) if args.restore_checkpoint else 0
+    if start_step > 0:
+        LOGGER.info(f"Resuming from step {start_step} towards the total budget of {n_steps}")
+        if start_step >= n_steps:
+            LOGGER.warning(f"Restored step {start_step} >= n_steps {n_steps}: nothing left to train")
+
     LOGGER.info(f"Starting training")
     LOGGER.timer.start("training")
     t_prev = time()
@@ -1250,8 +1286,11 @@ def training(args=None):
     t_data_accum = 0.0
     t_compute_accum = 0.0
     nan_streak = 0
+    step = start_step  # the post-loop final-checkpoint check reads `step` even if the loop is empty
 
-    for step in LOGGER.progressbar(range(1, n_steps + 1), at_level="info", total=n_steps, desc="training"):
+    for step in LOGGER.progressbar(
+        range(start_step + 1, n_steps + 1), at_level="info", total=n_steps - start_step, desc="training"
+    ):
         # context for profiling like https://www.tensorflow.org/guide/profiler#profiling_custom_training_loops
         # optional context like https://stackoverflow.com/a/34798330
         with tf.profiler.experimental.Trace("step", step_num=step, _r=1) if args.profile else nullcontext():
@@ -1291,7 +1330,7 @@ def training(args=None):
                     nan_streak = 0
 
             # horovod
-            if isinstance(model.strategy, HorovodStrategy) and step == 1:
+            if isinstance(model.strategy, HorovodStrategy) and step == start_step + 1:
                 LOGGER.info(f"First step, broadcasting the variables through Horovod")
                 model.horovod_broadcast_variables()
 
@@ -1448,7 +1487,10 @@ def training(args=None):
                 t_data_accum = 0.0
                 t_compute_accum = 0.0
 
-    LOGGER.info(f"Finished training after {n_steps} steps and {LOGGER.timer.elapsed('training')}")
+    LOGGER.info(
+        f"Finished training after {n_steps - start_step} steps (total {n_steps}) "
+        f"and {LOGGER.timer.elapsed('training')}"
+    )
 
     # finalize EMA weight averaging, if enabled
     inner_optimizer = getattr(optimizer, "inner_optimizer", optimizer)
