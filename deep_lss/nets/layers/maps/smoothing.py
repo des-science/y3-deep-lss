@@ -468,8 +468,16 @@ class HealpySmoothing(tf.keras.Model):
             )
 
             os.makedirs(self.data_path, exist_ok=True)
-            np.save(os.path.join(self.data_path, f"ind_coo{self.file_label}.npy"), np_ind_coo)
-            np.save(os.path.join(self.data_path, f"val_coo{self.file_label}.npy"), np_val_coo)
+            # under multi_worker_mirrored/horovod every task builds the same kernel and races on
+            # these cache files (concurrent np.save to one Lustre file fails with EIO) — write a
+            # per-task temp file and atomically rename, so the last complete writer wins
+            for file_name, array in (
+                (f"ind_coo{self.file_label}.npy", np_ind_coo),
+                (f"val_coo{self.file_label}.npy", np_val_coo),
+            ):
+                tmp_path = os.path.join(self.data_path, f".{file_name}.{os.getpid()}.{os.uname().nodename}.npy")
+                np.save(tmp_path, array)
+                os.replace(tmp_path, os.path.join(self.data_path, file_name))
 
     def _build_sparse_tensor(self) -> None:
         """Builds the tf.sparse.SparseTensor from the dense indices and values."""
