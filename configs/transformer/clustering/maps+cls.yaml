@@ -6,10 +6,9 @@
 name: nested_transformer
 
 training:
-  # Unified cross-probe recipe — see dev/notes/transformer_v17_unified_recipe_2026-07-19.md.
-  # 250k steps at batch 20 = 9.5 h at the measured 7.34 it/s + eval+inference tail: fits one 12 h
-  # job (no chaining, unlike lensing/combined). Step time assumes the 8wl,32gc scale cut — re-time
-  # before a much coarser one.
+  # Unified cross-probe recipe (dev/notes/transformer_v17_unified_recipe_2026-07-19.md): batch 20,
+  # cosine. 250k = ~9.5 h at the measured 7.34 it/s + eval+inference tail -> one 12 h job. Step time
+  # assumes the 8wl,32gc cut.
   n_steps: 250000
   output_every: Null
   checkpoint_every: 10000

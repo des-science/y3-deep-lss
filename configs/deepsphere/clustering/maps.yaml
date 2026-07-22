@@ -1,29 +1,21 @@
-# contains the model specific configuration parameters for training and hyperparameter optimization
+# DeepSphere ResNet GCNN — clustering, maps only.
+# Clustering is the only active probe, so its smooth_nside 256 is the finest smoothing resolution
+# and the GCNN runs there (the pipeline downsamples the native-res maps to 256).
 name: deepsphere_default
 
 training:
-  # Sized for ~11 h of training on 4x GH200, same recipe as configs/transformer
-  # (project_transformer_bench_sizing_recipe): n_steps via a K=1.45 synthetic-single-GPU ->
-  # real-4-GPU-mirrored factor (inherited from the transformer calibration; not independently
-  # re-measured for this GCNN).
-  #
-  # Not memory-bound (batch 32 -> only 4.1 GB peak, this probe running at the coarser nside 256)
-  # and throughput is close to flat with batch, so batch 32 was kept rather than the benchmarked-safe
-  # ceiling of 192 (see project_resnet_gcnn_bench_sizing) and only n_steps was retuned for 11 h.
-  # Re-benchmarked after base_channels 32->64 (below) widened the network -- step time is higher
-  # than the original base_channels=32 sizing (160.9 ms synthetic).
-  #
-  # batch 32 -> 4.1 GB / 276.8 ms synthetic step -> real ~401.4 ms/step (x1.45) -> 99k steps ~= 11.0 h.
-  n_steps: 99000
+  # Unified cross-probe recipe: batch 20, cosine. n_steps sized to the measured ~3.73 it/s (13.4k/h)
+  # to fill ~10.4 h training + the eval+inference tail in one 12 h job.
+  # (Orthogonal to the clustering-overfitting finding — flat LR + a GMM head recover constraining
+  # power vs v8_cls — which is a loss/schedule axis, not set here.)
+  n_steps: 140000
   output_every: Null
   checkpoint_every: 10000
   vali_every: 1000
   eval_every: Null
 
 optimization:
-  # adam or sgd
   optimizer: adam
-  # this could also be handled in the optimizer instead of the training step
   gradient_clipping:
     clip_by_value: null
     clip_by_norm: null
@@ -37,29 +29,22 @@ optimization:
     warmup_steps: 5000
     warmup_init_learning_rate: 1.0e-5
     decay_alpha: 0.0
-    # EMA weight averaging (optional)
-    ema_momentum: null
+    ema_momentum: null  # optional EMA weight averaging
 
 network:
   name: resnet
   n_neighbors: 60
-  # clustering-only: nside 256 is the finest active smoothing resolution, so the GCNN runs there
-  # (the pipeline downsamples the native-res maps to 256). Dict form per the current schema; the
-  # legacy scalar `smooth_nside: 256` is equivalent for a single probe.
   smooth_nside:
     clustering: 256
   max_checkpoints: 50
   save_second_to_last_layer: False
   z_bank_size: Null
-  # standardize the smoothed maps with per-channel statistics measured from training data on
-  # fresh runs and restored from the checkpoint otherwise (EmpiricalInputNormalization, same layer
-  # and placement as the transformer encoders). Adds checkpoint variables -- remove only to restore
-  # checkpoints from the pre-input-norm lineage.
+  # EmpiricalInputNormalization: standardize the smoothed maps with per-channel training statistics
+  # (restored from the checkpoint on resume). Adds checkpoint variables — its own lineage.
   input_norm: true
   kwargs:
-    # 64, not 32: with only 2 downsampling_layers (vs lensing/combined's 3, matched to this probe's
-    # coarser native nside 256), the default base_channels=32 tops out at 128 channels deep instead
-    # of lensing's 256 -- doubled here so the deepest feature width matches (64*2^2 == 32*2^3).
+    # base_channels 64 (not 32): with only 2 downsampling_layers (coarser nside-256 input) this keeps
+    # the deepest feature width at 256, matching lensing's (64*2^2 == 32*2^3).
     base_channels: 64
     # depth
     downsampling_layers: 2
@@ -79,7 +64,7 @@ dset:
       n_prefetch: 8
       n_workers: Null
     grid:
-      local_batch_size: 32
+      local_batch_size: 20
       file_name_shuffle_buffer: 64
       examples_shuffle_buffer: 256
   validation:

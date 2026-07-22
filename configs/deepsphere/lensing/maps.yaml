@@ -1,29 +1,18 @@
-# contains the model specific configuration parameters for training and hyperparameter optimization
+# DeepSphere ResNet GCNN — lensing, maps only.
 name: deepsphere_default
 
 training:
-  # Sized for ~11 h of training on 4x GH200 (the 12 h wall leaves ~1 h for eval+inference), same
-  # recipe as configs/transformer (project_transformer_bench_sizing_recipe): n_steps via a K=1.45
-  # synthetic-single-GPU -> real-4-GPU-mirrored factor (inherited from the transformer calibration;
-  # not independently re-measured for this GCNN).
-  #
-  # UNLIKE the transformer, this network is nowhere near memory-bound (batch 32 -> only 5.6 GB peak
-  # on a 120 GB GPU) and throughput is close to flat with batch (deep_lss/apps/benchmark_resnet.py
-  # measured 113 -> 125 ex/s from batch 32 to the confirmed-safe ceiling of 192 -- see
-  # project_resnet_gcnn_bench_sizing), so batch 32 was kept (not the benchmarked ceiling) and only
-  # n_steps was retuned to fill 11 h at this batch.
-  #
-  # batch 32 -> 5.6 GB / 281.8 ms synthetic step -> real ~408.6 ms/step (x1.45) -> 97k steps ~= 11.0 h.
-  n_steps: 97000
+  # Unified cross-probe recipe: batch 20, cosine (matches the transformer's per-probe sizing).
+  # n_steps sized to the measured ~4.45 it/s (16k/h) to fill ~10.6 h training + the eval+inference
+  # tail in one 12 h job.
+  n_steps: 170000
   output_every: Null
   checkpoint_every: 10000
   vali_every: 1000
   eval_every: Null
 
 optimization:
-  # adam or sgd
   optimizer: adam
-  # this could also be handled in the optimizer instead of the training step
   gradient_clipping:
     clip_by_value: null
     clip_by_norm: null
@@ -37,8 +26,7 @@ optimization:
     warmup_steps: 5000
     warmup_init_learning_rate: 1.0e-5
     decay_alpha: 0.0
-    # EMA weight averaging (optional)
-    ema_momentum: null
+    ema_momentum: null  # optional EMA weight averaging
 
 network:
   name: resnet
@@ -46,10 +34,8 @@ network:
   max_checkpoints: 50
   save_second_to_last_layer: False
   z_bank_size: Null
-  # standardize the smoothed maps with per-channel statistics measured from training data on
-  # fresh runs and restored from the checkpoint otherwise (EmpiricalInputNormalization, same layer
-  # and placement as the transformer encoders). Adds checkpoint variables -- remove only to restore
-  # checkpoints from the pre-input-norm lineage.
+  # EmpiricalInputNormalization: standardize the smoothed maps with per-channel training statistics
+  # (restored from the checkpoint on resume). Adds checkpoint variables — its own lineage.
   input_norm: true
   kwargs:
     base_channels: 32
@@ -71,7 +57,7 @@ dset:
       n_prefetch: 8
       n_workers: Null
     grid:
-      local_batch_size: 32
+      local_batch_size: 20
       file_name_shuffle_buffer: 64
       examples_shuffle_buffer: 256
   validation:

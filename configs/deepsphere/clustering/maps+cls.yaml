@@ -1,29 +1,22 @@
-# contains the model specific configuration parameters for training and hyperparameter optimization
+# DeepSphere ResNet GCNN — clustering, maps + Cls.
+# The `cls:` block enables the Cls branch (MapsPlusCLSNetwork): the map GCNN and the binned angular
+# power spectra are embedded separately and concatenated before the regression head. Clustering is
+# the only active probe, so the GCNN runs at nside 256 (the pipeline downsamples to it).
 name: deepsphere_default
 
 training:
-  # Sized for ~11 h of training on 4x GH200, same recipe as configs/transformer
-  # (project_transformer_bench_sizing_recipe): n_steps via a K=1.45 synthetic-single-GPU ->
-  # real-4-GPU-mirrored factor (inherited from the transformer calibration; not independently
-  # re-measured for this GCNN).
-  #
-  # Not memory-bound (batch 32 -> only 4.3 GB peak) and throughput is close to flat with batch, so
-  # batch 32 was kept rather than the benchmarked-safe ceiling of 128 (see
-  # project_resnet_gcnn_bench_sizing) and only n_steps was retuned for 11 h.
-  # Re-benchmarked after base_channels 32->64 (below) widened the network -- step time is higher
-  # than the original base_channels=32 sizing (160.8 ms synthetic).
-  #
-  # batch 32 -> 4.3 GB / 278.1 ms synthetic step -> real ~403.2 ms/step (x1.45) -> 98k steps ~= 11.0 h.
-  n_steps: 98000
+  # Unified cross-probe recipe: batch 20, cosine. n_steps sized to the measured ~3.73 it/s (13.4k/h)
+  # to fill ~10.4 h training + the eval+inference tail in one 12 h job.
+  # (Orthogonal to the clustering-overfitting finding — flat LR + a GMM head recover constraining
+  # power vs v8_cls — which is a loss/schedule axis, not set here.)
+  n_steps: 140000
   output_every: Null
   checkpoint_every: 10000
   vali_every: 1000
   eval_every: Null
 
 optimization:
-  # adam or sgd
   optimizer: adam
-  # this could also be handled in the optimizer instead of the training step
   gradient_clipping:
     clip_by_value: null
     clip_by_norm: null
@@ -37,53 +30,34 @@ optimization:
     warmup_steps: 5000
     warmup_init_learning_rate: 1.0e-5
     decay_alpha: 0.0
-    # EMA weight averaging (optional)
-    ema_momentum: null
+    ema_momentum: null  # optional EMA weight averaging
 
 network:
   name: resnet
   n_neighbors: 60
-  # clustering-only: nside 256 is the finest active smoothing resolution, so the GCNN runs there
-  # (the pipeline downsamples the native-res maps to 256). Dict form per the current schema; the
-  # legacy scalar `smooth_nside: 256` is equivalent for a single probe.
   smooth_nside:
     clustering: 256
   max_checkpoints: 50
   save_second_to_last_layer: False
   z_bank_size: Null
-  # standardize the smoothed maps with per-channel statistics measured from training data on
-  # fresh runs and restored from the checkpoint otherwise (EmpiricalInputNormalization, same layer
-  # and placement as the transformer encoders). Adds checkpoint variables -- remove only to restore
-  # checkpoints from the pre-input-norm lineage.
+  # EmpiricalInputNormalization: standardize the smoothed maps with per-channel training statistics
+  # (restored from the checkpoint on resume). Adds checkpoint variables — its own lineage.
   input_norm: true
-  # Maps+Cls: the presence of this `cls:` block enables the Cls branch (MapsPlusCLSNetwork); the
-  # map GCNN and the binned angular power spectra are embedded separately and concatenated before
-  # the regression head. Same schema as configs/transformer/clustering/maps+cls.yaml.
-  # Map-branch fusion: v1_cls concatenated the flattened GCNN features raw (114688-dim, 448 pixels
-  # x 256 channels at nside 256 with 2 downsampling layers, base_channels=64) against the Cls
-  # branch's 512-dim embedding -- a ~225x dimensionality mismatch at the concat. v2_cls balances
-  # this: map_feature_dim inserts a Dense(114688->32) projection before map_norm, and the Cls
-  # embedding_layers below is resized to end at 32 too, so both branches contribute equally-sized
-  # vectors to the concat. Counter-intuitively this ADDS params overall (the 114688->32 projection
-  # alone is ~3.67M) despite each branch being smaller after fusion -- see
-  # project_maps_cls_dimensionality_balance memory. New checkpoint lineage.
-  map_feature_dim: 32
+  # map_feature_dim projects the flattened GCNN features (114688-dim) down to 64; the Cls branch
+  # (embedding_layers below) ends at 64 too, so both contribute equally-sized vectors to the concat.
+  # See project_maps_cls_dimensionality_balance. Own checkpoint lineage.
+  map_feature_dim: 64
   cls:
-    # number of ell bins per cross pair
-    n_bins: 16
-    # asinh(x/s) with s = median|C_l| per (pair, ell-bin) fitted from the cached binned Cls
-    # ({data_dir}/cls/rebinned_nb{n_bins}_{scales}.h5) and stored in the checkpoint.
+    n_bins: 16  # ell bins per cross pair
+    # asinh(x/s), s = median|C_l| per (pair, ell-bin) from the cached binned Cls
+    # ({data_dir}/cls/rebinned_nb{n_bins}_{scales}.h5), stored in the checkpoint
     transform: asinh_per_feature
-    # fallback uniform scale used only if the Cls cache is absent; null => require the cache
-    asinh_default_scale: null
-    # MLP widths for the Cls embedding branch (Dense→LN per entry); [] to disable
-    # last entry = 32 to match map_feature_dim above (see comment there)
-    embedding_layers: [512, 512, 512, 32]
+    asinh_default_scale: null  # fallback scale if the cache is absent; null => require it
+    embedding_layers: [512, 512, 512, 64]  # Dense+LN per entry; last entry matches map_feature_dim
     embedding_dropout_rate: 0.1
   kwargs:
-    # 64, not 32: with only 2 downsampling_layers (vs lensing/combined's 3, matched to this probe's
-    # coarser native nside 256), the default base_channels=32 tops out at 128 channels deep instead
-    # of lensing's 256 -- doubled here so the deepest feature width matches (64*2^2 == 32*2^3).
+    # base_channels 64 (not 32): with only 2 downsampling_layers (coarser nside-256 input) this keeps
+    # the deepest feature width at 256, matching lensing's (64*2^2 == 32*2^3).
     base_channels: 64
     # depth
     downsampling_layers: 2
@@ -103,7 +77,7 @@ dset:
       n_prefetch: 8
       n_workers: Null
     grid:
-      local_batch_size: 32
+      local_batch_size: 20
       file_name_shuffle_buffer: 64
       examples_shuffle_buffer: 256
   validation:

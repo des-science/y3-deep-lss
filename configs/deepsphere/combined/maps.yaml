@@ -1,30 +1,19 @@
-# contains the model specific configuration parameters for training and hyperparameter optimization
+# DeepSphere ResNet GCNN — combined probes, maps only.
 name: deepsphere_default
 
 training:
-  # Sized for ~11 h of training on 4x GH200, same recipe as configs/transformer
-  # (project_transformer_bench_sizing_recipe): n_steps via a K=1.45 synthetic-single-GPU ->
-  # real-4-GPU-mirrored factor (inherited from the transformer calibration; not independently
-  # re-measured for this GCNN).
-  #
-  # Not memory-bound (batch 32 -> only 7.0 GB peak, the multi-res ResNetMultiResEncoder body, with
-  # clustering injected at its native nside 256 -- confirmed via benchmark_resnet.py's multires=True
-  # -- rather than upsampled, keeping the combined body only ~12% costlier than lensing-only at this
-  # batch). Throughput is close to flat with batch, so batch 32 was kept rather than the
-  # benchmarked-safe ceiling of 128 (see project_resnet_gcnn_bench_sizing) and only n_steps was
-  # retuned for 11 h.
-  #
-  # batch 32 -> 7.0 GB / 314.8 ms synthetic step -> real ~456.5 ms/step (x1.45) -> 87k steps ~= 11.0 h.
-  n_steps: 87000
+  # Unified cross-probe recipe: batch 20, cosine. Combined does not fit one 12 h job — run as two
+  # chained jobs via training.sh RUN_NUM (job 1 TIMEOUTs mid-training, resubmit RUN_NUM=2; n_steps is
+  # the total budget). Sized to the measured ~3.3 it/s (11.9k/h): job 1 reaches ~160k, job 2 adds
+  # ~120k + the eval+inference tail -> 280k total.
+  n_steps: 280000
   output_every: Null
   checkpoint_every: 10000
   vali_every: 1000
   eval_every: Null
 
 optimization:
-  # adam or sgd
   optimizer: adam
-  # this could also be handled in the optimizer instead of the training step
   gradient_clipping:
     clip_by_value: null
     clip_by_norm: null
@@ -38,8 +27,7 @@ optimization:
     warmup_steps: 5000
     warmup_init_learning_rate: 1.0e-5
     decay_alpha: 0.0
-    # EMA weight averaging (optional)
-    ema_momentum: null
+    ema_momentum: null  # optional EMA weight averaging
 
 network:
   name: resnet
@@ -47,17 +35,12 @@ network:
   max_checkpoints: 50
   save_second_to_last_layer: False
   z_bank_size: Null
-  # standardize the smoothed maps with per-channel statistics measured from training data on
-  # fresh runs and restored from the checkpoint otherwise (EmpiricalInputNormalization, same layer
-  # and placement as the transformer encoders). Adds checkpoint variables -- remove only to restore
-  # checkpoints from the pre-input-norm lineage.
+  # EmpiricalInputNormalization: standardize the smoothed maps with per-channel training statistics
+  # (restored from the checkpoint on resume). Adds checkpoint variables — its own lineage.
   input_norm: true
-  # per-probe smoothing resolution: clustering (fwhm >= 57') is smoothed at nside 256 and injected
-  # into the GCNN after the pooling layer that already runs at nside 256 (ResNetMultiResEncoder,
-  # concat+Dense fusion like the transformer injections); lensing stays at the native n_side.
-  # Requires scale_cuts.clustering.theta_fwhm_base in the scales config (the base kernel applied
-  # repeatedly at 256). New checkpoint lineage — remove only to restore single-resolution
-  # checkpoints, which smooth all channels with one base kernel at min(fwhm) at full resolution.
+  # Multi-resolution: clustering (fwhm >= 57') is smoothed at nside 256 and injected into the GCNN
+  # after the pooling layer already at nside 256 (ResNetMultiResEncoder, concat+Dense fusion); lensing
+  # stays at native n_side. Needs scale_cuts.clustering.theta_fwhm_base in the scales config.
   smooth_nside:
     clustering: 256
   kwargs:
@@ -80,7 +63,7 @@ dset:
       n_prefetch: 4
       n_workers: Null
     grid:
-      local_batch_size: 32
+      local_batch_size: 20
       file_name_shuffle_buffer: 64
       examples_shuffle_buffer: 256
   validation:

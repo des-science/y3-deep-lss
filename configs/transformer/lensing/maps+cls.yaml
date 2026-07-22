@@ -4,13 +4,11 @@
 name: nested_transformer
 
 training:
-  # Unified cross-probe recipe — see dev/notes/transformer_v17_unified_recipe_2026-07-19.md.
-  # 250k steps at batch 20 = ~18 h at the measured 3.85 it/s: run as two chained 12 h jobs (job 1
-  # TIMEOUTs mid-training as expected; resubmit with RUN_NUM=2 — n_steps is the total budget).
-  # Do not raise the batch: 24 -> 95.3 GB is past the ~85 GB NCCL-deadlock band, and 32 OOMs.
-  # Step time assumes the 8wl,32gc scale cut; smoothing runs eagerly (sparse matmul, no XLA) and
-  # grows as theta_fwhm^2 — re-benchmark before a coarser cut.
-  n_steps: 250000
+  # Unified cross-probe recipe (dev/notes/transformer_v17_unified_recipe_2026-07-19.md): batch 20,
+  # cosine. 150k = ~11 h at the measured 3.85 it/s -> one 12 h job; 150k is this probe's optimum
+  # (250k regressed on all FoM variants). Batch is capped by the ~85 GB NCCL-deadlock band
+  # (24 -> 95 GB), not the OOM ceiling. Step time assumes the 8wl,32gc cut (eager smoothing ~theta_fwhm^2).
+  n_steps: 150000
   output_every: Null
   checkpoint_every: 10000
   vali_every: 1000
