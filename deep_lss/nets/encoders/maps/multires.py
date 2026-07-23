@@ -34,11 +34,13 @@ class MultiResEncoderMixin:
     so the attribute layout — and with it the checkpoint object graph — is unchanged.
     """
 
-    def _init_smoothing_and_groups(self, smoothing_kwargs):
+    def _init_smoothing_and_groups(self, smoothing_kwargs, spmm_backend="csr"):
         """Build ``self.smoothing`` (fp32 ``PerProbeSmoothing``) and the resolution groups.
 
         Returns the group list (finest first, see ``group_probe_specs_by_nside``), also stored as
-        ``self._groups`` for ``smooth_groups``.
+        ``self._groups`` for ``smooth_groups``. ``spmm_backend`` selects the sparse-matmul backend
+        for the per-probe smoothing kernels; both multi-res encoders forward the value they were
+        built with (the app defaults it to "csr" via the net config).
         """
         if "split_probes" not in smoothing_kwargs:
             raise ValueError(f"{type(self).__name__} requires a split_probes smoothing spec.")
@@ -46,7 +48,7 @@ class MultiResEncoderMixin:
 
         # sparse smoothing kept in float32 (no fast bf16 cuSPARSE kernel) — see fp32_policy_scope
         with fp32_policy_scope():
-            self.smoothing = PerProbeSmoothing(specs)
+            self.smoothing = PerProbeSmoothing(specs, spmm_backend=spmm_backend)
 
         self._groups = group_probe_specs_by_nside(specs)
         return self._groups

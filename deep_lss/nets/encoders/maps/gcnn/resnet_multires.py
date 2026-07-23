@@ -112,15 +112,22 @@ class ResNetMultiResEncoder(MultiResEncoderMixin, tf.keras.Model):
         max_batch_size (int): effective batch size for the GCNN sparse-matmul splits.
         input_norm (bool, optional): per-group ``EmpiricalInputNormalization`` after the smoothing,
             same placement and checkpoint-lineage caveats as the transformer encoders.
+        spmm_backend (str, optional): sparse-matmul backend for the graph convolutions in both GCNN
+            segments AND for the per-probe ``PerProbeSmoothing`` kernels ("coo"/"csr"/"gather"; see
+            deepsphere.utils.make_spmm_operator). Defaults to "csr". ``PerProbeSmoothing`` lives in
+            deep_lss.nets.layers.maps.smoothing and re-exports deepsphere's ``HealpySmoothing``,
+            which the transformer path shares (also at the "csr" app default).
     """
 
-    def __init__(self, smoothing_kwargs, layers, nside, n_neighbors, max_batch_size, input_norm=False):
+    def __init__(
+        self, smoothing_kwargs, layers, nside, n_neighbors, max_batch_size, input_norm=False, spmm_backend="csr"
+    ):
         super().__init__()
 
         # per-probe fp32 smoothing + grouping by nside (finest first) — shared mixin plumbing;
         # the fine group is the GCNN input, the coarse group is injected where the pooling stack
         # reaches its nside
-        groups = self._init_smoothing_and_groups(smoothing_kwargs)
+        groups = self._init_smoothing_and_groups(smoothing_kwargs, spmm_backend=spmm_backend)
         if len(groups) != 2:
             raise NotImplementedError(
                 f"ResNetMultiResEncoder supports exactly one fine + one coarse resolution group "
@@ -156,6 +163,7 @@ class ResNetMultiResEncoder(MultiResEncoderMixin, tf.keras.Model):
             n_neighbors=n_neighbors,
             max_batch_size=max_batch_size,
             initial_Fin=fine["n_channels"],
+            spmm_backend=spmm_backend,
         )
         # injection fusion, transformer idiom (nested_transformer injection_proj/injection_fuse):
         # linear Dense embed of the coarse channels, concat with the fine stream, linear Dense fuse
@@ -169,6 +177,7 @@ class ResNetMultiResEncoder(MultiResEncoderMixin, tf.keras.Model):
             n_neighbors=n_neighbors,
             max_batch_size=max_batch_size,
             initial_Fin=split_Fin,
+            spmm_backend=spmm_backend,
         )
 
         # per-group input normalization (shared mixin plumbing, own mask per group)

@@ -48,6 +48,7 @@ class TransformerMapsPlusCLSNetwork(tf.keras.Model):
         cls_transform="asinh_per_feature",
         input_norm=False,
         masked_attention=False,
+        spmm_backend="csr",
     ):
         super().__init__()
 
@@ -67,6 +68,7 @@ class TransformerMapsPlusCLSNetwork(tf.keras.Model):
             head_dropout_rate=None,
             input_norm=input_norm,
             masked_attention=masked_attention,
+            spmm_backend=spmm_backend,
         )
 
         self.cls_layer = ClsBinningAndTransformLayer(

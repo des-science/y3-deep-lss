@@ -47,12 +47,15 @@ from deep_lss.nets.layers.maps.input_normalization import EmpiricalInputNormaliz
 LOGGER = logger.get_logger(__file__)
 
 
-def _build_fp32_smoothing(smoothing_kwargs):
+def _build_fp32_smoothing(smoothing_kwargs, spmm_backend="csr"):
     """Construct the single-resolution ``HealpySmoothing`` front-end in float32.
 
     The ``{"split_probes": [...]}`` (mixed per-probe smooth_nside) case is handled by
     ``HealpixMultiResMapEncoder``, which builds its own ``PerProbeSmoothing``; this helper only
-    ever sees a single-kernel spec on the single-resolution path.
+    ever sees a single-kernel spec on the single-resolution path. ``spmm_backend`` selects the
+    sparse-matmul kernel for the smoothing (see deepsphere.utils.make_spmm_operator); the smoothing
+    is carved out of the XLA body and runs eager/graph, where "csr" (cuSPARSE) is a numerically
+    equivalent, faster drop-in for the default "coo" path.
     """
     if not smoothing_kwargs:
         return None
@@ -62,7 +65,7 @@ def _build_fp32_smoothing(smoothing_kwargs):
             "encoder (HealpixMultiResMapEncoder) owns per-probe smoothing."
         )
     with fp32_policy_scope():
-        return HealpySmoothing(**smoothing_kwargs)
+        return HealpySmoothing(**smoothing_kwargs, spmm_backend=spmm_backend)
 
 
 def _input_norm_footprint(smoothing_kwargs):
@@ -268,11 +271,12 @@ class HealpixSingleResMapEncoder(HealpixMapEncoder):
         head_dropout_rate=None,
         input_norm=False,
         masked_attention=False,
+        spmm_backend="csr",
     ):
         super().__init__()
 
         # sparse smoothing stays in float32 (no fast bf16 cuSPARSE kernel) — see _build_fp32_smoothing
-        self.smoothing = _build_fp32_smoothing(smoothing_kwargs)
+        self.smoothing = _build_fp32_smoothing(smoothing_kwargs, spmm_backend=spmm_backend)
         if self.smoothing is None:
             LOGGER.warning("No smoothing layer is included in the transformer network")
 
@@ -356,13 +360,14 @@ class HealpixMultiResMapEncoder(MultiResEncoderMixin, HealpixMapEncoder):
         jit_compile_body=False,
         head_dropout_rate=None,
         input_norm=False,
+        spmm_backend="csr",
     ):
         super().__init__()
 
         # per-probe fp32 smoothing + grouping by nside (finest first) — shared mixin plumbing;
         # the finest nside == the output nside is the transformer's main input, coarser nsides
         # are injections.
-        groups = self._init_smoothing_and_groups(smoothing_kwargs)
+        groups = self._init_smoothing_and_groups(smoothing_kwargs, spmm_backend=spmm_backend)
         self._fine_group_idx = 0
         if groups[0]["nside"] != nside:
             raise ValueError(
@@ -449,6 +454,7 @@ def build_map_encoder(
     head_dropout_rate=None,
     input_norm=False,
     masked_attention=False,
+    spmm_backend="csr",
 ):
     """Build the transformer map branch, dispatching on the smoothing spec.
 
@@ -475,6 +481,7 @@ def build_map_encoder(
             jit_compile_body=jit_compile_body,
             head_dropout_rate=head_dropout_rate,
             input_norm=input_norm,
+            spmm_backend=spmm_backend,
         )
     return HealpixSingleResMapEncoder(
         smoothing_kwargs=smoothing_kwargs,
@@ -488,6 +495,7 @@ def build_map_encoder(
         head_dropout_rate=head_dropout_rate,
         input_norm=input_norm,
         masked_attention=masked_attention,
+        spmm_backend=spmm_backend,
     )
 
 
@@ -513,6 +521,7 @@ class HealpixTransformerNetwork(tf.keras.Model):
         head_dropout_rate=None,
         input_norm=False,
         masked_attention=False,
+        spmm_backend="csr",
     ):
         super().__init__()
         self.map_encoder = build_map_encoder(
@@ -527,6 +536,7 @@ class HealpixTransformerNetwork(tf.keras.Model):
             head_dropout_rate=head_dropout_rate,
             input_norm=input_norm,
             masked_attention=masked_attention,
+            spmm_backend=spmm_backend,
         )
 
     def call(self, maps, training=False):

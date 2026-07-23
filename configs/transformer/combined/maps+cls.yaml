@@ -42,6 +42,10 @@ optimization:
 
 network:
   name: nested_transformer
+  # sparse-matmul backend for the Gaussian smoothing front-end (the transformer body has no
+  # graph convs): coo / csr (cuSPARSE) / gather (XLA). See deepsphere.utils.make_spmm_operator.
+  # csr is numerically equivalent to coo up to fp32 tolerance and measured faster (-46..-54%).
+  spmm_backend: csr
   # per-probe smoothing resolution: clustering (fwhm >= 57') is smoothed at nside 256 and injected
   # into the hierarchy at its native scale (see HealpixMultiResMapEncoder); lensing stays at the
   # native n_side. See scale_cuts.clustering.theta_fwhm_base in the scales config for the matching

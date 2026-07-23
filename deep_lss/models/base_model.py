@@ -52,6 +52,7 @@ class BaseModel(object):
         n_neighbors=20,
         max_batch_size=None,
         initial_Fin=None,
+        spmm_backend="csr",
     ):
         """Initializes a base model
 
@@ -86,6 +87,10 @@ class BaseModel(object):
                 cause an error.
             initial_Fin (int, optional) Initial number of input features. Defaults to None, then like for
                 max_batch_size, there are no precautions taken.
+            spmm_backend (str, optional): sparse-matmul backend for the graph convolutions when this model
+                wraps a layer list into a HealpyGCNN ("coo"/"csr"/"gather"; see
+                deepsphere.utils.make_spmm_operator). Defaults to "csr" (cuSPARSE; numerically
+                equivalent to "coo" up to fp32 tolerance and faster on the k=60 Laplacian).
         """
 
         # get the network
@@ -102,6 +107,7 @@ class BaseModel(object):
                     n_neighbors=n_neighbors,
                     max_batch_size=max_batch_size,
                     initial_Fin=initial_Fin,
+                    spmm_backend=spmm_backend,
                 )
             else:
                 raise ValueError(f"n_side = {n_side} and indices = {indices} have to be both None or both not None")

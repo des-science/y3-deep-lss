@@ -673,6 +673,13 @@ def training(args=None):
         # set per branch below; owns the smooth_groups/masks/load_input_norm_stats interface
         norm_owner = None
 
+        # sparse-matmul backend for the DeepSphere graph convolutions (GCNN/resnet path only):
+        # "coo" (default, the unchanged tf.sparse.sparse_dense_matmul kernel), "csr" (cuSPARSE
+        # csrmm) or "gather" (XLA-friendly gather+reduce). See deepsphere.utils.make_spmm_operator.
+        # Numerically equivalent to "coo" up to float32 tolerance, so it does not change the run
+        # lineage. Ignored on the transformer path (no graph convolutions there).
+        spmm_backend = net_conf["network"].get("spmm_backend", "csr")
+
         if is_transformer:
             # Nested hierarchical local-window transformer. The maps are smoothed (same
             # HealpySmoothing front-end as the GCNNs) and reordered into nested superpixel
@@ -735,6 +742,7 @@ def training(args=None):
                     cls_transform=cls_transform,
                     input_norm=input_norm,
                     masked_attention=masked_attention,
+                    spmm_backend=spmm_backend,
                 )
                 # trace so network.built=True before BaseModel.summary(). Under
                 # MultiWorkerMirroredStrategy the eager call runs in the /job:localhost context
@@ -765,6 +773,7 @@ def training(args=None):
                     head_dropout_rate=head_dropout,
                     input_norm=input_norm,
                     masked_attention=masked_attention,
+                    spmm_backend=spmm_backend,
                 )
 
                 # same MultiWorkerMirroredStrategy trace routing as the maps+cls branch above
@@ -805,6 +814,7 @@ def training(args=None):
                 # NETWORKS specs keep their signatures (they fail loudly if it is requested)
                 **({"input_norm": True} if input_norm and not is_multires_gcnn else {}),
                 **({"smoothing_external": True} if is_multires_gcnn else {}),
+                spmm_backend=spmm_backend,
                 **net_conf["network"]["kwargs"],
             )
             norm_owner = net_spec
@@ -825,6 +835,7 @@ def training(args=None):
                     n_neighbors=net_conf["network"]["n_neighbors"],
                     max_batch_size=effective_local_batch_size,
                     input_norm=input_norm,
+                    spmm_backend=spmm_backend,
                 )
                 norm_owner = map_encoder
             network = ResNetMapsPlusCLSNetwork(
@@ -849,6 +860,9 @@ def training(args=None):
                 # composite; None = legacy raw flattened GCNN features (old checkpoint lineage)
                 map_feature_dim=net_conf["network"].get("map_feature_dim", None),
                 map_encoder=map_encoder,
+                # single-res composite builds its own HealpyGCNN; multi-res owns it in map_encoder
+                # (which already carries spmm_backend), so this is inert there
+                spmm_backend=spmm_backend,
             )
             # HealpySmoothing is a tf.keras.Model whose build() must be called before
             # setup_grid_loss_step accesses trainable_variables. BaseModel skips this
@@ -891,6 +905,7 @@ def training(args=None):
                 # NETWORKS specs keep their signatures (they fail loudly if it is requested)
                 **({"input_norm": True} if input_norm and not is_multires_gcnn else {}),
                 **({"smoothing_external": True} if is_multires_gcnn else {}),
+                spmm_backend=spmm_backend,
                 **net_conf["network"]["kwargs"],
             )
             norm_owner = net_spec
@@ -906,6 +921,7 @@ def training(args=None):
                     n_neighbors=net_conf["network"]["n_neighbors"],
                     max_batch_size=effective_local_batch_size,
                     input_norm=input_norm,
+                    spmm_backend=spmm_backend,
                 )
                 norm_owner = network
                 # trace so network.built=True before BaseModel.summary()
@@ -917,6 +933,9 @@ def training(args=None):
                 n_side=None if is_multires_gcnn else smooth_nside,
                 indices=None if is_multires_gcnn else smooth_indices,
                 n_neighbors=net_conf["network"]["n_neighbors"],
+                # only used when network is a layer list (single-res): BaseModel wraps it in a
+                # HealpyGCNN. Inert for the multi-res prebuilt encoder (already carries the backend).
+                spmm_backend=spmm_backend,
                 z_bank_size=net_conf["network"]["z_bank_size"],
                 max_checkpoints=net_conf["network"]["max_checkpoints"],
                 optimizer=optimizer,

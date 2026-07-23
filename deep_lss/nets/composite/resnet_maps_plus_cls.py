@@ -57,6 +57,7 @@ class ResNetMapsPlusCLSNetwork(tf.keras.Model):
         cls_transform="asinh_per_feature",
         map_feature_dim=None,
         map_encoder=None,
+        spmm_backend="csr",
     ):
         """
         Args:
@@ -113,6 +114,7 @@ class ResNetMapsPlusCLSNetwork(tf.keras.Model):
                 n_neighbors=n_neighbors,
                 max_batch_size=max_batch_size,
                 initial_Fin=initial_Fin,
+                spmm_backend=spmm_backend,
             )
             if map_encoder is None
             else None

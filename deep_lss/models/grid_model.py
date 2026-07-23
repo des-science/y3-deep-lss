@@ -42,6 +42,7 @@ class GridLossModel(BaseModel):
         n_neighbors=20,
         max_batch_size=None,
         initial_Fin=None,
+        spmm_backend="csr",
         # general
         input_shape=None,
         optimizer=None,
@@ -112,6 +113,7 @@ class GridLossModel(BaseModel):
             n_neighbors=n_neighbors,
             max_batch_size=max_batch_size,
             initial_Fin=initial_Fin,
+            spmm_backend=spmm_backend,
             z_bank_size=z_bank_size,
         )
         LOGGER.info(f"Initialized the GridLossModel")

@@ -39,6 +39,7 @@ class ResNetLayers:
         smoothing_kwargs=None,
         input_norm=False,
         smoothing_external=False,
+        spmm_backend="csr",
     ) -> None:
         """Class used to build the layers of the ResNet network, which was used as the fiducial architecture in Janis'
         KiDS1000 analysis.
@@ -76,6 +77,11 @@ class ResNetLayers:
             smoothing_external (bool, optional): Set by ``ResNetMultiResEncoder`` when it builds
                 this spec with ``smoothing_kwargs=None`` because smoothing (and input norm) live in
                 the encoder instead — silences the missing-smoothing warning. Defaults to False.
+            spmm_backend (str, optional): sparse-matmul backend for the (single-res) smoothing layer
+                built here ("coo"/"csr"/"gather"; see deepsphere.utils.make_spmm_operator). Defaults
+                to "csr" (cuSPARSE; numerically equivalent to "coo" and faster). The graph
+                convolutions get their backend from the wrapping HealpyGCNN's own ``spmm_backend``
+                (set by BaseModel / the maps+cls composite), not from here.
         """
         self.layers = []
 
@@ -90,7 +96,7 @@ class ResNetLayers:
                     "run_training dispatches it to ResNetMultiResEncoder, which owns the smoothing and "
                     "builds this spec with smoothing_kwargs=None"
                 )
-            self.smoothing_layer = healpy_layers.HealpySmoothing(**smoothing_kwargs)
+            self.smoothing_layer = healpy_layers.HealpySmoothing(**smoothing_kwargs, spmm_backend=spmm_backend)
             self.layers.append(self.smoothing_layer)
         elif smoothing_external:
             LOGGER.info("Smoothing (and input norm) handled externally by ResNetMultiResEncoder")

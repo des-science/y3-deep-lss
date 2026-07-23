@@ -34,6 +34,10 @@ optimization:
 
 network:
   name: nested_transformer
+  # sparse-matmul backend for the Gaussian smoothing front-end (the transformer body has no
+  # graph convs): coo / csr (cuSPARSE) / gather (XLA). See deepsphere.utils.make_spmm_operator.
+  # csr is numerically equivalent to coo up to fp32 tolerance and measured faster (-46..-54%).
+  spmm_backend: csr
   # clustering-only, so nside 256 is the finest active smooth_nside and becomes the network's working
   # resolution (resolve_smooth_nside): the pipeline downsamples the native-res maps to 256 and the
   # transformer runs on those ~4x fewer pixels (no upsample back to native, unlike combined).
