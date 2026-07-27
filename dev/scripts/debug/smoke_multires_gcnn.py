@@ -14,7 +14,7 @@ import numpy as np
 import tensorflow as tf
 
 REPOS = "/users/athomsen/dlss/repos"
-OUT = "/iopsstor/scratch/cscs/athomsen/deep_lss/runs/smoke_multires_gcnn"
+OUT = "/iopsstor/scratch/cscs/athomsen/deep_lss/claude/tmp/smoke_multires_gcnn"
 
 from msfm.utils import input_output
 from deep_lss.utils import configuration
@@ -35,6 +35,18 @@ dlss_conf = configuration.read_split_configs(
     f"{REPOS}/y3-deep-lss/configs/scales/8wl,32gc.yaml",
 )
 net_conf = input_output.read_yaml(f"{REPOS}/y3-deep-lss/configs/deepsphere/combined/maps+cls.yaml")
+
+# Optional: swap the residual body to the ConvNeXt block (bench_v5) without touching the rest of the
+# geometry, so every assertion below (split counts, param accounting) still applies with the ONLY
+# variable being the block type. Set SMOKE_RESIDUAL_BLOCK_TYPE=convnext to exercise the ConvNeXt path.
+_block_type = os.environ.get("SMOKE_RESIDUAL_BLOCK_TYPE")
+if _block_type:
+    net_conf["network"]["kwargs"]["residual_block_type"] = _block_type
+    if _block_type == "convnext":
+        net_conf["network"]["kwargs"].setdefault("mlp_ratio", 4)
+        net_conf["network"]["kwargs"].setdefault("layer_scale_init", 1.0e-6)
+        net_conf["network"]["kwargs"].setdefault("drop_path_rate", 0.1)
+    print(f"[smoke] residual_block_type override -> {_block_type}", flush=True)
 
 n_side = msfm_conf["analysis"]["n_side"]
 n_z_bins = len(msfm_conf["survey"]["metacal"]["z_bins"]) + len(msfm_conf["survey"]["maglim"]["z_bins"])
@@ -178,6 +190,12 @@ print("checkpoint round trip OK (weights identical, outputs equal to GPU-nondete
 
 stage("7. maps-only multi-res encoder (head inside gcnn_post)")
 maps_conf = input_output.read_yaml(f"{REPOS}/y3-deep-lss/configs/deepsphere/combined/maps.yaml")
+if _block_type:
+    maps_conf["network"]["kwargs"]["residual_block_type"] = _block_type
+    if _block_type == "convnext":
+        maps_conf["network"]["kwargs"].setdefault("mlp_ratio", 4)
+        maps_conf["network"]["kwargs"].setdefault("layer_scale_init", 1.0e-6)
+        maps_conf["network"]["kwargs"].setdefault("drop_path_rate", 0.1)
 spec_m = NETWORKS["resnet"](**probe_spec_kwargs, **maps_conf["network"]["kwargs"])
 encoder_m = ResNetMultiResEncoder(
     smoothing_kwargs=smoothing_kwargs,
@@ -238,5 +256,68 @@ expected_delta = d_pseudoconv + d_proj + d_fuse
 actual_delta = n_params_multires - n_params_sr
 print(f"expected param delta {expected_delta:+,}, actual {actual_delta:+,}")
 assert actual_delta == expected_delta, "unexpected parameter difference between the two lineages"
+
+stage("10. injection_conv_layers path (post-fusion graph conv at nside 256 on both probes)")
+
+
+def build_injection_encoder(injection_conv_layers):
+    # fresh spec each time: ResNetMultiResEncoder consumes the layer objects (shared pool layers can't
+    # be reused across two encoders), mirroring build_multires_composite above
+    spec = NETWORKS["resnet"](**probe_spec_kwargs, **net_conf["network"]["kwargs"])
+    return ResNetMultiResEncoder(
+        smoothing_kwargs=smoothing_kwargs,
+        layers=spec.get_conv_layers(),
+        nside=smooth_nside,
+        n_neighbors=net_conf["network"]["n_neighbors"],
+        max_batch_size=effective_local_batch_size,
+        input_norm=True,
+        injection_conv_layers=injection_conv_layers,
+        injection_conv_kwargs={
+            "poly_degree": net_conf["network"]["kwargs"].get("poly_degree", 5),
+            "conv_type": net_conf["network"]["kwargs"].get("conv_type", "cheby"),
+        },
+    )
+
+
+enc0 = build_injection_encoder(0)
+enc1 = build_injection_encoder(1)
+f0 = enc0(maps, training=False)
+f1 = enc1(maps, training=False)
+print(f"injection_conv=0 -> {f0.shape}, injection_conv=1 -> {f1.shape}")
+assert f1.shape == f0.shape, "injection conv is channel-preserving; output shape must match baseline"
+
+# gcnn_post gains exactly 2 layers per injection conv (1 Chebyshev conv + 1 LayerNorm), prepended
+n0 = len(enc0.gcnn_post.layers_in)
+n1 = len(enc1.gcnn_post.layers_in)
+print(f"gcnn_post layers: {n0} (baseline) -> {n1} (injection_conv=1)")
+assert n1 == n0 + 2, f"expected +2 gcnn_post layers, got +{n1 - n0}"
+
+# and it adds parameters (the graph conv + LayerNorm at split_Fin)
+p0 = sum(int(np.prod(v.shape)) for v in enc0.variables)
+p1 = sum(int(np.prod(v.shape)) for v in enc1.variables)
+print(f"encoder params: {p0:,} -> {p1:,} (+{p1 - p0:,})")
+assert p1 > p0, "injection conv should add parameters"
+
+# checkpoint save/restore round trip with the new params
+ckpt_dir_inj = os.path.join(OUT, "ckpt_injection")
+path_inj = tf.train.Checkpoint(encoder=enc1).write(os.path.join(ckpt_dir_inj, "ckpt"))
+enc1b = build_injection_encoder(1)
+_ = enc1b(maps, training=False)  # build variables
+tf.train.Checkpoint(encoder=enc1b).read(path_inj).assert_existing_objects_matched()
+assert len(enc1.variables) == len(enc1b.variables)
+n_diff = 0
+for v1, v2 in zip(enc1.variables, enc1b.variables):
+    base1, base2 = (re.sub(r"_\d+", "", v.name) for v in (v1, v2))
+    assert base1 == base2 and v1.shape == v2.shape, (v1.name, v2.name, v1.shape, v2.shape)
+    if not np.array_equal(v1.numpy(), v2.numpy()):
+        n_diff += 1
+assert n_diff == 0, f"{n_diff} injection-conv variables not restored"
+print(f"injection_conv checkpoint round trip OK ({len(enc1b.variables)} vars identical)")
+
+# stacking >1 injection conv also builds + forwards
+enc2 = build_injection_encoder(2)
+f2 = enc2(maps, training=False)
+assert f2.shape == f1.shape and len(enc2.gcnn_post.layers_in) == n0 + 4
+print(f"injection_conv=2 forward OK: {f2.shape}, gcnn_post layers {len(enc2.gcnn_post.layers_in)}")
 
 print("\nALL SMOKE TESTS PASSED", flush=True)

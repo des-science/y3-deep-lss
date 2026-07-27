@@ -836,6 +836,14 @@ def training(args=None):
                     max_batch_size=effective_local_batch_size,
                     input_norm=input_norm,
                     spmm_backend=spmm_backend,
+                    fusion=net_conf["network"].get("fusion", "concat"),
+                    # top-level network key (NOT under kwargs, which is splatted into ResNetLayers);
+                    # the conv build params are read from kwargs to match the body's conv basis/degree
+                    injection_conv_layers=net_conf["network"].get("injection_conv_layers", 0),
+                    injection_conv_kwargs={
+                        "poly_degree": net_conf["network"]["kwargs"].get("poly_degree", 5),
+                        "conv_type": net_conf["network"]["kwargs"].get("conv_type", "cheby"),
+                    },
                 )
                 norm_owner = map_encoder
             network = ResNetMapsPlusCLSNetwork(
@@ -924,6 +932,13 @@ def training(args=None):
                     max_batch_size=effective_local_batch_size,
                     input_norm=input_norm,
                     spmm_backend=spmm_backend,
+                    fusion=net_conf["network"].get("fusion", "concat"),
+                    # see the maps+cls branch above
+                    injection_conv_layers=net_conf["network"].get("injection_conv_layers", 0),
+                    injection_conv_kwargs={
+                        "poly_degree": net_conf["network"]["kwargs"].get("poly_degree", 5),
+                        "conv_type": net_conf["network"]["kwargs"].get("conv_type", "cheby"),
+                    },
                 )
                 norm_owner = network
                 # trace so network.built=True before BaseModel.summary()

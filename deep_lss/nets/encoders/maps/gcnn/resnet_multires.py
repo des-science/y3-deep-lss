@@ -38,6 +38,7 @@ from deepsphere import healpy_layers
 
 from msfm.utils import logger
 
+from deep_lss.nets.encoders.maps.gcnn.resnet import _CONV_HELPERS
 from deep_lss.nets.encoders.maps.multires import MultiResEncoderMixin
 from deep_lss.utils.configuration import get_smooth_nside_indices
 
@@ -117,12 +118,47 @@ class ResNetMultiResEncoder(MultiResEncoderMixin, tf.keras.Model):
             deepsphere.utils.make_spmm_operator). Defaults to "csr". ``PerProbeSmoothing`` lives in
             deep_lss.nets.layers.maps.smoothing and re-exports deepsphere's ``HealpySmoothing``,
             which the transformer path shares (also at the "csr" app default).
+        fusion (str, optional): how the injected coarse (clustering) channels combine with the pooled
+            fine (lensing) stream at the seam. "concat" (default) is ``injection_fuse(concat([x, inj]))``;
+            "bilinear" additionally feeds the elementwise product ``x*inj`` into the concat, handing the
+            trunk the local cross statistic (galaxy-galaxy lensing is a product of the two aligned fields)
+            directly. Separate checkpoint lineage from "concat" only via ``injection_fuse``'s input width,
+            which is inferred lazily — but treat it as its own lineage anyway (retrain).
+        injection_conv_layers (int, optional): number of channel-preserving graph convolutions (+ LayerNorm)
+            to run at the injection nside on the FUSED both-probe stream, right after the fusion Dense and
+            before the rest of ``gcnn_post`` (i.e. prepended to ``post_layers``). Motivation: in the default
+            schedule the pooling stack precedes every real graph conv, so the first genuine convolution runs
+            only at the coarsest nside (e.g. 64) — no equivariant conv ever touches the finest, most
+            non-Gaussian scales, and the two probes are combined only by a pointwise Dense at the seam. These
+            convs extract non-Gaussian features at the injection nside (256) BEFORE the field is pooled down,
+            AND — because they act on the fused lensing+clustering stream — do content-dependent CROSS-PROBE
+            mixing at high resolution (the combined-probe gap bench_v4 diagnosed). Orientation-preserving
+            (real graph conv, keeps the NEST child-order gauge), unlike a symmetrized pool. A conv at nside
+            256 is compute-heavy, so size ``n_steps`` to the measured throughput. Defaults to 0 (off).
+        injection_conv_kwargs (dict, optional): build kwargs for the ``injection_conv_layers`` — ``poly_degree``
+            (Chebyshev/graph-conv order K, default 5) and ``conv_type`` ("cheby"/"mono"/"bernstein", default
+            "cheby"). Ignored when ``injection_conv_layers == 0``. Defaults to None.
     """
 
     def __init__(
-        self, smoothing_kwargs, layers, nside, n_neighbors, max_batch_size, input_norm=False, spmm_backend="csr"
+        self,
+        smoothing_kwargs,
+        layers,
+        nside,
+        n_neighbors,
+        max_batch_size,
+        input_norm=False,
+        spmm_backend="csr",
+        fusion="concat",
+        injection_conv_layers=0,
+        injection_conv_kwargs=None,
     ):
         super().__init__()
+        if fusion not in ("concat", "bilinear"):
+            raise ValueError(f"fusion must be 'concat' or 'bilinear', got {fusion!r}")
+        if not isinstance(injection_conv_layers, int) or injection_conv_layers < 0:
+            raise ValueError(f"injection_conv_layers must be a non-negative int, got {injection_conv_layers!r}")
+        self.fusion = fusion
 
         # per-probe fp32 smoothing + grouping by nside (finest first) — shared mixin plumbing;
         # the fine group is the GCNN input, the coarse group is injected where the pooling stack
@@ -170,6 +206,21 @@ class ResNetMultiResEncoder(MultiResEncoderMixin, tf.keras.Model):
         # back to the fine stream's width — applied before all layers at the coarse nside and below
         self.injection_proj = tf.keras.layers.Dense(split_Fin, name="injection_proj")
         self.injection_fuse = tf.keras.layers.Dense(split_Fin, name="injection_fuse")
+
+        # optional channel-preserving graph conv(s) at the injection nside on the FUSED both-probe stream,
+        # prepended to gcnn_post so they run right after fusion, at the coarse nside (256), before any further
+        # pooling. HealpyGCNN builds the sphere graph at coarse["nside"] for these Chebyshev helpers; the
+        # LayerNorms fall through its passthrough branch. Channel-preserving at split_Fin (the fused width).
+        if injection_conv_layers > 0:
+            icw = injection_conv_kwargs or {}
+            conv_helper = _CONV_HELPERS[icw.get("conv_type", "cheby")]
+            K = icw.get("poly_degree", 5)
+            injection_convs = []
+            for _ in range(injection_conv_layers):
+                injection_convs.append(conv_helper(K=K, Fout=split_Fin, activation=tf.nn.relu))
+                injection_convs.append(tf.keras.layers.LayerNormalization(axis=-1))
+            post_layers = injection_convs + post_layers
+
         self.gcnn_post = HealpyGCNN(
             nside=coarse["nside"],
             indices=coarse["indices"],
@@ -187,7 +238,8 @@ class ResNetMultiResEncoder(MultiResEncoderMixin, tf.keras.Model):
             f"ResNetMultiResEncoder: fine group nside={nside} ({fine['n_channels']} ch, "
             f"{len(pre_layers)} layers), coarse group nside={coarse['nside']} "
             f"({coarse['n_channels']} ch) injected at {split_Fin} channels "
-            f"({len(post_layers)} layers after the fusion), input_norm={input_norm}"
+            f"({len(post_layers)} layers after the fusion), fusion={fusion}, "
+            f"injection_conv_layers={injection_conv_layers}, input_norm={input_norm}"
         )
 
     def call(self, maps, training=False):
@@ -198,5 +250,10 @@ class ResNetMultiResEncoder(MultiResEncoderMixin, tf.keras.Model):
 
         x = self.gcnn_pre(fine_t, training=training)  # (B, P_coarse, split_Fin)
         inj = self.injection_proj(coarse_t)  # (B, P_coarse, split_Fin)
-        x = self.injection_fuse(tf.concat([x, inj], axis=-1))  # (B, P_coarse, split_Fin)
+        # fuse the pooled lensing stream (x) with the injected clustering channels (inj), both aligned
+        # at the coarse nside. "bilinear" also feeds x*inj so the trunk gets the local cross statistic
+        # (galaxy-galaxy lensing ~ product of the two fields at the same position) directly; injection_fuse
+        # infers its input width lazily, so the wider concat needs no construction change.
+        parts = [x, inj, x * inj] if self.fusion == "bilinear" else [x, inj]
+        x = self.injection_fuse(tf.concat(parts, axis=-1))  # (B, P_coarse, split_Fin)
         return self.gcnn_post(x, training=training)

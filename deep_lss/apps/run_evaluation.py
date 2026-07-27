@@ -356,6 +356,7 @@ if __name__ == "__main__":
                         n_neighbors=net_conf["network"]["n_neighbors"],
                         max_batch_size=max_batch_size,
                         input_norm=input_norm,
+                        fusion=net_conf["network"].get("fusion", "concat"),
                     )
                 network = ResNetMapsPlusCLSNetwork(
                     conv_layers=None if is_multires_gcnn else net_spec.get_conv_layers(),
@@ -409,6 +410,7 @@ if __name__ == "__main__":
                         n_neighbors=net_conf["network"]["n_neighbors"],
                         max_batch_size=max_batch_size,
                         input_norm=input_norm,
+                        fusion=net_conf["network"].get("fusion", "concat"),
                     )
                     network(tf.zeros((2, len(smooth_indices), n_z_bins)), training=False)
                     model = BaseModel(
