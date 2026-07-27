@@ -1,0 +1,21 @@
+# Clustering with the VMIM target reduced to the cosmology-only vector (Om, s8, w0), implicitly
+# marginalizing the galaxy-bias parameters (bg1..bg4) at compression. Cosmology-subspace
+# counterpart of clustering.yaml, for the full-vs-cosmological-subspace comparison (cf. lensing_min).
+#
+# IMPORTANT: the params list must follow the all_params order from msfm parameters.get_parameters
+# (cosmo -> bary -> ia) because the Cls label gather returns columns in all_params order, NOT in
+# the requested order.
+dset:
+  common:
+    with_lensing: False
+    with_clustering: True
+    with_cross_z: True
+    with_cross_probe: False
+    apply_norm: True
+  training:
+    params: [Om, s8, w0]
+  eval:
+    fiducial:
+      params: []
+    grid:
+      params: [Om, s8, w0]
