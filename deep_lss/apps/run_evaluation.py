@@ -378,6 +378,7 @@ if __name__ == "__main__":
                     # must match the training-time setting for the checkpoint to restore
                     map_feature_dim=net_conf["network"].get("map_feature_dim", None),
                     map_encoder=map_encoder,
+                    map_pool=net_conf["network"].get("map_pool", None),
                 )
                 if network.gcnn is not None:
                     network.gcnn.build((max_batch_size, len(smooth_indices), n_z_bins))

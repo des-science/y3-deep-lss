@@ -11,7 +11,7 @@ name; the transformer-branch counterpart is
 ``deep_lss.nets.composite.transformer_maps_plus_cls.TransformerMapsPlusCLSNetwork``.
 
 Architecture:
-  1. HealpyGCNN processes the HEALPix maps → flatten
+  1. HealpyGCNN processes the HEALPix maps → flatten (or mean-pool over pixels, map_pool="mean")
      [→ linear Dense(map_feature_dim)] → map_norm (LN)                     (map branch)
   2. ClsBinningAndTransformLayer bins + gathers + sign-log-transforms Cls
      → cls_norm (LN) → cls_embedding MLP (Dense→LN × N)                    (Cls branch)
@@ -57,6 +57,7 @@ class ResNetMapsPlusCLSNetwork(tf.keras.Model):
         cls_transform="asinh_per_feature",
         map_feature_dim=None,
         map_encoder=None,
+        map_pool=None,
         spmm_backend="csr",
     ):
         """
@@ -95,6 +96,15 @@ class ResNetMapsPlusCLSNetwork(tf.keras.Model):
                 then live inside the encoder. Like ``map_feature_dim``, this is a separate
                 checkpoint lineage: a multi-res checkpoint restores only with the matching
                 ``smooth_nside`` mapping set, and vice versa.
+            map_pool (str, optional): map-branch readout. ``None`` (default) flattens the
+                ``(B, n_pix, n_ch)`` conv features to ``(B, n_pix*n_ch)`` (legacy). ``"mean"`` instead
+                mean-pools over the pixel axis to ``(B, n_ch)``, mirroring the transformer map encoder's
+                masked-mean token pool — a permutation-invariant readout that replaces the ~1e5->dim
+                linear crush with a small ``n_ch->map_feature_dim`` Dense (set ``map_feature_dim`` for the
+                "+ small Dense" variant; leave it ``None`` to use the raw pooled ``n_ch`` vector). The GCNN
+                trunk runs on footprint pixels only (no padding), so the plain mean is the footprint mean.
+                Separate checkpoint lineage (changes ``map_projection``'s input width): restore only with
+                the same ``map_pool``.
         """
         super().__init__()
 
@@ -102,6 +112,9 @@ class ResNetMapsPlusCLSNetwork(tf.keras.Model):
             raise ValueError("pass exactly one of conv_layers (single-res GCNN) or map_encoder (multi-res)")
         if map_encoder is not None and any(a is not None for a in (n_side, indices, initial_Fin)):
             raise ValueError("map_encoder owns the map branch — n_side/indices/initial_Fin must be None")
+        if map_pool not in (None, "mean"):
+            raise ValueError(f"map_pool must be None (flatten) or 'mean', got {map_pool!r}")
+        self.map_pool = map_pool
 
         # keep the single-res attribute creation order unchanged (object-based checkpointing is
         # structure-sensitive; a None attribute is untracked, so the map_encoder path adds no
@@ -146,7 +159,7 @@ class ResNetMapsPlusCLSNetwork(tf.keras.Model):
         dense_widths = [l.units for l in cls_embedding_layers if hasattr(l, "units")]
         cls_out_dim = dense_widths[-1] if dense_widths else self.cls_layer.n_cls_flat
         LOGGER.warning(
-            f"ResNetMapsPlusCLSNetwork: map_feature_dim="
+            f"ResNetMapsPlusCLSNetwork: map_pool={map_pool or 'None (flatten)'}, map_feature_dim="
             f"{map_feature_dim if map_feature_dim is not None else 'None (raw flattened GCNN features)'}, "
             f"n_cls_bins={n_cls_bins}, n_z_cross={len(l_max_per_pair)}, "
             f"cls_flat_dim={self.cls_layer.n_cls_flat}, "
@@ -167,12 +180,17 @@ class ResNetMapsPlusCLSNetwork(tf.keras.Model):
         """
         maps, cls = inputs
 
-        # Map branch: GCNN (or multi-res encoder) → flatten → (project) → normalise
+        # Map branch: GCNN (or multi-res encoder) → pool/flatten → (project) → normalise
         map_branch = self.map_encoder if self.map_encoder is not None else self.gcnn
         x = map_branch(maps, training=training)                 # (batch, n_pix_reduced, n_ch)
-        x_flat = tf.reshape(x, (tf.shape(x)[0], -1))           # (B, n_map_flat)
+        if self.map_pool == "mean":
+            # permutation-invariant readout mirroring the transformer's masked-mean token pool:
+            # average over the (footprint-only) pixel axis instead of flattening + linear-crushing.
+            x_flat = tf.reduce_mean(x, axis=1)                  # (B, n_ch)
+        else:
+            x_flat = tf.reshape(x, (tf.shape(x)[0], -1))       # (B, n_map_flat)
         if self.map_projection is not None:
-            x_flat = self.map_projection(x_flat)                # (B, map_feature_dim)
+            x_flat = self.map_projection(x_flat)                # (B, map_feature_dim); small n_ch->dim Dense when pooled
         x_flat = self.map_norm(x_flat, training=training)
 
         # Cls branch: per-pair bin + log transform → normalise → embed

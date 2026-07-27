@@ -860,6 +860,8 @@ def training(args=None):
                 # composite; None = legacy raw flattened GCNN features (old checkpoint lineage)
                 map_feature_dim=net_conf["network"].get("map_feature_dim", None),
                 map_encoder=map_encoder,
+                # map-branch readout: None=flatten (legacy), "mean"=mean-pool over pixels
+                map_pool=net_conf["network"].get("map_pool", None),
                 # single-res composite builds its own HealpyGCNN; multi-res owns it in map_encoder
                 # (which already carries spmm_backend), so this is inert there
                 spmm_backend=spmm_backend,
