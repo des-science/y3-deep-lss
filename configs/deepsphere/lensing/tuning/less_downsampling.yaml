@@ -42,8 +42,8 @@ network:
   kwargs:
     base_channels: 32
     # depth: nside cascade 512 -> 256 -> 128, trunk operates at nside 128
-    downsampling_layers: 1
-    cheby_layers: 1
+    pool_layers: 1
+    conv_layers: 1
     residual_layers: 2
     # misc
     poly_degree: 2

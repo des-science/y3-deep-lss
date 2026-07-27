@@ -45,8 +45,8 @@ network:
   kwargs:
     base_channels: 32
     # depth: same downsampling schedule as default.yaml (512 -> 64), but a much thinner trunk
-    downsampling_layers: 3
-    cheby_layers: 0
+    pool_layers: 3
+    conv_layers: 0
     residual_layers: 1
     # misc
     poly_degree: 2

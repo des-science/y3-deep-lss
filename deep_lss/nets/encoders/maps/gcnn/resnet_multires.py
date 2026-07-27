@@ -84,7 +84,7 @@ def split_layers_at_nside(layers, nside_in, initial_Fin, injection_nside):
             break
     raise ValueError(
         f"injection nside {injection_nside} is never reached exactly by the pooling stack starting "
-        f"at nside {nside_in} (check downsampling_layers/cheby_layers against smooth_nside)"
+        f"at nside {nside_in} (check pool_layers/conv_layers against smooth_nside)"
     )
 
 

@@ -49,12 +49,12 @@ network:
   # (restored from the checkpoint on resume). Adds checkpoint variables — its own lineage.
   input_norm: true
   kwargs:
-    # base_channels 64 (not 32): with only 2 downsampling_layers (coarser nside-256 input) this keeps
+    # base_channels 64 (not 32): with only 2 pool_layers (coarser nside-256 input) this keeps
     # the deepest feature width at 256, matching lensing's (64*2^2 == 32*2^3).
     base_channels: 64
     # depth
-    downsampling_layers: 2
-    cheby_layers: 2
+    pool_layers: 2
+    conv_layers: 2
     residual_layers: 5
     # misc
     poly_degree: 5

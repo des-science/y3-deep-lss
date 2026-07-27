@@ -67,8 +67,8 @@ network:
   kwargs:
     base_channels: 32
     # depth
-    downsampling_layers: 3
-    cheby_layers: 2
+    pool_layers: 3
+    conv_layers: 2
     residual_layers: 5
     # misc
     poly_degree: 5
