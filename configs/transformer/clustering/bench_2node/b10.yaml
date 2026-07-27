@@ -1,0 +1,94 @@
+# bench_2node b10: the recipe-preserving multi-worker variant. local_batch_size is PER REPLICA:
+# under multi_worker_mirrored/horovod with 4 tasks/node x 1 GPU, 2 nodes = 8 replicas x 10 =
+# global batch 80, identical to the production mirrored recipe (4 replicas x 20). Per-task loader
+# knobs are scaled down (n_readers 16->8, n_workers 128->64, eshuf 1024->256) since each of the
+# 4 tasks per node runs its own input pipeline; per-node aggregates match or exceed the mirrored
+# baseline. n_steps 1300 + vali_every Null: pure step rate over the pasc window (steps 200-1200).
+name: nested_transformer
+
+training:
+  n_steps: 1300
+  output_every: Null
+  checkpoint_every: 10000
+  vali_every: Null
+  eval_every: Null
+
+optimization:
+  optimizer: adam
+  gradient_clipping:
+    clip_by_value: null
+    clip_by_norm: null
+    clip_by_global_norm: 1.0
+  mutual_info_loss:
+    learning_rate: 1.0e-4
+    optimizer_kwargs:
+      beta_1: 0.9
+      beta_2: 0.999
+    scheduler: cosine
+    warmup_steps: 5000
+    warmup_init_learning_rate: 1.0e-5
+    decay_alpha: 0.0
+    ema_momentum: null
+
+network:
+  name: nested_transformer
+  smooth_nside:
+    clustering: 256
+  token_nside: 16
+  z_bank_size: Null
+  max_checkpoints: 50
+  jit_compile_body: true
+  precision: bfloat16
+  input_norm: true
+  masked_attention: false
+  map_feature_dim: 512
+  head:
+    dropout_rate: 0.1
+  cls:
+    n_bins: 16
+    transform: asinh_per_feature
+    asinh_default_scale: null
+    embedding_layers: [512, 512, 512, 512]
+    embedding_dropout_rate: 0.1
+  kwargs: # -> HealpixNestedHierarchicalLocalWindowTransformer
+    base_embed_dim: 32
+    growth: double
+    num_heads: 4
+    window_levels: 3
+    local_blocks_per_level: 1
+    global_blocks: 1
+    mlp_ratio: 4
+    layerscale_init: null
+    fp32_softmax: true
+    block_dropout_rate: null
+    pos_encoding: null
+    merge_op: concat
+
+dset:
+  training:
+    common:
+      is_eval: False
+      n_readers: 8
+      n_prefetch: 4
+      n_workers: 64
+    grid:
+      local_batch_size: 10
+      file_name_shuffle_buffer: 64
+      examples_shuffle_buffer: 256
+  validation:
+    n_batches: 100
+    common:
+      is_eval: True
+      n_readers: 8
+      n_prefetch: 2
+      n_workers: 16
+    grid:
+      local_batch_size: 16
+  eval:
+    common:
+      is_eval: True
+      n_readers: 8
+      n_prefetch: 2
+      n_workers: 64
+    grid:
+      local_batch_size: 16
