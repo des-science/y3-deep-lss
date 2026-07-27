@@ -1,0 +1,150 @@
+# ============================================================================
+# bench_v6 — STAGE 2, THE FULL STACK AT 2x BUDGET.
+# ############################################################################
+# THIS IS THE ROUND'S ACTUAL "BEAT THE TRANSFORMER" SHOT. Every validated lever, simultaneously.
+# ############################################################################
+#
+# ONE knob vs ../convnext_droppath_attn.yaml: n_steps ~2x (2x12 h -> 4x12 h chain). Identical architecture.
+#
+# ALL FOUR re-derived levers (1000-mock paired route, 2026-07-26), on disjoint parts of the problem:
+#   readout + width   (in the anchor)              95% / 80% of mocks
+#   DropPath 0.1      (residual-branch regularizer) 78% of mocks, +8.5%
+#   global attention  (ConvNeXt body only)          72% of mocks, +5.6%
+#   BUDGET x2         (this file's only change)     73% of mocks, +7.3%
+#
+# The fourth was excluded from the previous version of this round on the strength of a "zero gain" null
+# that the paired re-analysis reversed. Re-including it is the single largest change to bench_v6.
+#
+# PRE-REGISTERED ARITHMETIC, so the result can falsify it. From the anchor architecture's measured
+# 0.918 vs t2_cls:
+#   0.918 x 1.085 (droppath) x 1.056 (attn) x 1.073 (budget) ~ 1.13
+# i.e. ~13% ABOVE the transformer. Levers rarely compose in full and three of the four were measured at
+# base 32, so read 1.13 as an optimistic bound and ~1.00-1.05 as the realistic target. Attribution against
+# ../convnext_droppath_attn.yaml (same architecture, half the steps) isolates the budget term exactly.
+#
+# WHY THIS IS STAGE 2 AND SHOULD NOT LAUNCH BLIND. It is the most expensive config in the round (4x12 h) and
+# it inherits every one of stage 1's untested premises at once. Launch it only after stage 1 shows:
+#   (i)   ../convnext.yaml >= bench_v5_pool_head_w64 (step-corrected) -- ConvNeXt still neutral at base 64;
+#   (ii)  ../convnext_droppath.yaml > ../convnext.yaml     -- DropPath transfers to base 64;
+#   (iii) ../convnext_droppath_attn.yaml > convnext_droppath.yaml     -- attention transfers to base 64;
+#   (iv)  budget_classic.yaml has not regressed vs bench_v5_pool_head_w64        -- the budget lever really does
+#                                                                                  extend to base 64 on the pooled readout.
+# If (iv) fails, this config is void regardless of (i)-(iii): budget is CONDITIONAL on the readout (flatten
+# readouts degrade with steps -- v3_cls 0.545 -> 0.270 over 150k -> 310k), and (iv) is what establishes that
+# the pooled readout at base 64 is on the good side of that conditional.
+# If (iii) fails but (ii) holds, run this WITHOUT the attention block (convnext_droppath.yaml at 2x budget)
+# rather than dropping the stage. If (i) fails outright, the ConvNeXt line is dead and the stage-2 budget
+# belongs to droppath_classic_long.yaml, which shares none of these premises.
+#
+# RISK: three regularizers now coexist (DropPath 0.1, attention-block dropout 0.1, head dropout 0.1) at the
+# round's largest step count. If it under-performs ../convnext_droppath_attn.yaml, over-regularization at long budget is
+# the first suspect. The diagnostic is vali_total, NOT the train-vali gap -- that gap is what misled the
+# previous version of this round into discarding the budget lever in the first place.
+#
+# CHAINED-RUN CONTRACT: 4 x 12 h, jobs 1-3 TIMEOUT by design, job 4 runs eval + inference. Every link
+# --dependency=afterany (NOT afterok). See budget_classic.yaml for the 4-job launch loop; use
+# MODEL_DIR=bench_v6_convnext_droppath_attn_long and --job-name=bv6_cnx_dpattn_long.
+# ============================================================================
+name: deepsphere_default
+
+training:
+  # TOTAL across the 4x12 h chain, set to ~2x ../convnext_droppath_attn.yaml so the budget contrast is a clean doubling.
+  # PROVISIONAL for the same reason ../convnext_droppath_attn.yaml is: it rides on a projected ~3.7 it/s for the
+  # convnext+droppath+attn geometry at base 64. Cost check: 580k / 3.7 = 157 ks = 43.5 h + ~0.6 h eval inside
+  # a 48 h chain -- TIGHTER than budget_classic.yaml, so this is the config most exposed to a slow real it/s.
+  # RE-SIZE from ../convnext_droppath_attn.yaml's OWN measured job-1 rate (n_steps = 2 x it/s x 79.2 ks) rather than from
+  # the projection; by the time this launches, stage 1 has measured it. If the real rate leaves no margin,
+  # cut n_steps -- do NOT add a 5th job, since a longer chain means more TIMEOUT handoffs and more lost work.
+  n_steps: 580000
+  output_every: Null
+  checkpoint_every: 5000  # job N restores the last checkpoint at each handoff; smaller = less lost work
+  vali_every: 1000
+  eval_every: Null
+
+optimization:
+  optimizer: adam
+  gradient_clipping:
+    clip_by_value: null
+    clip_by_norm: null
+    clip_by_global_norm: 1.0
+  mutual_info_loss:
+    learning_rate: 1.0e-4
+    optimizer_kwargs:
+      beta_1: 0.9
+      beta_2: 0.999
+    scheduler: cosine
+    warmup_steps: 5000
+    warmup_init_learning_rate: 1.0e-5
+    decay_alpha: 0.0
+    ema_momentum: null
+
+network:
+  name: resnet
+  spmm_backend: csr
+  n_neighbors: 60
+  max_checkpoints: 50
+  save_second_to_last_layer: False
+  z_bank_size: Null
+  input_norm: true
+  smooth_nside:
+    clustering: 256
+  map_pool: mean  # the winning readout -- and what makes the budget lever safe to spend (see budget_classic.yaml)
+  map_feature_dim: null  # no projection: the 512-d pooled map goes straight to map_norm + concat
+  cls:
+    n_bins: 16
+    transform: asinh_per_feature
+    asinh_default_scale: null
+    embedding_layers: [512, 512, 512, 512]  # last entry 512 balances the 512-d pooled map; fused = 1024
+    embedding_dropout_rate: 0.1
+  kwargs:
+    # ARCHITECTURE IDENTICAL TO ../convnext_droppath_attn.yaml -- n_steps above is the only difference. Keep it that way:
+    # any architectural edit here destroys the budget attribution this config exists to provide.
+    base_channels: 64  # width x2; pool_widen doubles per stage -> deep body 512 ch
+    pool_layers: 3
+    conv_layers: 2
+    residual_layers: 5
+    residual_block_type: convnext  # prerequisite for BOTH stacked levers (DropPath wiring + the attn interaction)
+    mlp_ratio: 4
+    layer_scale_init: 1.0e-6
+    drop_path_rate: 0.1
+    poly_degree: 5
+    head_type: "dense"
+    dense_layers: []
+    dropout_rate: 0.1
+    residual_attention_every: 2
+    residual_attention:
+      num_heads: 8          # body is 512 ch -> key_dim = 512/8 = 64, matching the transformer
+      n_layers: 1
+      mlp_ratio: 2.0        # attention-block MLP ratio (distinct from the ConvNeXt mlp_ratio above)
+      dropout_rate: 0.1
+      positional_embedding: true   # learnable per-token pos-emb over the fixed nside-16 footprint
+      layer_scale_init: 1.0e-4     # near-identity init: convs do the early work, attention is learned on top
+
+dset:
+  training:
+    common:
+      is_eval: False
+      n_readers: 32
+      n_prefetch: 4
+      n_workers: Null
+    grid:
+      local_batch_size: 16
+      file_name_shuffle_buffer: 64
+      examples_shuffle_buffer: 256
+  validation:
+    n_batches: 50
+    common:
+      is_eval: True
+      n_readers: 8
+      n_prefetch: 2
+      n_workers: 16
+    grid:
+      local_batch_size: 16
+  eval:
+    common:
+      is_eval: True
+      n_readers: 64
+      n_prefetch: 2
+      n_workers: Null
+    grid:
+      local_batch_size: 16

@@ -1,0 +1,148 @@
+# ============================================================================
+# bench_v5 2x — pool_head READOUT + graph-U-Net BODY (the expressive-body-at-full-budget test).
+# ----------------------------------------------------------------------------
+# Combines the two things bench_v4 kept separate:
+#   (1) the winning READOUT  -> map_pool: mean, map_feature_dim: null, Cls emb ...->256  (from pool_head)
+#   (2) an expressive multi-scale-conv BODY -> base16, pool_layers 2, conv_layers 3, conv_widen: true
+#       (the graph-U-Net schedule from bench_v4/graph_unet.yaml, deep body still 256 = 16*2^4)
+#
+# WHY THIS CONFIG EXISTS (the convergence hypothesis).
+#   In bench_v4, graph_unet tied `default` (grid 1895 vs 1873) and lost to pool_head (2306). But that
+#   comparison was CONFOUNDED and possibly UNDER-CONVERGED:
+#     - CONFOUND: graph_unet carried the LOSING flatten-Dense readout (map_feature_dim 64). Every
+#       flatten-readout body landed in 1873-2238; the single readout swap (pool_head) alone reached 2306.
+#       So graph_unet-as-is was capped by its readout, not tested on its merits. This file puts the
+#       expressive body on the WINNING readout, isolating the body question (parallels 2x/pool_head_w64,
+#       which is winning-readout + width).
+#     - CONVERGENCE: equal optimizer-step counts != equal convergence speed. A more expressive /
+#       differently-structured body can need more steps to reach its ceiling; v4 gave every combined GCNN
+#       only ONE 12 h job. This runs the 2x12 h chained budget so a slower-ramping body can show its true
+#       ceiling (the same reason w64 was promoted to 2x).
+#
+# WHAT THE BODY BUYS (vs 2x/pool_head).
+#   Same deep-body width (256) and trunk depth (5). Different downsampling: real Chebyshev convs COUPLED
+#   to the doubling-downsamplings at nside 128/64/32 (conv_widen), instead of pool_head's cheap strided
+#   pseudo-pools down to 64 with real convs only at 64/32. After the multi-res split at nside 256, the
+#   POST-FUSION stream (both probes) sees its first real conv at nside 128 -- one octave higher than
+#   pool_head's 64 -- so this is more equivariant CROSS-PROBE convolution at high resolution, the most
+#   misspecification-robust direction (the reason for using DeepSphere at all). This is the fair,
+#   full-budget rematch of the "real multi-scale conv" hypothesis that v4 could only test 1x + confounded.
+#
+# WIDTH SCHEDULE (base_channels 16, pool_layers 2, conv_layers 3, conv_widen; deep body 16*2^4 = 256):
+#   nside 512 -> 256 : PseudoConv  Fout 16   (pure pooling; multi-res seam / clustering injected here)
+#   nside 256 -> 128 : PseudoConv  Fout 32   (pure pooling)
+#   nside 128 ->  64 : Chebyshev Fout 64  + PseudoConv   <-- real conv (first POST-fusion real conv)
+#   nside  64 ->  32 : Chebyshev Fout 128 + PseudoConv   <-- real conv
+#   nside  32 ->  16 : Chebyshev Fout 256 + PseudoConv   <-- real conv
+#   nside  16 (trunk): 5 residual layers @ width 256
+#   readout: mean-pool over footprint pixels -> 256-d (matches pool_head; Cls emb ->256; fused 512-d)
+#
+# NO NEW CODE: conv_widen (ResNetLayers) and the pool_head readout both already ship and ran in v4/v5;
+# this is a config-only combination. Fresh checkpoint lineage.
+#
+# CHAINED-RUN CONTRACT: identical to 2x/pool_head.yaml -- n_steps is the TOTAL budget across the 2x12 h
+# chain (cosine spans it), launched by hand as a 2-job --dependency=afterany chain (job 1 TIMEOUTs by
+# design, so afterok would not fire). Substitute this file's path + MODEL_DIR=bench_v5_pool_head_unet:
+#   J1=$(ARCH=deepsphere PROBE=combined \
+#        NET_CONFIG=$PWD/configs/deepsphere/combined/bench_v5/2x/pool_head_unet.yaml \
+#        MODEL_DIR=bench_v5_pool_head_unet sbatch --parsable --job-name=bv5_ph_unet \
+#        --export=ALL,RUN_NUM=1 submissions/clariden/training.sh)
+#   ARCH=deepsphere PROBE=combined \
+#        NET_CONFIG=$PWD/configs/deepsphere/combined/bench_v5/2x/pool_head_unet.yaml \
+#        MODEL_DIR=bench_v5_pool_head_unet sbatch --job-name=bv5_ph_unet \
+#        --dependency=afterany:$J1 --export=ALL,RUN_NUM=2 submissions/clariden/training.sh
+# ============================================================================
+name: deepsphere_default
+
+training:
+  # TOTAL budget across the 2x12 h chain (cosine spans this; job 2 trains the remainder).
+  # Sized from bench_v4 graph_unet's REAL 4-GPU throughput (150k in 10.13 h, job 2880784 = 4.11 real it/s)
+  # x 79.2 ks (2x~11 h train) = 325.6k -> floor 10k = 320000. VALIDATED: the synthetic bench of THIS exact
+  # geometry (job 2891722: 172.8 ms/step, 4.899M params, 3.76 GB) matches graph_unet's v4 173.6 ms, so the
+  # two share throughput and graph_unet's real it/s is the right proxy. The pool_head readout is a hair
+  # CHEAPER than graph_unet's flatten readout (172.8 vs 173.6 synth), so true it/s is a touch higher -> if
+  # anything 320k is slightly conservative. Still RE-SIZE from job 1's actual 4-GPU it/s (n_steps = it/s x
+  # 79.2 ks) if it differs, else an oversized n_steps would leave the cosine unfinished and bias the compare.
+  n_steps: 320000
+  output_every: Null
+  checkpoint_every: 5000  # halved from 10k: at TIMEOUT job 2 restores the last checkpoint, so smaller = less lost handoff work
+  vali_every: 1000
+  eval_every: Null
+
+optimization:
+  optimizer: adam
+  gradient_clipping:
+    clip_by_value: null
+    clip_by_norm: null
+    clip_by_global_norm: 1.0
+  mutual_info_loss:
+    learning_rate: 1.0e-4
+    optimizer_kwargs:
+      beta_1: 0.9
+      beta_2: 0.999
+    scheduler: cosine
+    warmup_steps: 5000
+    warmup_init_learning_rate: 1.0e-5
+    decay_alpha: 0.0
+    ema_momentum: null
+
+network:
+  name: resnet
+  # sparse-matmul backend for the graph convs: csr = cuSPARSE csrmm (benchmarked winner, app default).
+  # csr has NO 2^31 output-size ceiling (that limit is coo-only), so the real convs at nside 128/64/32
+  # cannot trip SPARSE_LIMIT regardless of width -- the only cost is compute/memory.
+  spmm_backend: csr
+  n_neighbors: 60
+  max_checkpoints: 50
+  save_second_to_last_layer: False
+  z_bank_size: Null
+  input_norm: true
+  smooth_nside:
+    clustering: 256
+  map_pool: mean  # <-- mean-pool over pixels instead of flatten -- the winning readout (from pool_head)
+  map_feature_dim: null  # <-- no projection: graph-U-Net deep body is 256-d, already the pooled width
+  cls:
+    n_bins: 16
+    transform: asinh_per_feature
+    asinh_default_scale: null
+    embedding_layers: [512, 512, 512, 256]  # <-- Cls embedding to 256 to balance the 256-d pooled map; fused = 512
+    embedding_dropout_rate: 0.1
+  kwargs:
+    base_channels: 16       # <-- smaller base (default 32); doubling across 5 levels holds deep body at 16*2^4 = 256
+    pool_layers: 2          # <-- pure-pseudo pooling at the TOP (nside 512->256->128), before any real conv
+    conv_layers: 3          # <-- real graph-conv downsampling at nside 128/64/32 (conv_widen doubles width each)
+    conv_widen: true        # <-- widen (x channel_multiplier) at each graph-conv pooling stage (graph-U-Net)
+    residual_layers: 5
+    poly_degree: 5
+    head_type: "dense"
+    dense_layers: []
+    dropout_rate: 0.1
+
+dset:
+  training:
+    common:
+      is_eval: False
+      n_readers: 32
+      n_prefetch: 4
+      n_workers: Null
+    grid:
+      local_batch_size: 16
+      file_name_shuffle_buffer: 64
+      examples_shuffle_buffer: 256
+  validation:
+    n_batches: 50
+    common:
+      is_eval: True
+      n_readers: 8
+      n_prefetch: 2
+      n_workers: 16
+    grid:
+      local_batch_size: 16
+  eval:
+    common:
+      is_eval: True
+      n_readers: 64
+      n_prefetch: 2
+      n_workers: Null
+    grid:
+      local_batch_size: 16

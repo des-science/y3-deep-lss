@@ -1,0 +1,91 @@
+# bench_v4 variant of default.yaml — FEWER CHEBY DOWNSAMPLINGS (lean on cheap strided pooling).
+# Knobs: pool_layers 3 -> 4, conv_layers 2 -> 1 (pools still 5 -> trunk nside 16); base_channels
+# stays 32 (default). Vs default: trade a real Chebyshev-conv downsampling for a strided pseudo-conv
+# downsampling (the opposite direction to graph_unet, which pushes MORE real convs up the resolution
+# ladder). Because ONLY downsampling layers double channels (resnet.py:157), one
+# MORE pseudo-conv downsampling makes the deep body 32*2^4 = 512 ch (2x default's 256) -- the extra width is
+# an unavoidable consequence of one more downsampling / one fewer cheby, NOT a free knob. Tests whether cheap
+# strided pooling beats real graph convs in the downsampling path. base_channels was 64 (deep body 1024) but
+# halved to 32 to keep this variant near the default cost band. n_steps set from benchmark_v4.
+name: deepsphere_default
+
+training:
+  n_steps: 170000  # batch 16: measured real train 9.21 h at 150k (job 2880786) + ~0.6 h eval/infer tail; resized 150k x 11.0/9.21 -> 170k (floor 10k) to fill ~11 h train
+  output_every: Null
+  checkpoint_every: 10000
+  vali_every: 1000
+  eval_every: Null
+
+optimization:
+  optimizer: adam
+  gradient_clipping:
+    clip_by_value: null
+    clip_by_norm: null
+    clip_by_global_norm: 1.0
+  mutual_info_loss:
+    learning_rate: 1.0e-4
+    optimizer_kwargs:
+      beta_1: 0.9
+      beta_2: 0.999
+    scheduler: cosine
+    warmup_steps: 5000
+    warmup_init_learning_rate: 1.0e-5
+    decay_alpha: 0.0
+    ema_momentum: null
+
+network:
+  name: resnet
+  # sparse-matmul backend for the graph convs: csr = cuSPARSE csrmm (benchmarked winner, app default).
+  spmm_backend: csr
+  n_neighbors: 60
+  max_checkpoints: 50
+  save_second_to_last_layer: False
+  z_bank_size: Null
+  input_norm: true
+  smooth_nside:
+    clustering: 256
+  map_feature_dim: 64
+  cls:
+    n_bins: 16
+    transform: asinh_per_feature
+    asinh_default_scale: null
+    embedding_layers: [512, 512, 512, 64]
+    embedding_dropout_rate: 0.1
+  kwargs:
+    base_channels: 32      # <-- default width (halved from 64); with ds 4 the deep body is 32*2^4 = 512, fusion pinch 32
+    pool_layers: 4  # <-- one MORE strided pseudo-conv downsampling (default 3); one extra channel doubling -> 512
+    conv_layers: 1         # <-- one FEWER Chebyshev-conv downsampling (default 2); pools still 5 -> trunk nside 16
+    residual_layers: 5
+    poly_degree: 5
+    head_type: "dense"
+    dense_layers: []
+    dropout_rate: 0.1
+
+dset:
+  training:
+    common:
+      is_eval: False
+      n_readers: 32
+      n_prefetch: 4
+      n_workers: Null
+    grid:
+      local_batch_size: 16
+      file_name_shuffle_buffer: 64
+      examples_shuffle_buffer: 256
+  validation:
+    n_batches: 50
+    common:
+      is_eval: True
+      n_readers: 8
+      n_prefetch: 2
+      n_workers: 16
+    grid:
+      local_batch_size: 16
+  eval:
+    common:
+      is_eval: True
+      n_readers: 64
+      n_prefetch: 2
+      n_workers: Null
+    grid:
+      local_batch_size: 16

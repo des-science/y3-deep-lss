@@ -1,0 +1,98 @@
+# ============================================================================
+# bench_v5 — LONGER (2x12 h chained) combined-probe GCNN runs (see bench_v5/2x/pool_head.yaml for the
+# full rationale + chained-run contract). THIS FILE = w64: deep-body WIDTH x2 (base_channels 32->64).
+#
+# WHY w64 gets a longer run: in bench_v4 it was the MOST step-starved variant (only 90k steps in one
+# 12 h job) yet still landed 2nd on DES FoM (1619) and had the LEAST-decelerated vali curve of the
+# capacity variants (last-20% slope 0.34, ratio 0.62) -> it was furthest from convergence. The equal-
+# wall-clock round therefore under-showed it; bench_v5 gives it equal STEPS at the 2x12 h budget to
+# isolate whether width alone competes once it is no longer step-limited. It is also the flatten-readout
+# corner of the readout x width 2x2 (pool_head = pool/w32, pool_head_w64 = pool/w64, w64 = flatten/w64,
+# bench_v4_default = flatten/w32), so pool_head_w64 vs w64 cleanly isolates the readout effect at w64.
+#
+# Verbatim copy of bench_v4/w64.yaml except the chained budget. Watch peak mem (~7.5 GB at bs16 in
+# round-1, fine) and the cuSPARSE nnz*Fout>2^31 limit (csr backend has no such ceiling).
+# ============================================================================
+name: deepsphere_default
+
+training:
+  # TOTAL budget across the 2x12 h chain (cosine spans this; job 2 trains the remainder).
+  n_steps: 210000  # ~22 h total train: round-1 w64 = 2.72 real it/s (90k in 9.19 h, job 2880790) x 79.2 ks (2x~11 h), floor 10k
+  output_every: Null
+  checkpoint_every: 5000  # halved from 10k for the TIMEOUT handoff (see pool_head.yaml)
+  vali_every: 1000
+  eval_every: Null
+
+optimization:
+  optimizer: adam
+  gradient_clipping:
+    clip_by_value: null
+    clip_by_norm: null
+    clip_by_global_norm: 1.0
+  mutual_info_loss:
+    learning_rate: 1.0e-4
+    optimizer_kwargs:
+      beta_1: 0.9
+      beta_2: 0.999
+    scheduler: cosine
+    warmup_steps: 5000
+    warmup_init_learning_rate: 1.0e-5
+    decay_alpha: 0.0
+    ema_momentum: null
+
+network:
+  name: resnet
+  # sparse-matmul backend for the graph convs: csr = cuSPARSE csrmm (benchmarked winner, app default).
+  spmm_backend: csr
+  n_neighbors: 60
+  max_checkpoints: 50
+  save_second_to_last_layer: False
+  z_bank_size: Null
+  input_norm: true
+  smooth_nside:
+    clustering: 256
+  map_feature_dim: 64
+  cls:
+    n_bins: 16
+    transform: asinh_per_feature
+    asinh_default_scale: null
+    embedding_layers: [512, 512, 512, 64]
+    embedding_dropout_rate: 0.1
+  kwargs:
+    base_channels: 64  # <-- WIDTH x2 (default 32); deep body 512, fusion pinch 64
+    pool_layers: 3
+    conv_layers: 2
+    residual_layers: 5
+    poly_degree: 5
+    head_type: "dense"
+    dense_layers: []
+    dropout_rate: 0.1
+
+dset:
+  training:
+    common:
+      is_eval: False
+      n_readers: 32
+      n_prefetch: 4
+      n_workers: Null
+    grid:
+      local_batch_size: 16
+      file_name_shuffle_buffer: 64
+      examples_shuffle_buffer: 256
+  validation:
+    n_batches: 50
+    common:
+      is_eval: True
+      n_readers: 8
+      n_prefetch: 2
+      n_workers: 16
+    grid:
+      local_batch_size: 16
+  eval:
+    common:
+      is_eval: True
+      n_readers: 64
+      n_prefetch: 2
+      n_workers: Null
+    grid:
+      local_batch_size: 16

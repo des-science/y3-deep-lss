@@ -1,0 +1,140 @@
+# ============================================================================
+# bench_v6 — THE BUDGET ARM: the bench_v5 winner, unchanged, at 2x its budget.
+# ----------------------------------------------------------------------------
+# NEW in the 2026-07-26 rewrite. This config did not exist in the previous version of the round, because
+# that version had concluded budget was worth nothing. It is worth +7.3%.
+#
+# THIS FILE IS A BYTE-FOR-BYTE COPY OF bench_v5 `2x/pool_head_w64.yaml` EXCEPT n_steps (210k -> 420k).
+# Classic residual body, NOT ConvNeXt. That is deliberate: it makes the contrast against the finished
+# `bench_v5_pool_head_w64` a PURE budget test with no architectural confound, exactly like the
+# `bench_v5_default` -> `bench_v5_pool_head` pair that produced the +7.3% measurement.
+#
+# THREE JOBS:
+#
+#  1. THE CHEAPEST ROUTE TO PARITY. The current best GCNN sits at paired ratio 0.918 vs the transformer
+#     t2_cls. The measured budget slope is +7.3% per doubling, so 0.918 x 1.073 ~ 0.985 -- within a
+#     seed floor of parity, using ZERO new architecture. If this lands, the "GCNN loses on combined"
+#     result was substantially a budget artifact: t2_cls got 2x12 h at 260k steps, and every GCNN it has
+#     been compared against got less.
+#
+#  2. IT CALIBRATES THE STEP CORRECTION FOR THE WHOLE ROUND. The +7.3% slope is currently a SINGLE
+#     measurement, taken at base 32 on the classic body, and assumed log-linear. bench_v6's ConvNeXt arms
+#     land at ~290-350k against a 210k control, so every body comparison in the round needs that slope --
+#     at base 64. This run supplies (210k, 420k) at base 64 on the classic body, turning an extrapolated
+#     correction into an interpolated one.
+#
+#  3. IT TESTS THE READOUT x BUDGET INTERACTION, which is the sharpest new finding. Budget is NOT
+#     unconditionally good: on the FLATTEN readout it is actively harmful. `v3_cls` (map_pool null) carries
+#     three evaluated checkpoints and degrades monotonically -- paired 0.545 (150k) -> 0.302 (200k) ->
+#     0.270 (310k) -- and `bench_v5_w64` (flatten, base 64) is the worst run of bench_v5 at 0.680. The
+#     mean-pool readout shows the opposite sign. The standing hypothesis is that the pooled readout is what
+#     makes budget safe to spend; this run tests it at the largest capacity yet, where it should bite hardest.
+#     A REGRESSION here is therefore an informative result, not a wasted job: it would bound how far the
+#     budget lever extends and would immediately invalidate convnext_droppath_attn_long.yaml.
+#
+# STAGING: this is the one stage-2 arm that is UNCONDITIONAL -- it depends on nothing stage 1 might find,
+# so it can be launched alongside stage 1 if the allocation allows. convnext_droppath_attn_long.yaml, by contrast,
+# should wait for stage-1 results.
+#
+# CHAINED-RUN CONTRACT: 4 x 12 h (~158 ks of training). n_steps is the TOTAL across the chain and the cosine
+# spans it; jobs 1-3 TIMEOUT by design (never reaching their eval tails), job 4 trains the remainder and runs
+# eval + inference. EVERY link must be --dependency=afterany, NOT afterok.
+#
+#   PREV=""; for RN in 1 2 3 4; do
+#     DEP=${PREV:+--dependency=afterany:$PREV}
+#     PREV=$(ARCH=deepsphere PROBE=combined \
+#       NET_CONFIG="$PWD/configs/deepsphere/combined/bench_v6/../_deferred/budget_classic.yaml" MODEL_DIR=bench_v6_budget_classic \
+#       sbatch --parsable $DEP --job-name=bv6_budget_classic --export=ALL,RUN_NUM=$RN \
+#       submissions/clariden/training.sh)
+#   done
+# ============================================================================
+name: deepsphere_default
+
+training:
+  # TOTAL across the 4x12 h chain. Chosen as EXACTLY 2 x the finished bench_v5_pool_head_w64 (210k) so the
+  # budget contrast is a clean doubling and lands on the same axis as the +7.3%/doubling measurement.
+  # Cost check at the measured 2.95 it/s (real, job 2891966 geometry): 420k / 2.95 = 142 ks = 39.5 h train,
+  # + ~0.6 h eval/inference = ~40 h inside a 48 h chain. Comfortable, and it is a MEASURED rate, not an
+  # extrapolation -- unlike the ConvNeXt arms this config needs no re-benchmark.
+  n_steps: 420000
+  output_every: Null
+  checkpoint_every: 5000  # job N restores the last checkpoint at each handoff; smaller = less lost work
+  vali_every: 1000
+  eval_every: Null
+
+optimization:
+  optimizer: adam
+  gradient_clipping:
+    clip_by_value: null
+    clip_by_norm: null
+    clip_by_global_norm: 1.0
+  mutual_info_loss:
+    learning_rate: 1.0e-4
+    optimizer_kwargs:
+      beta_1: 0.9
+      beta_2: 0.999
+    scheduler: cosine
+    warmup_steps: 5000
+    warmup_init_learning_rate: 1.0e-5
+    decay_alpha: 0.0
+    ema_momentum: null
+
+network:
+  name: resnet
+  spmm_backend: csr
+  n_neighbors: 60
+  max_checkpoints: 50
+  save_second_to_last_layer: False
+  z_bank_size: Null
+  input_norm: true
+  smooth_nside:
+    clustering: 256
+  map_pool: mean  # the winning readout -- and, per finding 3 above, the reason budget is safe to spend here
+  map_feature_dim: null  # no projection: the 512-d pooled map goes straight to map_norm + concat
+  cls:
+    n_bins: 16
+    transform: asinh_per_feature
+    asinh_default_scale: null
+    embedding_layers: [512, 512, 512, 512]  # last entry 512 balances the 512-d pooled map; fused = 1024
+    embedding_dropout_rate: 0.1
+  kwargs:
+    # CLASSIC residual body, identical to bench_v5 2x/pool_head_w64. Do NOT add residual_block_type,
+    # mlp_ratio, layer_scale_init or drop_path_rate here -- any of them turns this from a pure budget
+    # test into a confounded one, which is the entire point of the config.
+    base_channels: 64  # width x2; pool_widen doubles per stage -> deep body 512 ch
+    pool_layers: 3
+    conv_layers: 2
+    residual_layers: 5
+    poly_degree: 5
+    head_type: "dense"
+    dense_layers: []
+    dropout_rate: 0.1
+
+dset:
+  training:
+    common:
+      is_eval: False
+      n_readers: 32
+      n_prefetch: 4
+      n_workers: Null
+    grid:
+      local_batch_size: 16
+      file_name_shuffle_buffer: 64
+      examples_shuffle_buffer: 256
+  validation:
+    n_batches: 50
+    common:
+      is_eval: True
+      n_readers: 8
+      n_prefetch: 2
+      n_workers: 16
+    grid:
+      local_batch_size: 16
+  eval:
+    common:
+      is_eval: True
+      n_readers: 64
+      n_prefetch: 2
+      n_workers: Null
+    grid:
+      local_batch_size: 16

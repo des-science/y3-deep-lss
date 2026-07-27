@@ -1,0 +1,119 @@
+# ============================================================================
+# bench_v4 — DeepSphere/GCNN architectural HPO for the COMBINED probe (maps+cls)
+# ----------------------------------------------------------------------------
+# Motivation: DeepSphere (v3_cls) beats the transformer (t2_cls) on each probe
+# INDIVIDUALLY but loses on the COMBINED probe. The wins-individually filter says
+# the culprit must be combined-specific: the graph-conv body is no wider/deeper
+# than the single-probe body yet must now carry lensing + clustering + cross.
+# => the lead hypothesis is CAPACITY. bench_v4 sweeps the GCNN capacity axes
+# (channel width, trunk resolution, pseudo->real graph conv, head/pooling) one
+# knob per file, mirroring the transformer configs/transformer/bench_t*/ layout.
+#
+# This file is the BASE: a verbatim copy of configs/deepsphere/combined/maps+cls.yaml
+# (= the v3_cls recipe). Every sibling changes ONE knob vs this file.
+#
+# SIZING (this round): compare architectures at a fixed ONE 12 h job (no chaining).
+#   *** n_steps MUST be set from the benchmark_v4 measured it/s for EACH variant ***
+#   The cosine schedule anneals over n_steps, so if a slow variant only reaches a
+#   fraction of n_steps in 12 h its LR never decays and the comparison is unfair.
+#   Base (~4.54 it/s real; 160.9 ms synth step, csr) reaches ~170k with the eval+infer tail in 12 h.
+#   Wider/hi-res variants are slower: LOWER their n_steps so cosine completes in 12 h.
+#   Every count = measured step_ms -> real 4-GPU it/s -> x ~11 h effective train -> floor 10k
+#   (reserves ~1 h for the eval+inference tail; do NOT size to the raw 12 h).
+# ============================================================================
+name: deepsphere_default
+
+training:
+  # ONE 12 h job for the bench_v4 architecture comparison (no RUN_NUM chaining).
+  # Resize per variant from benchmark_v4 so the cosine schedule finishes within 12 h.
+  n_steps: 180000  # batch 16: measured real train 9.85 h at 170k (job 2880780) + ~0.6 h eval/infer tail; resized 170k x 11.0/9.85 -> 180k (floor 10k) to fill ~11 h train
+  output_every: Null
+  checkpoint_every: 10000
+  vali_every: 1000
+  eval_every: Null
+
+optimization:
+  optimizer: adam
+  gradient_clipping:
+    clip_by_value: null
+    clip_by_norm: null
+    clip_by_global_norm: 1.0
+  mutual_info_loss:
+    learning_rate: 1.0e-4
+    optimizer_kwargs:
+      beta_1: 0.9
+      beta_2: 0.999
+    scheduler: cosine
+    warmup_steps: 5000
+    warmup_init_learning_rate: 1.0e-5
+    decay_alpha: 0.0
+    ema_momentum: null  # optional EMA weight averaging
+
+network:
+  name: resnet
+  # sparse-matmul backend for the graph convs: csr = cuSPARSE csrmm (benchmarked winner, app default).
+  spmm_backend: csr
+  n_neighbors: 60
+  max_checkpoints: 50
+  save_second_to_last_layer: False
+  z_bank_size: Null
+  # EmpiricalInputNormalization: standardize the smoothed maps with per-channel training statistics
+  # (restored from the checkpoint on resume). Adds checkpoint variables — its own lineage.
+  input_norm: true
+  # Multi-resolution: clustering (fwhm >= 57') is smoothed at nside 256 and injected into the GCNN
+  # after the pooling layer already at nside 256 (ResNetMultiResEncoder, concat+Dense fusion); lensing
+  # stays at native n_side. Needs scale_cuts.clustering.theta_fwhm_base in the scales config.
+  smooth_nside:
+    clustering: 256
+  # map_feature_dim projects the flattened GCNN features (114688-dim) down to 64; the Cls branch
+  # (embedding_layers below) ends at 64 too, so both contribute equally-sized vectors to the concat.
+  # See project_maps_cls_dimensionality_balance. Own checkpoint lineage.
+  map_feature_dim: 64
+  cls:
+    n_bins: 16  # ell bins per cross pair
+    # asinh(x/s), s = median|C_l| per (pair, ell-bin) from the cached binned Cls
+    # ({data_dir}/cls/rebinned_nb{n_bins}_{scales}.h5), stored in the checkpoint
+    transform: asinh_per_feature
+    asinh_default_scale: null  # fallback scale if the cache is absent; null => require it
+    embedding_layers: [512, 512, 512, 64]  # Dense+LN per entry; last entry matches map_feature_dim
+    embedding_dropout_rate: 0.1
+  kwargs:
+    base_channels: 32
+    # depth
+    pool_layers: 3
+    conv_layers: 2
+    residual_layers: 5
+    # misc
+    poly_degree: 5
+    head_type: "dense"
+    dense_layers: []
+    dropout_rate: 0.1
+
+dset:
+  training:
+    common:
+      is_eval: False
+      n_readers: 32
+      n_prefetch: 4
+      n_workers: Null
+    grid:
+      local_batch_size: 16
+      file_name_shuffle_buffer: 64
+      examples_shuffle_buffer: 256
+  validation:
+    n_batches: 50
+    common:
+      is_eval: True
+      n_readers: 8
+      n_prefetch: 2
+      n_workers: 16
+    grid:
+      local_batch_size: 16
+  eval:
+    common:
+      is_eval: True
+      n_readers: 64
+      n_prefetch: 2
+      n_workers: Null
+    grid:
+      local_batch_size: 16

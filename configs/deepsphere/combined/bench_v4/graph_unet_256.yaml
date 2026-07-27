@@ -1,0 +1,111 @@
+# bench_v4 variant — GRAPH U-NET reaching nside 256: a HALF-WIDTH real graph conv at the top resolution.
+# ----------------------------------------------------------------------------------------------------------
+# Extends graph_unet.yaml UP one resolution: it pushes a genuine (rotation-equivariant) Chebyshev conv all
+# the way to nside 256 -- clustering's native resolution and the seam where the two probes are fused -- so
+# the FIRST real conv sees both probes at their finest shared scale, instead of only after two pure pooling
+# steps. Only the top pool (512 -> 256) stays a pure strided HealpyPseudoConv.
+#
+# WHY THIS IS SAFE + CHEAP (the point of the variant):
+#   The cuSPARSE "output.shape[1]*nnz(L) > 2^31" ceiling (SPARSE_LIMIT) is a coo-BACKEND-ONLY property;
+#   csr (used here) has no such limit (deepsphere.utils:59,93). The spmm input width is Fin*batch, so at
+#   nside 256 (nnz ~= 114688*60 ~= 6.9e6): full width (Fin 32, b16) = 6.9e6*512 ~= 3.5e9 would trip the coo
+#   kernel, but HALF width (Fin 16, b16) = 6.9e6*256 ~= 1.76e9 stays under 2^31 on BOTH backends -- and
+#   halving the width also ~halves the spmm compute. So the 256 conv runs at Fin 16 (half of what it would
+#   otherwise carry): feasible on any backend, and the extra compute is bounded.
+#
+# WIDTH SCHEDULE (base_channels 16, pool_layers 1, conv_layers 4, conv_widen):
+#   deep body = base * 2^(pool_layers + conv_layers - 1) = 16 * 2^4 = 256  (MATCHES default's 256)
+#   nside 512 -> 256 : PseudoConv  Fout 16                 (pure pooling; seam / probe fusion at nside 256)
+#   nside 256 -> 128 : Chebyshev Fout 32  (Fin 16) + Pseudo   <-- NEW real conv, HALF width, at native 256
+#   nside 128 ->  64 : Chebyshev Fout 64  + Pseudo            <-- real conv
+#   nside  64 ->  32 : Chebyshev Fout 128 + Pseudo            <-- real conv
+#   nside  32 ->  16 : Chebyshev Fout 256 + Pseudo            <-- real conv
+#   nside  16 (trunk): 5 residual layers @ width 256          (same trunk capacity as default)
+# vs graph_unet.yaml (real convs at nside 128/64/32): adds ONE real conv at nside 256 (the 4x-pixel level),
+# kept affordable by the half-width (Fin 16) start. CLEAN TEST: does convolving both probes at their native
+# shared resolution (256) help, over pooling first? Deep body (256) and trunk depth (5) fixed vs default.
+# n_steps set from benchmark_v4.
+name: deepsphere_default
+
+training:
+  n_steps: 110000  # batch 16: measured real train 8.55 h at 90k (job 2880785) + ~0.7 h eval/infer tail; resized 90k x 11.0/8.55 -> 110k (floor 10k) to fill ~11 h train
+  output_every: Null
+  checkpoint_every: 10000
+  vali_every: 1000
+  eval_every: Null
+
+optimization:
+  optimizer: adam
+  gradient_clipping:
+    clip_by_value: null
+    clip_by_norm: null
+    clip_by_global_norm: 1.0
+  mutual_info_loss:
+    learning_rate: 1.0e-4
+    optimizer_kwargs:
+      beta_1: 0.9
+      beta_2: 0.999
+    scheduler: cosine
+    warmup_steps: 5000
+    warmup_init_learning_rate: 1.0e-5
+    decay_alpha: 0.0
+    ema_momentum: null
+
+network:
+  name: resnet
+  # sparse-matmul backend for the graph convs: csr = cuSPARSE csrmm (benchmarked winner, app default).
+  # csr has NO 2^31 output-size ceiling (coo-only); the half-width 256 conv is under it on either backend.
+  spmm_backend: csr
+  n_neighbors: 60
+  max_checkpoints: 50
+  save_second_to_last_layer: False
+  z_bank_size: Null
+  input_norm: true
+  smooth_nside:
+    clustering: 256
+  map_feature_dim: 64
+  cls:
+    n_bins: 16
+    transform: asinh_per_feature
+    asinh_default_scale: null
+    embedding_layers: [512, 512, 512, 64]
+    embedding_dropout_rate: 0.1
+  kwargs:
+    base_channels: 16       # <-- doubling across 5 levels holds deep body at 16*2^4 = 256; seam width = 16
+    pool_layers: 1   # <-- only the TOP pool (nside 512->256) stays pure pseudo, before any real conv
+    conv_layers: 4          # <-- real graph-conv downsampling at nside 256/128/64/32 (256 conv is half-width, Fin 16)
+    conv_widen: true  # <-- widen (x channel_multiplier) at each graph-conv pooling stage (graph-U-Net)
+    residual_layers: 5
+    poly_degree: 5
+    head_type: "dense"
+    dense_layers: []
+    dropout_rate: 0.1
+
+dset:
+  training:
+    common:
+      is_eval: False
+      n_readers: 32
+      n_prefetch: 4
+      n_workers: Null
+    grid:
+      local_batch_size: 16
+      file_name_shuffle_buffer: 64
+      examples_shuffle_buffer: 256
+  validation:
+    n_batches: 50
+    common:
+      is_eval: True
+      n_readers: 8
+      n_prefetch: 2
+      n_workers: 16
+    grid:
+      local_batch_size: 16
+  eval:
+    common:
+      is_eval: True
+      n_readers: 64
+      n_prefetch: 2
+      n_workers: Null
+    grid:
+      local_batch_size: 16

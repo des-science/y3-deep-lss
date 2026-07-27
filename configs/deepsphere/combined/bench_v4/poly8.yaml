@@ -1,0 +1,89 @@
+# bench_v4 variant of default.yaml — LARGER RECEPTIVE FIELD PER GRAPH CONV.
+# One knob: network.kwargs.poly_degree 5 -> 8.
+# Raises the Chebyshev polynomial order (K) in every graph conv, enlarging each conv's
+# effective receptive field on the sphere graph (the Chebyshev kernel is [K*Fin, Fout], so
+# this also adds parameters and compute ~linearly in K). Tests whether the combined signal
+# needs a longer-range local receptive field than the single-probe default. n_neighbors
+# stays at its max (60). Slower per step -> resize n_steps from benchmark_v4.
+name: deepsphere_default
+
+training:
+  n_steps: 130000  # batch 16: measured real train 9.29 h at 110k (job 2880788) + ~0.6 h eval/infer tail; resized 110k x 11.0/9.29 -> 130k (floor 10k) to fill ~11 h train
+  output_every: Null
+  checkpoint_every: 10000
+  vali_every: 1000
+  eval_every: Null
+
+optimization:
+  optimizer: adam
+  gradient_clipping:
+    clip_by_value: null
+    clip_by_norm: null
+    clip_by_global_norm: 1.0
+  mutual_info_loss:
+    learning_rate: 1.0e-4
+    optimizer_kwargs:
+      beta_1: 0.9
+      beta_2: 0.999
+    scheduler: cosine
+    warmup_steps: 5000
+    warmup_init_learning_rate: 1.0e-5
+    decay_alpha: 0.0
+    ema_momentum: null
+
+network:
+  name: resnet
+  # sparse-matmul backend for the graph convs: csr = cuSPARSE csrmm (benchmarked winner, app default).
+  spmm_backend: csr
+  n_neighbors: 60
+  max_checkpoints: 50
+  save_second_to_last_layer: False
+  z_bank_size: Null
+  input_norm: true
+  smooth_nside:
+    clustering: 256
+  map_feature_dim: 64
+  cls:
+    n_bins: 16
+    transform: asinh_per_feature
+    asinh_default_scale: null
+    embedding_layers: [512, 512, 512, 64]
+    embedding_dropout_rate: 0.1
+  kwargs:
+    base_channels: 32
+    pool_layers: 3
+    conv_layers: 2
+    residual_layers: 5
+    poly_degree: 8  # <-- larger receptive field per conv (default 5)
+    head_type: "dense"
+    dense_layers: []
+    dropout_rate: 0.1
+
+dset:
+  training:
+    common:
+      is_eval: False
+      n_readers: 32
+      n_prefetch: 4
+      n_workers: Null
+    grid:
+      local_batch_size: 16
+      file_name_shuffle_buffer: 64
+      examples_shuffle_buffer: 256
+  validation:
+    n_batches: 50
+    common:
+      is_eval: True
+      n_readers: 8
+      n_prefetch: 2
+      n_workers: 16
+    grid:
+      local_batch_size: 16
+  eval:
+    common:
+      is_eval: True
+      n_readers: 64
+      n_prefetch: 2
+      n_workers: Null
+    grid:
+      local_batch_size: 16

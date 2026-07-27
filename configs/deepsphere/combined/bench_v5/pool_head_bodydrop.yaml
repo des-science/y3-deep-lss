@@ -1,0 +1,119 @@
+# bench_v5 variant of default.yaml (the pool_head anchor) — MAP-TRUNK DROPOUT (sim->data regularization).
+# ----------------------------------------------------------------------------------------------------------
+# One-knob change vs default.yaml: kwargs.body_dropout_rate 0.1 (default None). ResNetLayers then inserts a
+# SpatialDropout1D(0.1) after EACH of the 5 residual-body blocks (nside 16 trunk).
+#
+# WHY. In the combined maps+cls path the DeepSphere MAP branch is built from get_conv_layers() (body only,
+# no head), so the head `dropout_rate` never touches it -- the entire map encoder that mines the maps is
+# UNREGULARIZED by dropout (only the Cls embedding and the fused ~9-d summary head carry any). That map
+# trunk is exactly where the fine-scale non-Gaussian features live, i.e. where CosmoGrid-vs-DES Y3
+# misspecification would bite. bench_v4 already showed an overfitting-flavored grid->DES transfer gap in
+# this family (deep_trunk grid 2238 / DES 1321; mlp_head grid 2222 / DES 1351 -- both strong on grid,
+# collapse on data; mlp_head had NO head dropout because hidden layers disable it). This adds the missing
+# trunk regularizer to probe whether it improves sim->data transfer.
+#
+# SpatialDropout1D (channel-wise), NOT vanilla Dropout: features are (B, n_pix, n_ch); neighboring HEALPix
+# pixels are spatially correlated, so element-wise dropout is a weak regularizer (a dropped activation is
+# recoverable from neighbors). Channel-drop kills whole feature maps -> forces the trunk not to rely on any
+# single learned filter. It has NO trainable variables, so this is LINEAGE-PRESERVING: same weight
+# structure as default.yaml (restorable across), and ~free compute.
+#
+# HOW TO READ IT (signless misspecification). Do NOT rank this by FoM. Adding dropout regularizes toward
+# generalization on the SIM distribution; it helps the DES gap only if that gap is partly the net latching
+# onto sim-specific fine-scale texture. It can equally DEFLATE a constraint (throw away real info) or RELAX
+# a spuriously tight one toward truth. Judge by coverage (SBC/TARP/HPD, wide analysis prior) + DES-space
+# PPC, FoM secondary: lower FoM + better coverage = win; lower FoM + unchanged coverage = lost information.
+#
+# COST / SIZING: dropout adds no params and ~no compute, so this shares default.yaml's geometry and 1x12 h
+# budget (190000, from the pool_head anchor's 4.89 real it/s / 156.7 ms benchmark). Benchmark below confirms.
+# SUBMIT (single 12 h job, same as the other bench_v5 1x variants):
+#   ARCH=deepsphere PROBE=combined \
+#     NET_CONFIG=$PWD/configs/deepsphere/combined/bench_v5/pool_head_bodydrop.yaml \
+#     MODEL_DIR=bench_v5_pool_head_bodydrop sbatch --job-name=bv5_ph_bdrop \
+#     --export=ALL,RUN_NUM=1 submissions/clariden/training.sh
+name: deepsphere_default
+
+training:
+  # 1x12 h: same geometry+cost as default.yaml (dropout is free), so the same budget. pool_head anchor was
+  # 180k -> 10.23 h train (job 2880789) -> 190k for ~11 h; benchmark_v5 156.7 ms/step confirms the timing.
+  n_steps: 190000
+  output_every: Null
+  checkpoint_every: 10000
+  vali_every: 1000
+  eval_every: Null
+
+optimization:
+  optimizer: adam
+  gradient_clipping:
+    clip_by_value: null
+    clip_by_norm: null
+    clip_by_global_norm: 1.0
+  mutual_info_loss:
+    learning_rate: 1.0e-4
+    optimizer_kwargs:
+      beta_1: 0.9
+      beta_2: 0.999
+    scheduler: cosine
+    warmup_steps: 5000
+    warmup_init_learning_rate: 1.0e-5
+    decay_alpha: 0.0
+    ema_momentum: null
+
+network:
+  name: resnet
+  # sparse-matmul backend for the graph convs: csr = cuSPARSE csrmm (benchmarked winner, app default).
+  spmm_backend: csr
+  n_neighbors: 60
+  max_checkpoints: 50
+  save_second_to_last_layer: False
+  z_bank_size: Null
+  input_norm: true
+  smooth_nside:
+    clustering: 256
+  map_pool: mean  # <-- mean-pool over pixels instead of flatten -- the winning readout (from pool_head)
+  map_feature_dim: null  # <-- no projection: pooled map is already 256-d
+  cls:
+    n_bins: 16
+    transform: asinh_per_feature
+    asinh_default_scale: null
+    embedding_layers: [512, 512, 512, 256]  # <-- Cls embedding to 256 to balance the 256-d pooled map; fused = 512
+    embedding_dropout_rate: 0.1
+  kwargs:
+    base_channels: 32
+    pool_layers: 3
+    conv_layers: 2
+    residual_layers: 5
+    body_dropout_rate: 0.1  # <-- NEW: SpatialDropout1D(0.1) after each of the 5 residual-body blocks (the ONLY map-trunk dropout)
+    poly_degree: 5
+    head_type: "dense"
+    dense_layers: []
+    dropout_rate: 0.1
+
+dset:
+  training:
+    common:
+      is_eval: False
+      n_readers: 32
+      n_prefetch: 4
+      n_workers: Null
+    grid:
+      local_batch_size: 16
+      file_name_shuffle_buffer: 64
+      examples_shuffle_buffer: 256
+  validation:
+    n_batches: 50
+    common:
+      is_eval: True
+      n_readers: 8
+      n_prefetch: 2
+      n_workers: 16
+    grid:
+      local_batch_size: 16
+  eval:
+    common:
+      is_eval: True
+      n_readers: 64
+      n_prefetch: 2
+      n_workers: Null
+    grid:
+      local_batch_size: 16

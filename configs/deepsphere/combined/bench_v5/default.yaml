@@ -1,0 +1,92 @@
+# bench_v5 ROUND CONTROL = the bench_v4 `pool_head` winner, re-run as the baseline for the
+# ConvNeXt-body comparison. pool_head was the bench_v4 combined winner (best VMIM proxy, best
+# grid-median and DES FoM, cheapest, and the most grid-stable), so every bench_v5 variant anchors on
+# this recipe and changes only the residual-body block.
+#
+# Readout (from pool_head): MEAN-POOL the (B, 448, C) GCNN conv features over the pixel axis to
+# (B, C) (permutation-invariant, mirrors the transformer's masked-mean token pool) instead of the
+# default flatten-and-crush Dense; no map projection (map_feature_dim null); Cls embedding to 256 so
+# the fused map+Cls vector is 512-d.
+name: deepsphere_default
+
+training:
+  n_steps: 190000  # batch 16: real-measured pool_head anchor (180k -> 10.23 h train, job 2880789 -> 190k for ~11 h); benchmark_v5 156.7 ms/step confirms the bench_v4 156.6 ms timing
+  output_every: Null
+  checkpoint_every: 10000
+  vali_every: 1000
+  eval_every: Null
+
+optimization:
+  optimizer: adam
+  gradient_clipping:
+    clip_by_value: null
+    clip_by_norm: null
+    clip_by_global_norm: 1.0
+  mutual_info_loss:
+    learning_rate: 1.0e-4
+    optimizer_kwargs:
+      beta_1: 0.9
+      beta_2: 0.999
+    scheduler: cosine
+    warmup_steps: 5000
+    warmup_init_learning_rate: 1.0e-5
+    decay_alpha: 0.0
+    ema_momentum: null
+
+network:
+  name: resnet
+  # sparse-matmul backend for the graph convs: csr = cuSPARSE csrmm (benchmarked winner, app default).
+  spmm_backend: csr
+  n_neighbors: 60
+  max_checkpoints: 50
+  save_second_to_last_layer: False
+  z_bank_size: Null
+  input_norm: true
+  smooth_nside:
+    clustering: 256
+  map_pool: mean  # <-- mean-pool over pixels instead of flatten (default: flatten)
+  map_feature_dim: null  # <-- no projection: pooled map is already 256-d (default 64 was for the flatten crush)
+  cls:
+    n_bins: 16
+    transform: asinh_per_feature
+    asinh_default_scale: null
+    embedding_layers: [512, 512, 512, 256]  # <-- Cls embedding to 256 (default last entry 64); fused = 256+256 = 512
+    embedding_dropout_rate: 0.1
+  kwargs:
+    base_channels: 32
+    pool_layers: 3
+    conv_layers: 2
+    residual_layers: 5
+    poly_degree: 5
+    head_type: "dense"
+    dense_layers: []
+    dropout_rate: 0.1
+
+dset:
+  training:
+    common:
+      is_eval: False
+      n_readers: 32
+      n_prefetch: 4
+      n_workers: Null
+    grid:
+      local_batch_size: 16
+      file_name_shuffle_buffer: 64
+      examples_shuffle_buffer: 256
+  validation:
+    n_batches: 50
+    common:
+      is_eval: True
+      n_readers: 8
+      n_prefetch: 2
+      n_workers: 16
+    grid:
+      local_batch_size: 16
+  eval:
+    common:
+      is_eval: True
+      n_readers: 64
+      n_prefetch: 2
+      n_workers: Null
+    grid:
+      local_batch_size: 16

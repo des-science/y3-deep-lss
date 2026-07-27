@@ -1,0 +1,102 @@
+# bench_v4 variant of default.yaml — MEAN-POOL MAP READOUT (structural, not a hyperparameter).
+# Knobs: network.map_pool (absent) -> "mean"; map_feature_dim 64 -> null (drop projection);
+#        Cls embedding last entry 64 -> 256.
+# The default maps+cls head reads out the map branch by FLATTENING the (B, 448, 256) GCNN conv
+# features to (B, 114688) and crushing them with a linear Dense(map_feature_dim=64) — a ~7.3M-param
+# projection that discards all spatial structure. "mean" instead MEAN-POOLS over the pixel axis to
+# (B, 256), mirroring the transformer map encoder's masked-mean token pool: a permutation-invariant
+# readout that is how the transformer combines its map-level features before concatenating the Cls
+# branch. The GCNN trunk runs on footprint pixels only (no padding), so the plain reduce_mean is
+# already the footprint mean.
+# NO map projection: pooling makes the map embedding only 256-d, so the flatten head's whole reason for
+# map_feature_dim (crush 114688 -> a small dim) is gone. A linear 256 -> 512 Dense would only widen the
+# pooled features into a rank-<=256 subspace (no information gain), unlike the transformer's projection
+# which COMPRESSES its wide 1024-d pool. So map_feature_dim=null: the pooled 256 goes straight to
+# map_norm and into the concat. The Cls embedding ends at 256 to balance the two branches, so the fused
+# map+Cls vector into the head is 512-d (256 + 256).
+# Implemented in ResNetMapsPlusCLSNetwork.call (map_pool). Much cheaper than the flatten+huge-Dense head
+# (~same step time, trunk-dominated) -> keep default n_steps, confirm with benchmark_v4. Fresh
+# checkpoint lineage (map branch: 114688-flatten+Dense -> 256-pool, no projection).
+name: deepsphere_default
+
+training:
+  n_steps: 190000  # batch 16: measured real train 10.23 h at 180k (job 2880789) + ~0.6 h eval/infer tail; resized 180k x 11.0/10.23 -> 190k (floor 10k) to fill ~11 h train
+  output_every: Null
+  checkpoint_every: 10000
+  vali_every: 1000
+  eval_every: Null
+
+optimization:
+  optimizer: adam
+  gradient_clipping:
+    clip_by_value: null
+    clip_by_norm: null
+    clip_by_global_norm: 1.0
+  mutual_info_loss:
+    learning_rate: 1.0e-4
+    optimizer_kwargs:
+      beta_1: 0.9
+      beta_2: 0.999
+    scheduler: cosine
+    warmup_steps: 5000
+    warmup_init_learning_rate: 1.0e-5
+    decay_alpha: 0.0
+    ema_momentum: null
+
+network:
+  name: resnet
+  # sparse-matmul backend for the graph convs: csr = cuSPARSE csrmm (benchmarked winner, app default).
+  spmm_backend: csr
+  n_neighbors: 60
+  max_checkpoints: 50
+  save_second_to_last_layer: False
+  z_bank_size: Null
+  input_norm: true
+  smooth_nside:
+    clustering: 256
+  map_pool: mean  # <-- mean-pool over pixels instead of flatten (default: flatten)
+  map_feature_dim: null  # <-- no projection: pooled map is already 256-d (default 64 was for the flatten crush)
+  cls:
+    n_bins: 16
+    transform: asinh_per_feature
+    asinh_default_scale: null
+    embedding_layers: [512, 512, 512, 256]  # <-- Cls embedding to 256 (default last entry 64); fused = 256+256 = 512
+    embedding_dropout_rate: 0.1
+  kwargs:
+    base_channels: 32
+    pool_layers: 3
+    conv_layers: 2
+    residual_layers: 5
+    poly_degree: 5
+    head_type: "dense"
+    dense_layers: []
+    dropout_rate: 0.1
+
+dset:
+  training:
+    common:
+      is_eval: False
+      n_readers: 32
+      n_prefetch: 4
+      n_workers: Null
+    grid:
+      local_batch_size: 16
+      file_name_shuffle_buffer: 64
+      examples_shuffle_buffer: 256
+  validation:
+    n_batches: 50
+    common:
+      is_eval: True
+      n_readers: 8
+      n_prefetch: 2
+      n_workers: 16
+    grid:
+      local_batch_size: 16
+  eval:
+    common:
+      is_eval: True
+      n_readers: 64
+      n_prefetch: 2
+      n_workers: Null
+    grid:
+      local_batch_size: 16

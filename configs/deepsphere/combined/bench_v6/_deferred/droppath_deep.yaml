@@ -1,0 +1,111 @@
+# ============================================================================
+# bench_v6 — ANCHOR + DROPPATH 0.1 + DEEPER BODY (residual_layers 5 -> 8).
+#
+# Two knobs vs default.yaml, but they are a deliberate PAIR testing one hypothesis: that DropPath's gain
+# GROWS with depth. Stochastic depth is designed for deep residual stacks; bench_v5 found it helps even at
+# 5 blocks (+12.7% paired), which is outside its intended regime -- so the natural question is whether the
+# 5-block result was DropPath working at a handicap. Depth is affordable here precisely because the
+# ConvNeXt block runs one graph conv instead of two, so the extra blocks are bought with the cost lever
+# rather than with wall-clock.
+#
+# Pre-registered caveat: bench_v4 already tested depth ALONE (deep_trunk) and found capacity is NOT the
+# combined-probe lever. So this config is NOT a re-test of depth -- it is a test of the depth x DropPath
+# INTERACTION, and it is only interesting if it beats droppath.yaml (same regularizer, 5 blocks). If it
+# merely beats the anchor, that is DropPath again, not depth.
+#
+# COST WARNING: 3 extra ConvNeXt blocks at 512 ch (each = 1 depthwise ChebK conv + a 512->2048->512
+# pointwise MLP) is the most expensive config in the round. It is the one most at risk of not fitting
+# 210k steps inside the 2x12 h chain -- BENCHMARK THIS ONE FIRST. If it does not fit, drop to
+# residual_layers 7 rather than cutting n_steps: step-matching across bench_v6 is what makes the round
+# attributable, and bench_v5 already showed that budget is not the lever.
+# ============================================================================
+name: deepsphere_default
+
+training:
+  # TOTAL across the 2x12 h chain. PROVISIONAL: 210k is step-matched to bench_v5 pool_head_w64, which ran
+  # 210k at 2.72 real it/s in ~20 h (fits 2x12 h with room). The ConvNeXt body should be FASTER, so 210k
+  # is safe here -- but RE-BENCHMARK this geometry and confirm 210k / real_it_s + ~0.6 h eval < 22 h
+  # before launch. Do NOT resize to "fill" the wall: step-matching is the point.
+  n_steps: 210000
+  output_every: Null
+  checkpoint_every: 5000  # halved from 10k: job 2 restores the last checkpoint, so smaller = less lost handoff work
+  vali_every: 1000
+  eval_every: Null
+
+optimization:
+  optimizer: adam
+  gradient_clipping:
+    clip_by_value: null
+    clip_by_norm: null
+    clip_by_global_norm: 1.0
+  mutual_info_loss:
+    learning_rate: 1.0e-4
+    optimizer_kwargs:
+      beta_1: 0.9
+      beta_2: 0.999
+    scheduler: cosine
+    warmup_steps: 5000
+    warmup_init_learning_rate: 1.0e-5
+    decay_alpha: 0.0
+    ema_momentum: null
+
+network:
+  name: resnet
+  spmm_backend: csr
+  n_neighbors: 60
+  max_checkpoints: 50
+  save_second_to_last_layer: False
+  z_bank_size: Null
+  input_norm: true
+  smooth_nside:
+    clustering: 256
+  map_pool: mean  # the winning readout: permutation-invariant mean over footprint pixels
+  map_feature_dim: null  # no projection: the 512-d pooled map goes straight to map_norm + concat
+  cls:
+    n_bins: 16
+    transform: asinh_per_feature
+    asinh_default_scale: null
+    embedding_layers: [512, 512, 512, 512]  # last entry 512 balances the 512-d pooled map; fused = 1024
+    embedding_dropout_rate: 0.1
+  kwargs:
+    base_channels: 64  # width x2; pool_widen doubles per stage -> deep body 512 ch
+    pool_layers: 3
+    conv_layers: 2
+    residual_layers: 8  # <-- DEEPER body (anchor is 5); the axis DropPath is designed for
+    residual_block_type: convnext  # <-- ONLY change vs bench_v5 2x/pool_head_w64 (cost lever + DropPath prerequisite)
+    mlp_ratio: 4
+    layer_scale_init: 1.0e-6
+    drop_path_rate: 0.1  # <-- ON, and now in its intended deep-stack regime
+    poly_degree: 5
+    head_type: "dense"
+    dense_layers: []
+    dropout_rate: 0.1
+
+dset:
+  training:
+    common:
+      is_eval: False
+      n_readers: 32
+      n_prefetch: 4
+      n_workers: Null
+    grid:
+      local_batch_size: 16
+      file_name_shuffle_buffer: 64
+      examples_shuffle_buffer: 256
+  validation:
+    n_batches: 50
+    common:
+      is_eval: True
+      n_readers: 8
+      n_prefetch: 2
+      n_workers: 16
+    grid:
+      local_batch_size: 16
+  eval:
+    common:
+      is_eval: True
+      n_readers: 64
+      n_prefetch: 2
+      n_workers: Null
+    grid:
+      local_batch_size: 16

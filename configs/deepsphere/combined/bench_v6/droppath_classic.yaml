@@ -1,0 +1,109 @@
+# ============================================================================
+# bench_v6 — champion + DropPath, classic residual body.
+#
+# ONE knob vs the bench_v5 winner `2x/pool_head_w64.yaml` (paired 0.918 vs t2_cls): drop_path_rate 0.1.
+# Nothing else differs. Zero new parameters, zero new architecture.
+#
+# DropPath was worth +8.5% paired (78% of 1000 mocks) on a ConvNeXt body at base 32. Whether it transfers
+# to the classic block at base 64 is the question. It is a per-sample Bernoulli mask on the residual
+# branch with no trainable variables, so nothing about it is ConvNeXt-specific -- it was simply only ever
+# wired into Healpy_ConvNeXtLayer. It now works on GCNN_ResidualLayer / Healpy_ResidualLayer too.
+#
+# The mask is exact here: resnet.py builds the block without a block-level activation, so the skip is the
+# pure `x + branch` form and a dropped sample passes through as the identity.
+#
+# SIZING: MEASURED, 3.00 it/s sustained on 4 GPUs (this run, 2026-07-26, over ~5.8 h incl. validation
+# stalls). The champion's own geometry ran 3.02, so DropPath costs ~0.7% here -- NOT the ~4% carried
+# over from base 32 (5.80 -> 5.56). 225k / 3.00 = 75 ks = 20.8 h + ~0.6 h eval/inference tail, i.e. it
+# finishes inside the 2x12 h chain with ~2 h spare. This is the only config in the round that needed no
+# rescue: the three ConvNeXt arms were oversized by a bad extrapolation, and the attempted fix -- editing
+# their YAMLs mid-chain -- silently did nothing, because a restored job reads `<dir_model>/configs.yaml`
+# and not --net_config (run_training.py:351). They each needed a 3rd afterany job. This file is the only
+# one in the round whose n_steps matches the run that was actually trained.
+#
+# Launch: 2-job afterany chain, MODEL_DIR=bench_v6_droppath_classic. See README.md.
+# ============================================================================
+name: deepsphere_default
+
+training:
+  n_steps: 225000  # ~11 h of training per job x 2
+  output_every: Null
+  checkpoint_every: 5000  # job 2 restores the last checkpoint -- smaller = less lost handoff work
+  vali_every: 1000
+  eval_every: Null
+
+optimization:
+  optimizer: adam
+  gradient_clipping:
+    clip_by_value: null
+    clip_by_norm: null
+    clip_by_global_norm: 1.0
+  mutual_info_loss:
+    learning_rate: 1.0e-4
+    optimizer_kwargs:
+      beta_1: 0.9
+      beta_2: 0.999
+    scheduler: cosine
+    warmup_steps: 5000
+    warmup_init_learning_rate: 1.0e-5
+    decay_alpha: 0.0
+    ema_momentum: null
+
+network:
+  name: resnet
+  spmm_backend: csr
+  n_neighbors: 60
+  max_checkpoints: 50
+  save_second_to_last_layer: False
+  z_bank_size: Null
+  input_norm: true
+  smooth_nside:
+    clustering: 256
+  map_pool: mean  # the winning readout: +32.1% paired over flatten at base 64, on 95% of mocks
+  map_feature_dim: null  # no projection: the 512-d pooled map goes straight to map_norm + concat
+  cls:
+    n_bins: 16
+    transform: asinh_per_feature
+    asinh_default_scale: null
+    embedding_layers: [512, 512, 512, 512]  # last entry 512 balances the 512-d pooled map; fused = 1024
+    embedding_dropout_rate: 0.1
+  kwargs:
+    # CLASSIC residual body, identical to bench_v5 2x/pool_head_w64.
+    base_channels: 64  # width x2; pool_widen doubles per stage -> deep body 512 ch
+    pool_layers: 3
+    conv_layers: 2
+    residual_layers: 5
+    drop_path_rate: 0.1  # <-- THE ONLY KNOB
+    poly_degree: 5
+    head_type: "dense"
+    dense_layers: []
+    dropout_rate: 0.1
+
+dset:
+  training:
+    common:
+      is_eval: False
+      n_readers: 32
+      n_prefetch: 4
+      n_workers: Null
+    grid:
+      local_batch_size: 16
+      file_name_shuffle_buffer: 64
+      examples_shuffle_buffer: 256
+  validation:
+    n_batches: 50
+    common:
+      is_eval: True
+      n_readers: 8
+      n_prefetch: 2
+      n_workers: 16
+    grid:
+      local_batch_size: 16
+  eval:
+    common:
+      is_eval: True
+      n_readers: 64
+      n_prefetch: 2
+      n_workers: Null
+    grid:
+      local_batch_size: 16

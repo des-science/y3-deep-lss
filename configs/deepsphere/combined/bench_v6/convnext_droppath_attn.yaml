@@ -1,0 +1,130 @@
+# ============================================================================
+# bench_v6 — ConvNeXt body + DropPath 0.1 + interleaved global attention. The full stack.
+#
+# ONE knob vs convnext_droppath.yaml: residual_attention_every 2 (+ its block settings).
+#
+# Attention is the one lever that is CONDITIONAL on body type: on a ConvNeXt body it won 72% of mocks
+# (+5.6%); on the classic residual body it was null-to-negative (43% of mocks, 0.984). So it is tested
+# on the ConvNeXt body and nowhere else. Mechanically this is the CoAtNet / MetaFormer pattern
+# (Dai+ 2021): the ConvNeXt block's depthwise ChebK conv is the local token-mixer and its inverted
+# bottleneck the channel-mixer, with global attention supplying the long-range cross-probe mixing that
+# bench_v4 fingered as the combined-probe gap. It sits in the shared post-fusion body (nside 16,
+# ~448 tokens), after residual layers 2 and 4 of 5.
+#
+# Both residual streams start near-identity (ConvNeXt LayerScale 1e-6, attention LayerScale 1e-4), so
+# the rotation-equivariant convs do the early work and attention is learned on top.
+#
+# RISK: three regularizers now coexist (DropPath 0.1, attention dropout 0.1, head dropout 0.1) at the
+# round's largest capacity. If this underperforms both single-lever arms, over-regularization is the
+# first suspect -- and the diagnostic is vali_total, NOT the train-vali gap.
+#
+# SIZING: MEASURED 2026-07-26, 3.25 it/s sustained on 4 GPUs at base 64 (pre-launch projection ~3.7).
+# Against convnext_droppath.yaml's 3.35, the attention blocks cost only ~3% here -- far less than the
+# x0.872 seen at base 32, because the projections scale ~C^2 while the 448x448 attention matrix does
+# not, so attention is a shrinking fraction of the step as the body widens. It also started and ran
+# without hitting the memory band, so the OOM/NCCL-hang worry for this geometry is retired. n_steps
+# below is sized for a FRESH 2x12h chain at that rate (3.25 x 79.2 ks ~ 258k).
+#
+# !! PROVENANCE -- THIS FILE DOES NOT DESCRIBE THE RUN ON DISK. !!
+# `bench_v6_convnext_droppath_attn` (jobs 2903507/2903508/2908308) trained to the ORIGINAL **290000**
+# steps, not the 258k here. The mid-round resize was attempted by editing this file and silently did
+# NOTHING: a restored job reads `<dir_model>/configs.yaml` (run_training.py:351), not --net_config. It
+# was rescued with a 3rd afterany job for the remaining ~12k steps + the eval tail. To resize a chain
+# in flight, edit `<dir_model>/configs.yaml`. See convnext.yaml for the full mechanism.
+#
+# Launch: 2-job afterany chain, MODEL_DIR=bench_v6_convnext_droppath_attn. See README.md.
+# ============================================================================
+name: deepsphere_default
+
+training:
+  n_steps: 258000  # fresh 2x12h chain at the measured 3.25 it/s. The run on disk used 290k -- see PROVENANCE.
+  output_every: Null
+  checkpoint_every: 5000  # job 2 restores the last checkpoint -- smaller = less lost handoff work
+  vali_every: 1000
+  eval_every: Null
+
+optimization:
+  optimizer: adam
+  gradient_clipping:
+    clip_by_value: null
+    clip_by_norm: null
+    clip_by_global_norm: 1.0
+  mutual_info_loss:
+    learning_rate: 1.0e-4
+    optimizer_kwargs:
+      beta_1: 0.9
+      beta_2: 0.999
+    scheduler: cosine
+    warmup_steps: 5000
+    warmup_init_learning_rate: 1.0e-5
+    decay_alpha: 0.0
+    ema_momentum: null
+
+network:
+  name: resnet
+  spmm_backend: csr
+  n_neighbors: 60
+  max_checkpoints: 50
+  save_second_to_last_layer: False
+  z_bank_size: Null
+  input_norm: true
+  smooth_nside:
+    clustering: 256
+  map_pool: mean  # the winning readout: +32.1% paired over flatten at base 64, on 95% of mocks
+  map_feature_dim: null  # no projection: the 512-d pooled map goes straight to map_norm + concat
+  cls:
+    n_bins: 16
+    transform: asinh_per_feature
+    asinh_default_scale: null
+    embedding_layers: [512, 512, 512, 512]  # last entry 512 balances the 512-d pooled map; fused = 1024
+    embedding_dropout_rate: 0.1
+  kwargs:
+    base_channels: 64  # width x2; pool_widen doubles per stage -> deep body 512 ch
+    pool_layers: 3
+    conv_layers: 2
+    residual_layers: 5
+    residual_block_type: convnext
+    mlp_ratio: 4
+    layer_scale_init: 1.0e-6
+    drop_path_rate: 0.1
+    poly_degree: 5
+    head_type: "dense"
+    dense_layers: []
+    dropout_rate: 0.1
+    residual_attention_every: 2  # <-- THE ONLY KNOB vs convnext_droppath.yaml
+    residual_attention:
+      num_heads: 8          # body is 512 ch -> key_dim = 512/8 = 64, matching the transformer
+      n_layers: 1
+      mlp_ratio: 2.0        # attention-block MLP ratio (distinct from the ConvNeXt mlp_ratio above)
+      dropout_rate: 0.1
+      positional_embedding: true   # learnable per-token pos-emb over the fixed nside-16 footprint
+      layer_scale_init: 1.0e-4     # near-identity init
+
+dset:
+  training:
+    common:
+      is_eval: False
+      n_readers: 32
+      n_prefetch: 4
+      n_workers: Null
+    grid:
+      local_batch_size: 16
+      file_name_shuffle_buffer: 64
+      examples_shuffle_buffer: 256
+  validation:
+    n_batches: 50
+    common:
+      is_eval: True
+      n_readers: 8
+      n_prefetch: 2
+      n_workers: 16
+    grid:
+      local_batch_size: 16
+  eval:
+    common:
+      is_eval: True
+      n_readers: 64
+      n_prefetch: 2
+      n_workers: Null
+    grid:
+      local_batch_size: 16

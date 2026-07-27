@@ -1,0 +1,101 @@
+# bench_v5 variant of convnext.yaml — DOWNSAMPLING POOL/CONV SPLIT (width-compensated).
+# Moves one downsampling stage from pure-pool to graph-conv-pool: pool_layers 3 -> 2 and
+# conv_layers 2 -> 3 (total downsampling stages unchanged at 5, trunk nside the same). The pure
+# HealpyPseudoConv pools run FIRST at the highest nside, so this puts a real rotation-equivariant
+# graph conv one level FINER (nside 256 instead of only the coarse end) — the equivariant convs get
+# a look at fine structure before it is pooled away.
+#
+# WIDTH is coupled to pooling: channel-doubling (pool_widen) fires on each POOL stage only, so
+# dropping a pool stage would otherwise narrow the trunk 256 -> 128 (a capacity loss, the wrong
+# direction for probe fusion). We compensate with base_channels 64 (default 32): 64 * 2^2 = 256, so
+# the deep body / map-output width stays 256, matched to convnext, and the fine-scale layers are
+# actually RICHER (start at 64 not 32). Cost: a graph conv at nside 256 sees 4x the pixels of the
+# coarse convs and base 64 doubles channel width everywhere (compute, not the coo SPARSE_LIMIT — we
+# are on csr), so step time rises and n_steps drops. Tests whether an equivariant conv at fine
+# resolution helps the readout, on the ConvNeXt body, at matched trunk width. Compare vs convnext.
+name: deepsphere_default
+
+training:
+  n_steps: 80000  # batch 16: benchmark_v5 355.0 ms/step (job 2889539), slowest in the sweep (graph conv at nside 256 = 4x pixels + base 64 width); sized floor10k(30.31M/step_ms) -> ~10.3 h train + ~0.6 h eval tail < 12 h
+  output_every: Null
+  checkpoint_every: 10000
+  vali_every: 1000
+  eval_every: Null
+
+optimization:
+  optimizer: adam
+  gradient_clipping:
+    clip_by_value: null
+    clip_by_norm: null
+    clip_by_global_norm: 1.0
+  mutual_info_loss:
+    learning_rate: 1.0e-4
+    optimizer_kwargs:
+      beta_1: 0.9
+      beta_2: 0.999
+    scheduler: cosine
+    warmup_steps: 5000
+    warmup_init_learning_rate: 1.0e-5
+    decay_alpha: 0.0
+    ema_momentum: null
+
+network:
+  name: resnet
+  spmm_backend: csr
+  n_neighbors: 60
+  max_checkpoints: 50
+  save_second_to_last_layer: False
+  z_bank_size: Null
+  input_norm: true
+  smooth_nside:
+    clustering: 256
+  map_pool: mean
+  map_feature_dim: null
+  cls:
+    n_bins: 16
+    transform: asinh_per_feature
+    asinh_default_scale: null
+    embedding_layers: [512, 512, 512, 256]
+    embedding_dropout_rate: 0.1
+  kwargs:
+    base_channels: 64  # <-- WIDTH x2 (default 32) to compensate the dropped pool_widen stage: 64*2^2 = 256 trunk, matched to convnext
+    pool_layers: 2  # <-- one fewer pure-pool stage (default 3)
+    conv_layers: 3  # <-- one more graph-conv-pool stage (default 2); puts a real conv at nside 256
+    residual_layers: 5
+    residual_block_type: convnext
+    mlp_ratio: 4
+    layer_scale_init: 1.0e-6
+    drop_path_rate: 0.0  # no-DropPath default (see convnext_droppath.yaml for the single DropPath-on ablation)
+    poly_degree: 5
+    head_type: "dense"
+    dense_layers: []
+    dropout_rate: 0.1
+
+dset:
+  training:
+    common:
+      is_eval: False
+      n_readers: 32
+      n_prefetch: 4
+      n_workers: Null
+    grid:
+      local_batch_size: 16
+      file_name_shuffle_buffer: 64
+      examples_shuffle_buffer: 256
+  validation:
+    n_batches: 50
+    common:
+      is_eval: True
+      n_readers: 8
+      n_prefetch: 2
+      n_workers: 16
+    grid:
+      local_batch_size: 16
+  eval:
+    common:
+      is_eval: True
+      n_readers: 64
+      n_prefetch: 2
+      n_workers: Null
+    grid:
+      local_batch_size: 16

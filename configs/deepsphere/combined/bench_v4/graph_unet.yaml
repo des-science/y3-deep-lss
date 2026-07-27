@@ -1,0 +1,110 @@
+# bench_v4 variant of default.yaml — GRAPH U-NET: a real graph conv at EVERY doubling-downsampling level.
+# ----------------------------------------------------------------------------------------------------------
+# Motivation: the cost analysis showed the default architecture DECOUPLES downsampling from convolution --
+# cheap strided HealpyPseudoConv layers do the high-nside channel-doubling downsampling, and the real
+# Chebyshev convs are quarantined to low nside (64/32) + the deep trunk (nside 16), where cost is ~width^2.
+# So "more cheby layers" barely moves cost and genuine rotation-equivariant convolution never touches the
+# top resolutions. This variant instead COUPLES a real graph conv to every channel-doubling downsampling
+# step (conv_widen: true) -- the classic graph-U-Net schedule, closer to the DeepSphere purist
+# design and aligned with the robustness (model-misspecification) motivation for using DeepSphere at all.
+#
+# WIDTH SCHEDULE (base_channels 16, pool_layers 2, conv_layers 3, conv_widen):
+#   deep body = base * 2^(pool_layers + conv_layers - 1) = 16 * 2^4 = 256  (MATCHES default's 256)
+#   nside 512 -> 256 : PseudoConv  Fout 16   (pure pooling, no conv)
+#   nside 256 -> 128 : PseudoConv  Fout 32   (pure pooling, no conv)
+#   nside 128 ->  64 : Chebyshev Fout 64  + PseudoConv   <-- real conv
+#   nside  64 ->  32 : Chebyshev Fout 128 + PseudoConv   <-- real conv
+#   nside  32 ->  16 : Chebyshev Fout 256 + PseudoConv   <-- real conv
+#   nside  16 (trunk): 5 residual layers @ width 256     (same trunk capacity as default)
+# So vs default (real convs only at nside 64/32, both Fout 256): adds a real conv at nside 128 and uses a
+# smooth 16->32->64->128->256 doubling schedule. The top two levels stay pure PSEUDO to hold down COMPUTE
+# (a real conv at nside 256 processes 4x nside-128's pixels), NOT to dodge a kernel limit: the csr backend
+# (cuSPARSE csrmm) has NO 2^31 output-size ceiling -- the SPARSE_LIMIT is a coo-kernel-only property
+# (utils.py:59,93). See graph_unet_256.yaml for the variant that DOES put a (half-width) real conv at 256.
+# CLEAN TEST: real multi-scale convolution vs strided pooling, at fixed deep-body width (256) and fixed
+# trunk depth (residual_layers 5). n_steps set from benchmark_v4.
+name: deepsphere_default
+
+training:
+  n_steps: 160000  # batch 16: measured real train 10.13 h at 150k (job 2880784) + ~0.6 h eval/infer tail; resized 150k x 11.0/10.13 -> 160k (floor 10k) to fill ~11 h train
+  output_every: Null
+  checkpoint_every: 10000
+  vali_every: 1000
+  eval_every: Null
+
+optimization:
+  optimizer: adam
+  gradient_clipping:
+    clip_by_value: null
+    clip_by_norm: null
+    clip_by_global_norm: 1.0
+  mutual_info_loss:
+    learning_rate: 1.0e-4
+    optimizer_kwargs:
+      beta_1: 0.9
+      beta_2: 0.999
+    scheduler: cosine
+    warmup_steps: 5000
+    warmup_init_learning_rate: 1.0e-5
+    decay_alpha: 0.0
+    ema_momentum: null
+
+network:
+  name: resnet
+  # sparse-matmul backend for the graph convs: csr = cuSPARSE csrmm (benchmarked winner, app default).
+  # csr has NO 2^31 output-size ceiling (that limit is coo-only), so this variant's real convs at
+  # nside 128/64/32 cannot trip SPARSE_LIMIT regardless of width -- the only cost is compute/memory.
+  spmm_backend: csr
+  n_neighbors: 60
+  max_checkpoints: 50
+  save_second_to_last_layer: False
+  z_bank_size: Null
+  input_norm: true
+  smooth_nside:
+    clustering: 256
+  map_feature_dim: 64
+  cls:
+    n_bins: 16
+    transform: asinh_per_feature
+    asinh_default_scale: null
+    embedding_layers: [512, 512, 512, 64]
+    embedding_dropout_rate: 0.1
+  kwargs:
+    base_channels: 16       # <-- smaller base (default 32); doubling across 5 levels holds deep body at 16*2^4 = 256
+    pool_layers: 2   # <-- pure-pseudo pooling at the TOP (nside 512->256->128), before any real conv
+    conv_layers: 3          # <-- real graph-conv downsampling at nside 128/64/32
+    conv_widen: true  # <-- widen (x channel_multiplier) at each graph-conv pooling stage (graph-U-Net)
+    residual_layers: 5
+    poly_degree: 5
+    head_type: "dense"
+    dense_layers: []
+    dropout_rate: 0.1
+
+dset:
+  training:
+    common:
+      is_eval: False
+      n_readers: 32
+      n_prefetch: 4
+      n_workers: Null
+    grid:
+      local_batch_size: 16
+      file_name_shuffle_buffer: 64
+      examples_shuffle_buffer: 256
+  validation:
+    n_batches: 50
+    common:
+      is_eval: True
+      n_readers: 8
+      n_prefetch: 2
+      n_workers: 16
+    grid:
+      local_batch_size: 16
+  eval:
+    common:
+      is_eval: True
+      n_readers: 64
+      n_prefetch: 2
+      n_workers: Null
+    grid:
+      local_batch_size: 16

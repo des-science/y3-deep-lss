@@ -1,0 +1,107 @@
+# bench_v4 variant of default.yaml — ADD A GLOBAL SELF-ATTENTION STAGE AT THE BASE nside 16.
+# Sole knob vs default: network.kwargs.global_attention (None -> a HealpyGlobalAttention block dict).
+#
+# WHY: the DeepSphere graph-conv body is PURELY LOCAL (Chebyshev filters + pooling), whereas the
+# transformer it loses to on the combined probe has an all-to-all GLOBAL attention stage over its
+# ~448 coarsest-nside tokens (encoders/maps/transformer/healpix_transformer.py + nested_transformer.py).
+# This variant appends the analogous stage to the GCNN: after the whole conv body has pooled the
+# fused lensing+clustering stream down to nside 16 (~448 footprint pixels, 256 ch), a stack of
+# transformer encoder blocks does global self-attention over those pixel-tokens, then the head
+# flattens/pools as usual. It keeps the equivariant local graph convs doing all the fine-scale work
+# (so the robustness-to-misspecification that motivates DeepSphere is retained at fine scales) and
+# adds global mixing only at the coarsest level — exactly where the transformer does it.
+#
+# The block is channel-preserving (in/out 256), starts near-identity (LayerScale 1e-4) so the conv
+# features pass through at init and attention is learned as a correction, and adds a learnable
+# per-token positional embedding over the fixed nside-16 footprint. Geometry of the conv body is
+# UNCHANGED vs default (base 32 -> deep 256 @ nside 16, pinch 32); only the attention tail is new.
+name: deepsphere_default
+
+training:
+  n_steps: 170000  # batch 16: measured real train 9.96 h at 160k (job 2880782) + ~0.6 h eval/infer tail; resized 160k x 11.0/9.96 -> 170k (floor 10k) to fill ~11 h train
+  output_every: Null
+  checkpoint_every: 10000
+  vali_every: 1000
+  eval_every: Null
+
+optimization:
+  optimizer: adam
+  gradient_clipping:
+    clip_by_value: null
+    clip_by_norm: null
+    clip_by_global_norm: 1.0
+  mutual_info_loss:
+    learning_rate: 1.0e-4
+    optimizer_kwargs:
+      beta_1: 0.9
+      beta_2: 0.999
+    scheduler: cosine
+    warmup_steps: 5000
+    warmup_init_learning_rate: 1.0e-5
+    decay_alpha: 0.0
+    ema_momentum: null
+
+network:
+  name: resnet
+  spmm_backend: csr
+  n_neighbors: 60
+  max_checkpoints: 50
+  save_second_to_last_layer: False
+  z_bank_size: Null
+  input_norm: true
+  smooth_nside:
+    clustering: 256
+  map_feature_dim: 64
+  cls:
+    n_bins: 16
+    transform: asinh_per_feature
+    asinh_default_scale: null
+    embedding_layers: [512, 512, 512, 64]
+    embedding_dropout_rate: 0.1
+  kwargs:
+    base_channels: 32
+    pool_layers: 3
+    conv_layers: 2
+    residual_layers: 5
+    poly_degree: 5
+    head_type: "dense"
+    dense_layers: []
+    dropout_rate: 0.1
+    # global self-attention tail over the nside-16 pixel tokens (see HealpyGlobalAttention). {} = defaults.
+    global_attention:
+      num_heads: 4          # matches the transformer body; key_dim defaults to 256/4 = 64
+      n_layers: 2           # two stacked encoder blocks
+      mlp_ratio: 2.0
+      dropout_rate: 0.0
+      positional_embedding: true   # learnable per-token pos-emb over the fixed nside-16 footprint
+      layer_scale_init: 1.0e-4     # near-identity init for stability (set null to disable LayerScale)
+      activation: gelu
+
+dset:
+  training:
+    common:
+      is_eval: False
+      n_readers: 32
+      n_prefetch: 4
+      n_workers: Null
+    grid:
+      local_batch_size: 16
+      file_name_shuffle_buffer: 64
+      examples_shuffle_buffer: 256
+  validation:
+    n_batches: 50
+    common:
+      is_eval: True
+      n_readers: 8
+      n_prefetch: 2
+      n_workers: 16
+    grid:
+      local_batch_size: 16
+  eval:
+    common:
+      is_eval: True
+      n_readers: 64
+      n_prefetch: 2
+      n_workers: Null
+    grid:
+      local_batch_size: 16

@@ -1,0 +1,103 @@
+# ============================================================================
+# bench_v6 — ANCHOR + DROPPATH 0.2. Dose-response on the round's best regularizer.
+#
+# ONE knob vs droppath.yaml: drop_path_rate 0.1 -> 0.2. bench_v5 established the SIGN of DropPath
+# (+12.7% paired grid FoM, 14/16) but only ever at a single dose, on a narrower (base 32) body. Since
+# the bench_v5 diagnosis is that this family is REGULARIZATION-limited and since base 64 has ~3.4x the
+# body capacity of the base-32 geometry DropPath was tuned on, 0.1 may simply be under-dosed. This file
+# and droppath.yaml bracket the dose; if 0.2 wins, the knob is worth a finer sweep in a later round, and
+# if it loses, 0.1 is confirmed as near-optimal and the regularization axis is closed.
+#
+# This is the config most likely to LOSE outright -- that is intentional. A dose-response needs a point
+# on the far side of the optimum to be informative, otherwise a 0.1-vs-0.0 win is unbounded above.
+# ============================================================================
+name: deepsphere_default
+
+training:
+  # TOTAL across the 2x12 h chain. PROVISIONAL: 210k is step-matched to bench_v5 pool_head_w64, which ran
+  # 210k at 2.72 real it/s in ~20 h (fits 2x12 h with room). The ConvNeXt body should be FASTER, so 210k
+  # is safe here -- but RE-BENCHMARK this geometry and confirm 210k / real_it_s + ~0.6 h eval < 22 h
+  # before launch. Do NOT resize to "fill" the wall: step-matching is the point.
+  n_steps: 210000
+  output_every: Null
+  checkpoint_every: 5000  # halved from 10k: job 2 restores the last checkpoint, so smaller = less lost handoff work
+  vali_every: 1000
+  eval_every: Null
+
+optimization:
+  optimizer: adam
+  gradient_clipping:
+    clip_by_value: null
+    clip_by_norm: null
+    clip_by_global_norm: 1.0
+  mutual_info_loss:
+    learning_rate: 1.0e-4
+    optimizer_kwargs:
+      beta_1: 0.9
+      beta_2: 0.999
+    scheduler: cosine
+    warmup_steps: 5000
+    warmup_init_learning_rate: 1.0e-5
+    decay_alpha: 0.0
+    ema_momentum: null
+
+network:
+  name: resnet
+  spmm_backend: csr
+  n_neighbors: 60
+  max_checkpoints: 50
+  save_second_to_last_layer: False
+  z_bank_size: Null
+  input_norm: true
+  smooth_nside:
+    clustering: 256
+  map_pool: mean  # the winning readout: permutation-invariant mean over footprint pixels
+  map_feature_dim: null  # no projection: the 512-d pooled map goes straight to map_norm + concat
+  cls:
+    n_bins: 16
+    transform: asinh_per_feature
+    asinh_default_scale: null
+    embedding_layers: [512, 512, 512, 512]  # last entry 512 balances the 512-d pooled map; fused = 1024
+    embedding_dropout_rate: 0.1
+  kwargs:
+    base_channels: 64  # width x2; pool_widen doubles per stage -> deep body 512 ch
+    pool_layers: 3
+    conv_layers: 2
+    residual_layers: 5
+    residual_block_type: convnext  # <-- ONLY change vs bench_v5 2x/pool_head_w64 (cost lever + DropPath prerequisite)
+    mlp_ratio: 4
+    layer_scale_init: 1.0e-6
+    drop_path_rate: 0.2  # <-- STRONG dose (droppath.yaml is 0.1; brackets the optimum)
+    poly_degree: 5
+    head_type: "dense"
+    dense_layers: []
+    dropout_rate: 0.1
+
+dset:
+  training:
+    common:
+      is_eval: False
+      n_readers: 32
+      n_prefetch: 4
+      n_workers: Null
+    grid:
+      local_batch_size: 16
+      file_name_shuffle_buffer: 64
+      examples_shuffle_buffer: 256
+  validation:
+    n_batches: 50
+    common:
+      is_eval: True
+      n_readers: 8
+      n_prefetch: 2
+      n_workers: 16
+    grid:
+      local_batch_size: 16
+  eval:
+    common:
+      is_eval: True
+      n_readers: 64
+      n_prefetch: 2
+      n_workers: Null
+    grid:
+      local_batch_size: 16

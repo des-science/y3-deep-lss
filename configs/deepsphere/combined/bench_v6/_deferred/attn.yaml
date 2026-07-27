@@ -1,0 +1,124 @@
+# ============================================================================
+# bench_v6 — ANCHOR + INTERLEAVED GLOBAL ATTENTION (no DropPath).
+#
+# ONE knob vs default.yaml: residual_attention (+ _every 2). Isolates the attention lever so that any
+# gain in droppath_attn.yaml can be attributed rather than assumed.
+#
+# bench_v5 evidence: attention is CONDITIONAL on the body type. On a ConvNeXt body it won 13/16 paired
+# grid cosmologies (+7.9%: convnext_attn vs convnext); on the CLASSIC residual body it was a null result
+# (attn_body vs default, 8/16, +0.5% -- inside the ~2.4% paired seed floor). That interaction is why the
+# attention line in bench_v6 is built on the ConvNeXt anchor and why the classic-body variant is not
+# repeated. Mechanistically this is the CoAtNet / MetaFormer pattern (Dai+ 2021, arXiv:2106.04803): the
+# ConvNeXt block's depthwise ChebK conv is the LOCAL token-mixer and its inverted-bottleneck pointwise
+# MLP the channel-mixer, with global attention supplying the long-range CROSS-PROBE mixing that bench_v4
+# fingered as the combined-probe gap.
+#
+# Widened vs bench_v5's convnext_attn: num_heads 4 -> 8, because the body here is 512 ch (base 64) rather
+# than 256, and key_dim defaults to C // num_heads -- 8 heads keeps key_dim at 64, matching the transformer.
+#
+# Robustness: both residual streams start near-identity (ConvNeXt LayerScale 1e-6, attention LayerScale
+# 1e-4 + zero-init pos-emb), so the rotation-equivariant convs do the early work and attention is learned
+# on top -- keeping DeepSphere's local inductive bias, which is the whole reason for using a GCNN here.
+# ============================================================================
+name: deepsphere_default
+
+training:
+  # TOTAL across the 2x12 h chain. PROVISIONAL: 210k is step-matched to bench_v5 pool_head_w64, which ran
+  # 210k at 2.72 real it/s in ~20 h (fits 2x12 h with room). The ConvNeXt body should be FASTER, so 210k
+  # is safe here -- but RE-BENCHMARK this geometry and confirm 210k / real_it_s + ~0.6 h eval < 22 h
+  # before launch. Do NOT resize to "fill" the wall: step-matching is the point.
+  n_steps: 210000
+  output_every: Null
+  checkpoint_every: 5000  # halved from 10k: job 2 restores the last checkpoint, so smaller = less lost handoff work
+  vali_every: 1000
+  eval_every: Null
+
+optimization:
+  optimizer: adam
+  gradient_clipping:
+    clip_by_value: null
+    clip_by_norm: null
+    clip_by_global_norm: 1.0
+  mutual_info_loss:
+    learning_rate: 1.0e-4
+    optimizer_kwargs:
+      beta_1: 0.9
+      beta_2: 0.999
+    scheduler: cosine
+    warmup_steps: 5000
+    warmup_init_learning_rate: 1.0e-5
+    decay_alpha: 0.0
+    ema_momentum: null
+
+network:
+  name: resnet
+  spmm_backend: csr
+  n_neighbors: 60
+  max_checkpoints: 50
+  save_second_to_last_layer: False
+  z_bank_size: Null
+  input_norm: true
+  smooth_nside:
+    clustering: 256
+  map_pool: mean  # the winning readout: permutation-invariant mean over footprint pixels
+  map_feature_dim: null  # no projection: the 512-d pooled map goes straight to map_norm + concat
+  cls:
+    n_bins: 16
+    transform: asinh_per_feature
+    asinh_default_scale: null
+    embedding_layers: [512, 512, 512, 512]  # last entry 512 balances the 512-d pooled map; fused = 1024
+    embedding_dropout_rate: 0.1
+  kwargs:
+    base_channels: 64  # width x2; pool_widen doubles per stage -> deep body 512 ch
+    pool_layers: 3
+    conv_layers: 2
+    residual_layers: 5
+    residual_block_type: convnext  # <-- ONLY change vs bench_v5 2x/pool_head_w64 (cost lever + DropPath prerequisite)
+    mlp_ratio: 4
+    layer_scale_init: 1.0e-6
+    drop_path_rate: 0.0  # OFF in the anchor; droppath.yaml turns it on
+    poly_degree: 5
+    head_type: "dense"
+    dense_layers: []
+    dropout_rate: 0.1
+    # interleave a global-attention block after every 2nd residual layer (after 2 and 4 of 5), inside
+    # the shared post-fusion body (ResNetMultiResEncoder.gcnn_post, nside 16, ~448 footprint tokens):
+    # a GLOBAL token-mixer on top of the ConvNeXt local token-mix / channel-mix, which is exactly where
+    # the bench_v4 analysis located the combined-probe gap (cross-probe mixing after fusion).
+    residual_attention_every: 2
+    residual_attention:
+      num_heads: 8          # body is 512 ch -> key_dim = 512/8 = 64, matching the transformer
+      n_layers: 1
+      mlp_ratio: 2.0        # attention-block MLP ratio (distinct from the ConvNeXt mlp_ratio above)
+      dropout_rate: 0.1
+      positional_embedding: true   # learnable per-token pos-emb over the fixed nside-16 footprint
+      layer_scale_init: 1.0e-4     # near-identity init: convs do the early work, attention is learned on top
+
+dset:
+  training:
+    common:
+      is_eval: False
+      n_readers: 32
+      n_prefetch: 4
+      n_workers: Null
+    grid:
+      local_batch_size: 16
+      file_name_shuffle_buffer: 64
+      examples_shuffle_buffer: 256
+  validation:
+    n_batches: 50
+    common:
+      is_eval: True
+      n_readers: 8
+      n_prefetch: 2
+      n_workers: 16
+    grid:
+      local_batch_size: 16
+  eval:
+    common:
+      is_eval: True
+      n_readers: 64
+      n_prefetch: 2
+      n_workers: Null
+    grid:
+      local_batch_size: 16

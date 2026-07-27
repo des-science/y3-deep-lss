@@ -1,0 +1,121 @@
+# bench_v5 variant of default.yaml (= the bench_v4 pool_head winner) — INTERLEAVED BODY ATTENTION.
+#
+# Hypothesis under test (combined-probe gap): DeepSphere wins each probe INDIVIDUALLY but loses the
+# COMBINED probe to the transformer. Capacity is not the lever (bench_v4 w64/wide_shallow/deep_trunk
+# barely moved) and the LOCAL cross term is not either (bench_v4 bilinear did nothing). The remaining
+# structural difference is that the transformer distributes content-dependent, all-to-all mixing
+# THROUGH its shared post-injection body, while the GCNN body is purely-local additive graph conv.
+# bench_v4 global_attn tested only ONE such block as a TAIL after the whole body (grid 1947, ~default)
+# — a weak proxy. This variant instead INTERLEAVES HealpyGlobalAttention blocks INSIDE the residual
+# body (after residual layers 2 and 4 of 5), so the graph convs act on globally-mixed features
+# (CoAtNet-style conv<->attention hybrid). In the multi-res combined path the entire residual body
+# lives in ResNetMultiResEncoder.gcnn_post — post lensing+clustering fusion, at nside 16 (~448 footprint
+# tokens, so global attention is cheap) — so these blocks mix the two FUSED probes, exactly where the
+# 3x2pt cross-information has to be exploited.
+#
+# One-knob change vs the pool_head baseline: network.kwargs.residual_attention (+ _every). Everything
+# else (mean-pool readout, no map projection, Cls emb -> 256, classic two-ChebK residual body) is the
+# pool_head recipe. Fresh checkpoint lineage (new attention variables interleaved in the body).
+#
+# Robustness note: HealpyGlobalAttention zero-inits its positional embedding and small-inits LayerScale
+# (1e-4), so each block starts as a near-identity correction — the equivariant graph convs still do all
+# the fine-scale work and attention is learned on top. Keeping the strong local inductive bias is the
+# whole point: we want the transformer's combined-probe cross-mixing WITHOUT losing DeepSphere's
+# misspecification robustness.
+name: deepsphere_default
+
+training:
+  # batch 16: benchmark_v5 measured 170.7 ms/step (job 2889557), +3.3% vs the pool_head anchor
+  # default.yaml 165.2 ms — the two interleaved nside-16 attention blocks (+1.28M params, 5.4->6.7M)
+  # are nearly free. Sized off the pool_head REAL-train anchor (190k) by the synthetic ratio:
+  #   floor10k( 190000 * 165.2 / 170.7 ) = 180000  -> ~11 h train + ~0.6 h eval/infer tail.
+  n_steps: 180000
+  output_every: Null
+  checkpoint_every: 10000
+  vali_every: 1000
+  eval_every: Null
+
+optimization:
+  optimizer: adam
+  gradient_clipping:
+    clip_by_value: null
+    clip_by_norm: null
+    clip_by_global_norm: 1.0
+  mutual_info_loss:
+    learning_rate: 1.0e-4
+    optimizer_kwargs:
+      beta_1: 0.9
+      beta_2: 0.999
+    scheduler: cosine
+    warmup_steps: 5000
+    warmup_init_learning_rate: 1.0e-5
+    decay_alpha: 0.0
+    ema_momentum: null
+
+network:
+  name: resnet
+  spmm_backend: csr
+  n_neighbors: 60
+  max_checkpoints: 50
+  save_second_to_last_layer: False
+  z_bank_size: Null
+  input_norm: true
+  smooth_nside:
+    clustering: 256
+  map_pool: mean
+  map_feature_dim: null
+  cls:
+    n_bins: 16
+    transform: asinh_per_feature
+    asinh_default_scale: null
+    embedding_layers: [512, 512, 512, 256]
+    embedding_dropout_rate: 0.1
+  kwargs:
+    base_channels: 32
+    pool_layers: 3
+    conv_layers: 2
+    residual_layers: 5
+    poly_degree: 5
+    head_type: "dense"
+    dense_layers: []
+    dropout_rate: 0.1
+    # interleave a global-attention block after every 2nd residual layer (after layers 2 and 4 of 5),
+    # INSIDE the residual body (nside 16, post-fusion in gcnn_post). Distinct from global_attention,
+    # which appends ONE block as a tail after the whole body. See HealpyGlobalAttention.
+    residual_attention_every: 2
+    residual_attention:
+      num_heads: 4          # C=256 -> key_dim defaults to 256/4 = 64, matching the transformer body
+      n_layers: 1           # a single encoder block per insertion point (interleaved, so keep shallow)
+      mlp_ratio: 2.0
+      dropout_rate: 0.1     # combat the grid->DES transfer overfitting flagged in bench_v4
+      positional_embedding: true   # learnable per-token pos-emb over the fixed nside-16 footprint
+      layer_scale_init: 1.0e-4     # near-identity init for stability + robustness
+
+dset:
+  training:
+    common:
+      is_eval: False
+      n_readers: 32
+      n_prefetch: 4
+      n_workers: Null
+    grid:
+      local_batch_size: 16
+      file_name_shuffle_buffer: 64
+      examples_shuffle_buffer: 256
+  validation:
+    n_batches: 50
+    common:
+      is_eval: True
+      n_readers: 8
+      n_prefetch: 2
+      n_workers: 16
+    grid:
+      local_batch_size: 16
+  eval:
+    common:
+      is_eval: True
+      n_readers: 64
+      n_prefetch: 2
+      n_workers: Null
+    grid:
+      local_batch_size: 16

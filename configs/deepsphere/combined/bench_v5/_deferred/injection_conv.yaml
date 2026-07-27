@@ -1,0 +1,111 @@
+# bench_v5 variant of default.yaml (pool_head anchor) — ONE GRAPH CONV AT nside 256 ON BOTH PROBES.
+#
+# One-knob change vs default.yaml: injection_conv_layers 0 -> 1 (a top-level network key, NOT under
+# kwargs). ResNetMultiResEncoder prepends one channel-preserving graph conv (Chebyshev K=poly_degree)
+# + LayerNorm to gcnn_post, so it runs at the injection nside (256) on the FUSED lensing+clustering
+# stream — right after injection_fuse, before any further pooling.
+#
+# WHY (both goals in one layer):
+#   (1) Non-Gaussian small scales. The default schedule pools first and only convolves at the coarsest
+#       nside: gcnn_pre is a single pool (512->256), the coarse probe is injected by a pointwise Dense,
+#       and the first REAL graph conv is at nside 64 (see resnet_multires split). So no equivariant conv
+#       ever touches the finest, most non-Gaussian scales. This conv extracts non-Gaussian features at
+#       nside 256 BEFORE the field is pooled down; the extracted statistics then survive in the channel
+#       dimension through the subsequent pools.
+#   (2) Cross-probe mixing. At 256 post-fusion BOTH probes are present, so this is content-dependent
+#       lensing<->clustering mixing at high resolution — the combined-probe gap bench_v4 fingered (the
+#       transformer distributes such mixing through its shared body; the GCNN body was purely-local).
+#
+# Orientation-preserving: a real graph conv keeps the NEST child-order gauge (unlike a symmetrized pool
+# or a deepsets merge, which bench_t7 showed costs ~2.25-3x FoM — orientation info is the whole gap).
+# This supersedes the earlier "conv at nside 512, lensing-only" idea: nside 256 is 4x cheaper AND acts
+# on both probes. NOTE it runs at the fused width (split_Fin = base_channels = 32); widening the fusion
+# pinch is a separate lever. Fresh checkpoint lineage (new conv+norm+graph params).
+name: deepsphere_default
+
+training:
+  # batch 16: benchmark_v5 measured 351.9 ms/step (job 2890658), 2.13x default's 165.2 ms — the K=5 conv
+  # at nside 256 (~118k footprint pixels) is the expensive lever (params essentially unchanged, +5k).
+  # Sized floor10k(30.31M / step_ms) = floor10k(30.31M / 351.9) = 80000 -> cosine anneals fully in ~12 h.
+  # COST NOTE: this buys only ~42% of default's 190k optimizer steps at equal wall time; the run tests
+  # whether one high-res cross-probe conv is worth that step budget vs the pool_head anchor.
+  n_steps: 80000
+  output_every: Null
+  checkpoint_every: 10000
+  vali_every: 1000
+  eval_every: Null
+
+optimization:
+  optimizer: adam
+  gradient_clipping:
+    clip_by_value: null
+    clip_by_norm: null
+    clip_by_global_norm: 1.0
+  mutual_info_loss:
+    learning_rate: 1.0e-4
+    optimizer_kwargs:
+      beta_1: 0.9
+      beta_2: 0.999
+    scheduler: cosine
+    warmup_steps: 5000
+    warmup_init_learning_rate: 1.0e-5
+    decay_alpha: 0.0
+    ema_momentum: null
+
+network:
+  name: resnet
+  spmm_backend: csr
+  n_neighbors: 60
+  max_checkpoints: 50
+  save_second_to_last_layer: False
+  z_bank_size: Null
+  input_norm: true
+  smooth_nside:
+    clustering: 256
+  map_pool: mean
+  map_feature_dim: null
+  injection_conv_layers: 1  # <-- one graph conv at nside 256 on the fused both-probe stream (top-level key)
+  cls:
+    n_bins: 16
+    transform: asinh_per_feature
+    asinh_default_scale: null
+    embedding_layers: [512, 512, 512, 256]
+    embedding_dropout_rate: 0.1
+  kwargs:
+    base_channels: 32
+    pool_layers: 3
+    conv_layers: 2
+    residual_layers: 5
+    poly_degree: 5
+    head_type: "dense"
+    dense_layers: []
+    dropout_rate: 0.1
+
+dset:
+  training:
+    common:
+      is_eval: False
+      n_readers: 32
+      n_prefetch: 4
+      n_workers: Null
+    grid:
+      local_batch_size: 16
+      file_name_shuffle_buffer: 64
+      examples_shuffle_buffer: 256
+  validation:
+    n_batches: 50
+    common:
+      is_eval: True
+      n_readers: 8
+      n_prefetch: 2
+      n_workers: 16
+    grid:
+      local_batch_size: 16
+  eval:
+    common:
+      is_eval: True
+      n_readers: 64
+      n_prefetch: 2
+      n_workers: Null
+    grid:
+      local_batch_size: 16

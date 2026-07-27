@@ -1,0 +1,134 @@
+# ============================================================================
+# bench_v6 stage 2 — the champion + DropPath at 2x BUDGET. Classic body.
+# ############################################################################
+# THE LOW-RISK ROUTE PAST THE TRANSFORMER: two levers, both measured, no untested architecture.
+# ############################################################################
+#
+# ONE knob vs ../droppath_classic.yaml: n_steps 225k -> 450k (2x12 h -> 4x12 h chain).
+# Architecture identical, and therefore still exactly ONE knob (drop_path_rate) from the finished champion
+# `bench_v5_pool_head_w64`.
+#
+# Two levers, each measured on the paired 1000-mock route, stacked:
+#   DropPath 0.1   78% of mocks, +8.5%   (measured on a ConvNeXt body -- transfer is stage 1's job)
+#   BUDGET x2      73% of mocks, +7.3%   (measured on the classic body, clean config diff)
+#   0.918 x 1.085 x 1.073 ~ 1.07
+#
+# WHY THIS CONFIG EXISTS ALONGSIDE convnext_droppath_attn_long.yaml. They are the round's two routes past
+# the transformer and they trade risk against ceiling:
+#   * this file      -- 2 levers, ~1.07 predicted, ZERO untested architecture. Its only assumption is that
+#                       DropPath transfers to the classic block, which stage 1 measures directly.
+#   * the convnext   -- 3 levers, ~1.13 predicted, but conditional on ConvNeXt neutrality at base 64 AND
+#     stack           the attention interaction AND DropPath transfer, all at once.
+# If stage 1 shows DropPath transferring to the classic block but ConvNeXt NOT holding neutrality at base
+# 64, this is the config to run and the other is void. If both hold, prefer the ConvNeXt stack for its
+# ceiling -- or run both, since they are the round's headline results and their difference is itself the
+# answer to "does the ConvNeXt line earn its complexity?".
+#
+# GATING. Run only if BOTH:
+#   (i)  ../droppath_classic.yaml > bench_v5_pool_head_w64  -- DropPath transfers to the classic
+#        block. This is a clean step-matched one-knob contrast, so the read is unambiguous.
+#   (ii) ../_deferred/budget_classic.yaml has not regressed vs bench_v5_pool_head_w64 -- the budget lever
+#        extends to base 64 on the pooled readout.
+# (ii) is the hard gate, and it is NOT a formality: budget is CONDITIONAL on the readout. With the flatten
+# readout more steps actively hurt (v3_cls degrades 0.545 -> 0.302 -> 0.270 over 150k/200k/310k; w64 is the
+# worst run of bench_v5 at 0.680). The mean-pool readout flips the sign, but that is measured at base 32,
+# and this config would spend 4x12 h on the assumption that it still holds at base 64.
+#
+# NOTE ON REGULARIZER DOSE. DropPath 0.1 was tuned at 210k on a narrower body. At 420k the model sees twice
+# the updates, so if this UNDER-performs stage 1's droppath_classic, under-dosing is the first suspect and
+# _deferred/droppath_strong.yaml (0.2) becomes the natural follow-up -- at long budget, which is the
+# condition under which it was always most interesting. Diagnose on vali_total, NOT the train-vali gap.
+#
+# CHAINED-RUN CONTRACT: 4 x 12 h, jobs 1-3 TIMEOUT by design, job 4 runs eval + inference. Every link
+# --dependency=afterany, NOT afterok. See ../README.md for the 4-job launch loop.
+# ============================================================================
+name: deepsphere_default
+
+training:
+  # TOTAL across the 4x12 h chain. EXACTLY 2x ../droppath_classic.yaml (225k), so the budget
+  # contrast is a clean doubling on the same axis as the +7.3%/doubling measurement, and still exactly one
+  # knob from the champion at 210k. Cost check at the champion's measured 2.95 it/s minus ~4% for DropPath
+  # (~2.83 it/s): 420k / 2.83 = 148 ks = 41 h train + ~0.6 h eval inside a 48 h chain. No re-benchmark
+  # needed -- this is a measured geometry, unlike the ConvNeXt arms.
+  n_steps: 450000
+  output_every: Null
+  checkpoint_every: 5000  # job N restores the last checkpoint at each handoff; smaller = less lost work
+  vali_every: 1000
+  eval_every: Null
+
+optimization:
+  optimizer: adam
+  gradient_clipping:
+    clip_by_value: null
+    clip_by_norm: null
+    clip_by_global_norm: 1.0
+  mutual_info_loss:
+    learning_rate: 1.0e-4
+    optimizer_kwargs:
+      beta_1: 0.9
+      beta_2: 0.999
+    scheduler: cosine
+    warmup_steps: 5000
+    warmup_init_learning_rate: 1.0e-5
+    decay_alpha: 0.0
+    ema_momentum: null
+
+network:
+  name: resnet
+  spmm_backend: csr
+  n_neighbors: 60
+  max_checkpoints: 50
+  save_second_to_last_layer: False
+  z_bank_size: Null
+  input_norm: true
+  smooth_nside:
+    clustering: 256
+  map_pool: mean  # the winning readout -- and what makes the budget lever safe to spend (see budget_classic.yaml)
+  map_feature_dim: null  # no projection: the 512-d pooled map goes straight to map_norm + concat
+  cls:
+    n_bins: 16
+    transform: asinh_per_feature
+    asinh_default_scale: null
+    embedding_layers: [512, 512, 512, 512]  # last entry 512 balances the 512-d pooled map; fused = 1024
+    embedding_dropout_rate: 0.1
+  kwargs:
+    # ARCHITECTURE IDENTICAL TO ../droppath_classic.yaml -- n_steps above is the only difference.
+    # Keep it that way: any architectural edit here destroys the budget attribution this config provides.
+    base_channels: 64  # width x2; pool_widen doubles per stage -> deep body 512 ch
+    pool_layers: 3
+    conv_layers: 2
+    residual_layers: 5
+    drop_path_rate: 0.1  # stochastic depth on the classic block's residual branch
+    poly_degree: 5
+    head_type: "dense"
+    dense_layers: []
+    dropout_rate: 0.1
+
+dset:
+  training:
+    common:
+      is_eval: False
+      n_readers: 32
+      n_prefetch: 4
+      n_workers: Null
+    grid:
+      local_batch_size: 16
+      file_name_shuffle_buffer: 64
+      examples_shuffle_buffer: 256
+  validation:
+    n_batches: 50
+    common:
+      is_eval: True
+      n_readers: 8
+      n_prefetch: 2
+      n_workers: 16
+    grid:
+      local_batch_size: 16
+  eval:
+    common:
+      is_eval: True
+      n_readers: 64
+      n_prefetch: 2
+      n_workers: Null
+    grid:
+      local_batch_size: 16

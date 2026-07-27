@@ -1,0 +1,132 @@
+# ============================================================================
+# bench_v6 — champion on a ConvNeXt body.
+#
+# ONE knob vs the bench_v5 winner `2x/pool_head_w64.yaml`: residual_block_type convnext.
+#
+# Two jobs. (1) It is the anchor for the ConvNeXt line -- convnext_droppath.yaml and
+# convnext_droppath_attn.yaml are each one knob from it, at the same wall. (2) It is the only ConvNeXt
+# arm with no regularizer on the body, so if the stacked arms disappoint it says whether the block
+# itself was the problem.
+#
+# At base 32 the ConvNeXt block was quality-neutral (+2.4% paired, ~+1% step-corrected) but materially
+# cheaper. Cheaper means more steps at fixed wall, which is worth having: the budget lever is +7.3% per
+# doubling. Whether either property survives to base 64 -- where the inverted bottleneck grows to
+# 4 x 512 -- is what this run measures, and it is measured directly rather than predicted.
+#
+# Note the contrast against the champion mixes body type with the extra steps the cheaper block buys.
+# That is inherent to wall-clock matching and is not corrected here; the clean one-knob contrasts in
+# this round are between this file and its two children.
+#
+# SIZING: MEASURED 2026-07-26, 3.52 it/s sustained on 4 GPUs at base 64. n_steps below is sized for a
+# FRESH 2x12h chain at that rate (3.52 x 79.2 ks ~ 280k).
+#
+# !! THE PROJECTION WAS WRONG, AND IT UNDERCUTS THIS FILE'S OWN PREMISE. !!
+# Pre-launch this was sized at ~4.4 it/s, extrapolated from base-32 rates (classic 4.99, convnext 5.80,
+# classic b64 2.95) via a fixed-overhead + ~C^2 body model. Real: 3.52. So the ConvNeXt block is only
+# **1.17x** faster than the classic block at base 64, not the 1.54x projected -- the C^2 model does NOT
+# survive the width doubling. Since the cost refund is most of why this line exists, budget on the
+# refund accordingly: these arms get ~280k steps against droppath_classic's 225k, not the ~350k that
+# made the case look compelling. Do not size a convnext config at a new width by extrapolation again.
+#
+# !! PROVENANCE -- THIS FILE DOES NOT DESCRIBE THE RUN ON DISK. !!
+# `bench_v6_convnext` (jobs 2903503/2903504/2908306) trained to the ORIGINAL **350000** steps, not the
+# 280k here. The mid-round resize was attempted by editing this file and it silently did NOTHING:
+# run_training.py --restore_checkpoint reads the config from `<dir_model>/configs.yaml`, the snapshot
+# job 1 wrote at first launch, NOT from --net_config (run_training.py:351). Job 2 therefore ran the old
+# 350k cosine, was on track to hit its wall INSIDE training -- which forfeits run_evaluation.py and
+# run_inference.py entirely, i.e. no preds and no chains, not merely a truncated anneal -- and was
+# rescued with a 3rd afterany job that finished the remaining ~46k steps and the eval tail.
+#
+# TO RESIZE A CHAIN IN FLIGHT, EDIT `<dir_model>/configs.yaml`, NOT THIS FILE. Editing this file only
+# affects a run started fresh (RUN_NUM=1). The rebuild works because
+# `decay_steps = n_steps - warmup_steps` is read at job start while optimizer.iterations restores from
+# the checkpoint, so a restored job rebuilds a shortened cosine that still anneals to 0.
+#
+# Launch: 2-job afterany chain, MODEL_DIR=bench_v6_convnext. See README.md.
+# ============================================================================
+name: deepsphere_default
+
+training:
+  n_steps: 280000  # fresh 2x12h chain at the measured 3.52 it/s. The run on disk used 350k -- see PROVENANCE.
+  output_every: Null
+  checkpoint_every: 5000  # job 2 restores the last checkpoint -- smaller = less lost handoff work
+  vali_every: 1000
+  eval_every: Null
+
+optimization:
+  optimizer: adam
+  gradient_clipping:
+    clip_by_value: null
+    clip_by_norm: null
+    clip_by_global_norm: 1.0
+  mutual_info_loss:
+    learning_rate: 1.0e-4
+    optimizer_kwargs:
+      beta_1: 0.9
+      beta_2: 0.999
+    scheduler: cosine
+    warmup_steps: 5000
+    warmup_init_learning_rate: 1.0e-5
+    decay_alpha: 0.0
+    ema_momentum: null
+
+network:
+  name: resnet
+  spmm_backend: csr
+  n_neighbors: 60
+  max_checkpoints: 50
+  save_second_to_last_layer: False
+  z_bank_size: Null
+  input_norm: true
+  smooth_nside:
+    clustering: 256
+  map_pool: mean  # the winning readout: +32.1% paired over flatten at base 64, on 95% of mocks
+  map_feature_dim: null  # no projection: the 512-d pooled map goes straight to map_norm + concat
+  cls:
+    n_bins: 16
+    transform: asinh_per_feature
+    asinh_default_scale: null
+    embedding_layers: [512, 512, 512, 512]  # last entry 512 balances the 512-d pooled map; fused = 1024
+    embedding_dropout_rate: 0.1
+  kwargs:
+    base_channels: 64  # width x2; pool_widen doubles per stage -> deep body 512 ch
+    pool_layers: 3
+    conv_layers: 2
+    residual_layers: 5
+    residual_block_type: convnext  # <-- THE ONLY KNOB vs bench_v5 2x/pool_head_w64
+    mlp_ratio: 4
+    layer_scale_init: 1.0e-6
+    drop_path_rate: 0.0  # OFF here; convnext_droppath.yaml turns it on
+    poly_degree: 5
+    head_type: "dense"
+    dense_layers: []
+    dropout_rate: 0.1
+
+dset:
+  training:
+    common:
+      is_eval: False
+      n_readers: 32
+      n_prefetch: 4
+      n_workers: Null
+    grid:
+      local_batch_size: 16
+      file_name_shuffle_buffer: 64
+      examples_shuffle_buffer: 256
+  validation:
+    n_batches: 50
+    common:
+      is_eval: True
+      n_readers: 8
+      n_prefetch: 2
+      n_workers: 16
+    grid:
+      local_batch_size: 16
+  eval:
+    common:
+      is_eval: True
+      n_readers: 64
+      n_prefetch: 2
+      n_workers: Null
+    grid:
+      local_batch_size: 16

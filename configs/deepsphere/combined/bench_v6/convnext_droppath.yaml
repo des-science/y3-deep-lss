@@ -1,0 +1,116 @@
+# ============================================================================
+# bench_v6 — ConvNeXt body + DropPath 0.1.
+#
+# ONE knob vs convnext.yaml: drop_path_rate 0.0 -> 0.1.
+#
+# This is the bench_v5 result carried onto the base-64 geometry. At base 32, convnext_droppath beat
+# plain convnext on 78% of 1000 mocks (paired 1.085, CI [1.078, 1.095]) and on vali_total
+# (-10.370 vs -10.189), and it did so at 200k steps against convnext's 210k. The body here has ~4x
+# the parameters, so the transfer is the hypothesis, not an assumption.
+#
+# Together with droppath_classic.yaml this measures DropPath on both block types at base 64, which is
+# the point: neither transfer is assumed from the other.
+#
+# DropPath is applied FLAT across the 5 blocks (no timm-style linear 0 -> rate ramp).
+#
+# SIZING: MEASURED 2026-07-26, 3.35 it/s sustained on 4 GPUs at base 64 (pre-launch projection was
+# ~4.2, from base-32 rates -- see convnext.yaml for why that extrapolation failed). Against
+# convnext.yaml's 3.52, DropPath costs ~4.8% on the ConvNeXt body -- close to the base-32 figure
+# (x0.959), unlike on the classic body where it costs ~0.7%. n_steps below is sized for a FRESH
+# 2x12h chain at that rate (3.35 x 79.2 ks ~ 266k).
+#
+# !! PROVENANCE -- THIS FILE DOES NOT DESCRIBE THE RUN ON DISK. !!
+# `bench_v6_convnext_droppath` (jobs 2903505/2903506/2908307) trained to the ORIGINAL **330000** steps,
+# not the 266k here. The mid-round resize was attempted by editing this file and silently did NOTHING:
+# a restored job reads `<dir_model>/configs.yaml` (run_training.py:351), not --net_config. It was
+# rescued with a 3rd afterany job for the remaining ~36k steps + the eval tail. To resize a chain in
+# flight, edit `<dir_model>/configs.yaml`. See convnext.yaml for the full mechanism.
+#
+# Launch: 2-job afterany chain, MODEL_DIR=bench_v6_convnext_droppath. See README.md.
+# ============================================================================
+name: deepsphere_default
+
+training:
+  n_steps: 266000  # fresh 2x12h chain at the measured 3.35 it/s. The run on disk used 330k -- see PROVENANCE.
+  output_every: Null
+  checkpoint_every: 5000  # job 2 restores the last checkpoint -- smaller = less lost handoff work
+  vali_every: 1000
+  eval_every: Null
+
+optimization:
+  optimizer: adam
+  gradient_clipping:
+    clip_by_value: null
+    clip_by_norm: null
+    clip_by_global_norm: 1.0
+  mutual_info_loss:
+    learning_rate: 1.0e-4
+    optimizer_kwargs:
+      beta_1: 0.9
+      beta_2: 0.999
+    scheduler: cosine
+    warmup_steps: 5000
+    warmup_init_learning_rate: 1.0e-5
+    decay_alpha: 0.0
+    ema_momentum: null
+
+network:
+  name: resnet
+  spmm_backend: csr
+  n_neighbors: 60
+  max_checkpoints: 50
+  save_second_to_last_layer: False
+  z_bank_size: Null
+  input_norm: true
+  smooth_nside:
+    clustering: 256
+  map_pool: mean  # the winning readout: +32.1% paired over flatten at base 64, on 95% of mocks
+  map_feature_dim: null  # no projection: the 512-d pooled map goes straight to map_norm + concat
+  cls:
+    n_bins: 16
+    transform: asinh_per_feature
+    asinh_default_scale: null
+    embedding_layers: [512, 512, 512, 512]  # last entry 512 balances the 512-d pooled map; fused = 1024
+    embedding_dropout_rate: 0.1
+  kwargs:
+    base_channels: 64  # width x2; pool_widen doubles per stage -> deep body 512 ch
+    pool_layers: 3
+    conv_layers: 2
+    residual_layers: 5
+    residual_block_type: convnext
+    mlp_ratio: 4
+    layer_scale_init: 1.0e-6
+    drop_path_rate: 0.1  # <-- THE ONLY KNOB vs convnext.yaml
+    poly_degree: 5
+    head_type: "dense"
+    dense_layers: []
+    dropout_rate: 0.1
+
+dset:
+  training:
+    common:
+      is_eval: False
+      n_readers: 32
+      n_prefetch: 4
+      n_workers: Null
+    grid:
+      local_batch_size: 16
+      file_name_shuffle_buffer: 64
+      examples_shuffle_buffer: 256
+  validation:
+    n_batches: 50
+    common:
+      is_eval: True
+      n_readers: 8
+      n_prefetch: 2
+      n_workers: 16
+    grid:
+      local_batch_size: 16
+  eval:
+    common:
+      is_eval: True
+      n_readers: 64
+      n_prefetch: 2
+      n_workers: Null
+    grid:
+      local_batch_size: 16

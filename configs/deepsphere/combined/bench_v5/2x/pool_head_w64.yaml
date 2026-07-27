@@ -1,0 +1,111 @@
+# ============================================================================
+# bench_v5 — LONGER (2x12 h chained) combined-probe GCNN runs (see bench_v5/2x/pool_head.yaml for the full
+# rationale + chained-run contract). THIS FILE = pool_head_w64: the two POSITIVE bench_v4 levers STACKED.
+#
+# NEW config (not a bench_v4 copy). Combines:
+#   (1) the winning READOUT   -> map_pool: mean, map_feature_dim: null   (from pool_head)
+#   (2) deep-body WIDTH x2    -> kwargs.base_channels 32 -> 64           (from w64; deep body 512, pinch 64)
+# The two levers are structurally independent (head vs body), so the hypothesis is they add. This is the
+# main "beat the transformer" shot of bench_v5.
+#
+# BALANCING THE FUSION (differs from pool_head): with base_channels 64 the deep body is 512 ch, so the
+# mean-pool readout produces a 512-d map vector (pool_head's base 32 -> 256-d). To keep the two branches
+# balanced at the concat, the Cls embedding ends at 512 (not pool_head's 256), so the fused map+Cls
+# vector into the head is 1024-d (512 + 512) -- the same fused width as the transformer t2_cls (512+512).
+# Because the pooled readout DROPS the 114688->64 flatten projection (~7.3M params), we can afford the
+# wider body without a param blow-up: this is roughly w64's body with a lighter, better head.
+#
+# n_steps CONFIRMED (2026-07-24). This exact geometry was benchmarked (job 2891966): 290.7 ms/step,
+# 18.55M params, 7.15 GB -- essentially identical to w64's 290.9 ms, so the "~= w64" estimate held and
+# the mean-pool readout is indeed a hair cheaper than flatten+Dense. Same real throughput as w64
+# (2.72 it/s) -> 2.72 x 79.2 ks = 215k -> floor 10k = 210k. peak 7.15 GB is well within the safe band.
+# (This file lives in bench_v5/2x/, which benchmark_v5.sh does NOT glob; to re-benchmark, pass the
+# repo-relative path: BENCH_CONFIGS="y3-deep-lss/configs/deepsphere/combined/bench_v5/2x/pool_head_w64.yaml"
+# sbatch submissions/clariden/benchmark/benchmark_v5.sh.) If a real 4-GPU run measures a different it/s,
+# reset n_steps = it/s x 79.2 ks (floor 10k) so the cosine anneals fully -- an oversized n_steps would
+# leave the LR schedule unfinished and bias the comparison.
+# ============================================================================
+name: deepsphere_default
+
+training:
+  # TOTAL budget across the 2x12 h chain (cosine spans this; job 2 trains the remainder). PROVISIONAL.
+  n_steps: 210000  # ~22 h total train, PROVISIONAL: assume ~= w64 (2.72 real it/s) x 79.2 ks, floor 10k; RE-SIZE after benchmarking this geometry
+  output_every: Null
+  checkpoint_every: 5000  # halved from 10k for the TIMEOUT handoff (see pool_head.yaml)
+  vali_every: 1000
+  eval_every: Null
+
+optimization:
+  optimizer: adam
+  gradient_clipping:
+    clip_by_value: null
+    clip_by_norm: null
+    clip_by_global_norm: 1.0
+  mutual_info_loss:
+    learning_rate: 1.0e-4
+    optimizer_kwargs:
+      beta_1: 0.9
+      beta_2: 0.999
+    scheduler: cosine
+    warmup_steps: 5000
+    warmup_init_learning_rate: 1.0e-5
+    decay_alpha: 0.0
+    ema_momentum: null
+
+network:
+  name: resnet
+  # sparse-matmul backend for the graph convs: csr = cuSPARSE csrmm (benchmarked winner, app default).
+  spmm_backend: csr
+  n_neighbors: 60
+  max_checkpoints: 50
+  save_second_to_last_layer: False
+  z_bank_size: Null
+  input_norm: true
+  smooth_nside:
+    clustering: 256
+  map_pool: mean  # <-- mean-pool over pixels (the winning readout); with base 64 the pooled map is 512-d
+  map_feature_dim: null  # <-- no projection: the 512-d pooled map goes straight to map_norm + concat
+  cls:
+    n_bins: 16
+    transform: asinh_per_feature
+    asinh_default_scale: null
+    embedding_layers: [512, 512, 512, 512]  # <-- last entry 512 to balance the 512-d pooled map; fused = 1024
+    embedding_dropout_rate: 0.1
+  kwargs:
+    base_channels: 64  # <-- WIDTH x2 (default 32); deep body 512, fusion pinch 64
+    pool_layers: 3
+    conv_layers: 2
+    residual_layers: 5
+    poly_degree: 5
+    head_type: "dense"
+    dense_layers: []
+    dropout_rate: 0.1
+
+dset:
+  training:
+    common:
+      is_eval: False
+      n_readers: 32
+      n_prefetch: 4
+      n_workers: Null
+    grid:
+      local_batch_size: 16
+      file_name_shuffle_buffer: 64
+      examples_shuffle_buffer: 256
+  validation:
+    n_batches: 50
+    common:
+      is_eval: True
+      n_readers: 8
+      n_prefetch: 2
+      n_workers: 16
+    grid:
+      local_batch_size: 16
+  eval:
+    common:
+      is_eval: True
+      n_readers: 64
+      n_prefetch: 2
+      n_workers: Null
+    grid:
+      local_batch_size: 16
