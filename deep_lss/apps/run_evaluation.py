@@ -81,6 +81,13 @@ def setup():
         action="store_true",
         help="evaluate all checkpoints (instead of only the latest one)",
     )
+    parser.add_argument(
+        "--restore_checkpoint_path",
+        type=str,
+        default=None,
+        help="evaluate a specific checkpoint (e.g. .../checkpoint/ckpt-15) instead of the latest; "
+        "get_step() reads the restored train_step, so output files are labeled with that step.",
+    )
     parser.add_argument("--debug", action="store_true", help="activate debug mode")
     parser.add_argument("--file_label", type=str, default=None, help="A suffix that is appended to the files")
     parser.add_argument("--wandb", action="store_true", help="log to weights & biases, otherwise log to tensorboard")
@@ -570,6 +577,10 @@ if __name__ == "__main__":
             wandb_artifact = wandb.Artifact(name="evaluation-predictions", type="predictions")
             wandb_artifact.add_file(local_path=out_file)
             wandb_run.log_artifact(wandb_artifact)
+
+    if args.restore_checkpoint_path is not None:
+        LOGGER.warning(f"Restoring the requested checkpoint {args.restore_checkpoint_path} instead of the latest")
+        model.restore_model_from_checkpoint_path(args.restore_checkpoint_path)
 
     if args.evaluate_all_checkpoints:
         LOGGER.warning(f"Evaluating all checkpoints")
