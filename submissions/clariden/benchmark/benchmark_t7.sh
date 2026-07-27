@@ -8,7 +8,7 @@
 #SBATCH --gpus-per-task=1
 #SBATCH --cpus-per-task=72
 #SBATCH --job-name=bench_t7
-#SBATCH --output=/iopsstor/scratch/cscs/athomsen/deep_lss/bench_t7/slurm/slurm-%j.out
+#SBATCH --output=/iopsstor/scratch/cscs/athomsen/deep_lss/claude/bench/t7/slurm/slurm-%j.out
 
 # Quick double-check of the bench_t7 configs: each is bench_t6/default.yaml (the winning base
 # architecture) + one feature toggle. Confirm that at the base training batch (local_batch_size 20)
@@ -25,7 +25,7 @@ R="/users/athomsen/dlss/repos"
 SCRIPT="$R/y3-deep-lss/deep_lss/apps/benchmark_transformer.py"
 T6_DIR="$R/y3-deep-lss/configs/transformer/lensing/bench_t6"
 T7_DIR="$R/y3-deep-lss/configs/transformer/lensing/bench_t7"
-OUT_DIR="/iopsstor/scratch/cscs/athomsen/deep_lss/bench_t7"
+OUT_DIR="/iopsstor/scratch/cscs/athomsen/deep_lss/claude/bench/t7"
 JSONL="$OUT_DIR/benchmark_results.jsonl"
 mkdir -p "$OUT_DIR/slurm"
 

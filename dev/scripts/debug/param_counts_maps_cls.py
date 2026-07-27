@@ -6,11 +6,19 @@ per-layer summary. Run inside the tensorflow container on a compute node (see th
 file).
 """
 
+import os
+
 import numpy as np
 import tensorflow as tf
 
 REPOS = "/users/athomsen/dlss/repos"
-OUT = "/iopsstor/scratch/cscs/athomsen/deep_lss/runs/smoke_multires_gcnn"
+OUT = "/iopsstor/scratch/cscs/athomsen/deep_lss/claude/tmp/smoke_multires_gcnn"
+
+# Optional override to compare the current raw-concat fusion (map_feature_dim unset) against a
+# common bottleneck width for both branches: set MAP_FEATURE_DIM to add a Dense map_projection of
+# that width and resize the Cls embedding branch's final layer to match.
+_MAP_FEATURE_DIM_OVERRIDE = os.environ.get("MAP_FEATURE_DIM")
+MAP_FEATURE_DIM_OVERRIDE = int(_MAP_FEATURE_DIM_OVERRIDE) if _MAP_FEATURE_DIM_OVERRIDE else None
 
 from msfm.utils import input_output
 from deep_lss.utils import configuration
@@ -61,6 +69,9 @@ for probe, probes_cfg in CASES:
     )
     _, l_min_per_pair, l_max_per_pair = configuration.get_cls_bounds_per_pair(msfm_conf, dlss_conf)
     cls_conf = net_conf["network"]["cls"]
+    if MAP_FEATURE_DIM_OVERRIDE is not None:
+        cls_conf = dict(cls_conf)
+        cls_conf["embedding_layers"] = list(cls_conf["embedding_layers"][:-1]) + [MAP_FEATURE_DIM_OVERRIDE]
     map_encoder = None
     if is_multires:
         map_encoder = ResNetMultiResEncoder(
@@ -87,7 +98,9 @@ for probe, probes_cfg in CASES:
         l_min_per_pair=l_min_per_pair,
         l_max_per_pair=l_max_per_pair,
         cls_transform=cls_conf["transform"],
-        map_feature_dim=net_conf["network"].get("map_feature_dim", None),
+        map_feature_dim=MAP_FEATURE_DIM_OVERRIDE
+        if MAP_FEATURE_DIM_OVERRIDE is not None
+        else net_conf["network"].get("map_feature_dim", None),
         map_encoder=map_encoder,
     )
     if network.gcnn is not None:
@@ -96,6 +109,8 @@ for probe, probes_cfg in CASES:
         (tf.zeros((2, len(smooth_indices), n_z_bins)), tf.zeros((2, 3 * n_side, len(l_min_per_pair)))),
         training=False,
     )
+    if network.map_projection is not None:
+        print(f"map_projection kernel shape: {tuple(network.map_projection.kernel.shape)}")
     total = network.count_params()
     trainable = int(sum(np.prod(v.shape) for v in network.trainable_variables))
     non_trainable = int(sum(np.prod(v.shape) for v in network.non_trainable_variables))

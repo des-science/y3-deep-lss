@@ -8,7 +8,7 @@
 #SBATCH --gpus-per-task=1
 #SBATCH --cpus-per-task=72
 #SBATCH --job-name=bench_maps
-#SBATCH --output=/iopsstor/scratch/cscs/athomsen/deep_lss/bench_transformer/maps/slurm/slurm-%j.out
+#SBATCH --output=/iopsstor/scratch/cscs/athomsen/deep_lss/claude/bench/transformer/maps/slurm/slurm-%j.out
 
 # Benchmark the new per-probe transformer maps.yaml configs (lensing reference + clustering +
 # combined) for single-GPU memory fit and step time, so we can pick the max comfortable per-GPU
@@ -21,7 +21,7 @@
 
 R="/users/athomsen/dlss/repos"
 SCRIPT="$R/y3-deep-lss/deep_lss/apps/benchmark_transformer.py"
-OUT_DIR="/iopsstor/scratch/cscs/athomsen/deep_lss/bench_transformer/maps"
+OUT_DIR="/iopsstor/scratch/cscs/athomsen/deep_lss/claude/bench/transformer/maps"
 JSONL="$OUT_DIR/benchmark_results.jsonl"
 BATCH_SIZES="${BATCH_SIZES:-16 24 32 48 64}"
 

@@ -8,14 +8,14 @@
 #SBATCH --gpus-per-task=1
 #SBATCH --cpus-per-task=72
 #SBATCH --job-name=bench_t7_sym
-#SBATCH --output=/iopsstor/scratch/cscs/athomsen/deep_lss/bench_t7/slurm/slurm-%j.out
+#SBATCH --output=/iopsstor/scratch/cscs/athomsen/deep_lss/claude/bench/t7/slurm/slurm-%j.out
 
 # symmetric.yaml at b20 lands at 89.6 GB (above the ~85 GB NCCL-safe band). Find the largest
 # batch that stays inside the band (b16, b18) so we can re-size its n_steps for ~11 h at 4x GH200.
 R="/users/athomsen/dlss/repos"
 SCRIPT="$R/y3-deep-lss/deep_lss/apps/benchmark_transformer.py"
 CFG="$R/y3-deep-lss/configs/transformer/lensing/bench_t7/symmetric.yaml"
-OUT_DIR="/iopsstor/scratch/cscs/athomsen/deep_lss/bench_t7"
+OUT_DIR="/iopsstor/scratch/cscs/athomsen/deep_lss/claude/bench/t7"
 JSONL="$OUT_DIR/symmetric_batch.jsonl"
 mkdir -p "$OUT_DIR/slurm"
 

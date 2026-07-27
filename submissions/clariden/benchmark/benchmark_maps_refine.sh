@@ -8,7 +8,7 @@
 #SBATCH --gpus-per-task=1
 #SBATCH --cpus-per-task=72
 #SBATCH --job-name=bench_maps_ref
-#SBATCH --output=/iopsstor/scratch/cscs/athomsen/deep_lss/bench_transformer/maps/slurm/slurm-%j.out
+#SBATCH --output=/iopsstor/scratch/cscs/athomsen/deep_lss/claude/bench/transformer/maps/slurm/slurm-%j.out
 
 # Refine the maps.yaml batch ceilings from benchmark_maps.sh: probe the 16<->24 OOM gap for the
 # full-res probes (lensing, combined) and push the nside-256 clustering probe higher. Same
@@ -16,7 +16,7 @@
 
 R="/users/athomsen/dlss/repos"
 SCRIPT="$R/y3-deep-lss/deep_lss/apps/benchmark_transformer.py"
-OUT_DIR="/iopsstor/scratch/cscs/athomsen/deep_lss/bench_transformer/maps"
+OUT_DIR="/iopsstor/scratch/cscs/athomsen/deep_lss/claude/bench/transformer/maps"
 JSONL="$OUT_DIR/benchmark_results_refine.jsonl"
 
 MSFM="$R/multiprobe-simulation-forward-model/configs/v16/rot_in_place.yaml"

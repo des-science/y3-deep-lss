@@ -6,7 +6,7 @@
 #SBATCH --exclusive
 #SBATCH --mem=450G
 #SBATCH --job-name=cls_tf_bench
-#SBATCH --output=/iopsstor/scratch/cscs/athomsen/deep_lss/slurm/slurm-%j.out
+#SBATCH --output=/iopsstor/scratch/cscs/athomsen/deep_lss/claude/jobs/misc/slurm-%j.out
 
 # Phase 1 of the Cls transformer hyperparameter search: a SIZE LADDER, training only.
 #
@@ -45,7 +45,7 @@ INPUT="$MYSCRATCH/deep_lss/data/$VERSION/$SUBVERSION"
 OUTPUT="$MYSCRATCH/deep_lss/runs/$VERSION/$SUBVERSION/cls/$PROBE"
 
 # SLURM --output goes to scratch, not home: the home VAST quota silently drops writes mid-job.
-mkdir -p "$MYSCRATCH/deep_lss/slurm"
+mkdir -p "$MYSCRATCH/deep_lss/claude/jobs/misc"
 
 # The hard_rebinned cache is net/loss-independent and all rungs share scale_cut + cls_n_bins, so one
 # precache serves all of them. Idempotent: a no-op (~40 s) when the file is already there, which it

@@ -8,7 +8,7 @@
 #SBATCH --gpus-per-task=1
 #SBATCH --cpus-per-task=72
 #SBATCH --job-name=bench_precision
-#SBATCH --output=/iopsstor/scratch/cscs/athomsen/deep_lss/bench_transformer/slurm/slurm-%j.out
+#SBATCH --output=/iopsstor/scratch/cscs/athomsen/deep_lss/claude/bench/transformer/slurm/slurm-%j.out
 
 # Benchmark the lensing/bench candidate configs at batch 16, each using its OWN precision and
 # jit_compile_body (set in the config). Validates the float32-smoothing carve-out: bf16 configs
@@ -23,7 +23,7 @@
 R="/users/athomsen/dlss/repos"
 SCRIPT="$R/y3-deep-lss/deep_lss/apps/benchmark_transformer.py"
 CONFIGS_DIR="$R/y3-deep-lss/configs/transformer/lensing/bench"
-OUT_DIR="/iopsstor/scratch/cscs/athomsen/deep_lss/bench_transformer"
+OUT_DIR="/iopsstor/scratch/cscs/athomsen/deep_lss/claude/bench/transformer"
 JSONL="$OUT_DIR/bench_results.jsonl"
 
 MSFM="$R/multiprobe-simulation-forward-model/configs/v16/rot_in_place.yaml"

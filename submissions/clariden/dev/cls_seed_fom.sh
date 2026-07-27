@@ -6,7 +6,7 @@
 #SBATCH --exclusive
 #SBATCH --mem=450G
 #SBATCH --job-name=cls_seed_fom
-#SBATCH --output=/iopsstor/scratch/cscs/athomsen/deep_lss/slurm/slurm-%j.out
+#SBATCH --output=/iopsstor/scratch/cscs/athomsen/deep_lss/claude/jobs/misc/slurm-%j.out
 
 # Does the median-over-grid FoM move across TRAINING SEEDS?
 #
@@ -45,7 +45,7 @@ FLOW_CONFIG="$REPOS/multiprobe-simulation-inference/configs/flow/maf.yaml"
 MODELS=("v1_bench_d128_L2" "v1_seeds_d128_L2_s43" "v1_seeds_d128_L2_s44"
         "v1_bench_mlp_ref"  "v1_seeds_mlp_ref_s43"  "v1_seeds_mlp_ref_s44")
 
-mkdir -p "$MYSCRATCH/deep_lss/slurm"
+mkdir -p "$MYSCRATCH/deep_lss/claude/jobs/misc"
 
 i=0
 for M in "${MODELS[@]}"; do

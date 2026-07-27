@@ -8,7 +8,7 @@
 #SBATCH --gpus-per-task=1
 #SBATCH --cpus-per-task=72
 #SBATCH --job-name=bench_transformer
-#SBATCH --output=/iopsstor/scratch/cscs/athomsen/deep_lss/bench_transformer/slurm/slurm-%j.out
+#SBATCH --output=/iopsstor/scratch/cscs/athomsen/deep_lss/claude/bench/transformer/slurm/slurm-%j.out
 
 # Benchmark the nested-transformer hyperparameter configs for GPU memory fit and step time.
 #
@@ -26,7 +26,7 @@ SCRIPT="$R/y3-deep-lss/deep_lss/apps/benchmark_transformer.py"
 CONFIGS_DIR="$R/y3-deep-lss/configs/transformer/lensing/hyperparameters"
 # outputs go to scratch, not home (the home per-user quota is easily exceeded and silently
 # drops the JSONL/log appends, which corrupts the results table)
-OUT_DIR="/iopsstor/scratch/cscs/athomsen/deep_lss/bench_transformer"
+OUT_DIR="/iopsstor/scratch/cscs/athomsen/deep_lss/claude/bench/transformer"
 JSONL="$OUT_DIR/benchmark_results.jsonl"
 BATCH_SIZES="${BATCH_SIZES:-16 32 64}"
 

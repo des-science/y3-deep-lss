@@ -8,7 +8,7 @@
 #SBATCH --gpus-per-task=1
 #SBATCH --cpus-per-task=72
 #SBATCH --job-name=bench_t2_embed64
-#SBATCH --output=/iopsstor/scratch/cscs/athomsen/deep_lss/bench_t2/slurm/slurm-%j.out
+#SBATCH --output=/iopsstor/scratch/cscs/athomsen/deep_lss/claude/bench/t2/slurm/slurm-%j.out
 
 # Size the bench_t2/embed64.yaml clustering config (base_embed_dim 32 -> 64, the lensing-matched
 # stem width): GPU-memory fit and step time over a batch ladder, to pick the training batch (largest
@@ -28,7 +28,7 @@
 R="/users/athomsen/dlss/repos"
 SCRIPT="$R/y3-deep-lss/deep_lss/apps/benchmark_transformer.py"
 CFG_DIR="$R/y3-deep-lss/configs/transformer/clustering"
-OUT_DIR="/iopsstor/scratch/cscs/athomsen/deep_lss/bench_t2"
+OUT_DIR="/iopsstor/scratch/cscs/athomsen/deep_lss/claude/bench/t2"
 JSONL="$OUT_DIR/benchmark_results.jsonl"
 mkdir -p "$OUT_DIR/slurm"
 

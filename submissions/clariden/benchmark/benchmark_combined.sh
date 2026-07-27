@@ -8,7 +8,7 @@
 #SBATCH --gpus-per-task=1
 #SBATCH --cpus-per-task=72
 #SBATCH --job-name=bench_combined
-#SBATCH --output=/iopsstor/scratch/cscs/athomsen/deep_lss/bench_combined/slurm/slurm-%j.out
+#SBATCH --output=/iopsstor/scratch/cscs/athomsen/deep_lss/claude/bench/combined/slurm/slurm-%j.out
 
 # Size local_batch_size + n_steps for the MULTI-RESOLUTION combined-probe transformer
 # (configs/transformer/combined/maps+cls.yaml). The map branch is now HealpixMultiResMapEncoder:
@@ -30,7 +30,7 @@ R="/users/athomsen/dlss/repos"
 SCRIPT="$R/y3-deep-lss/deep_lss/apps/benchmark_transformer.py"
 T6_DIR="$R/y3-deep-lss/configs/transformer/lensing/bench_t6"
 COMBINED="$R/y3-deep-lss/configs/transformer/combined/maps+cls.yaml"
-OUT_DIR="/iopsstor/scratch/cscs/athomsen/deep_lss/bench_combined"
+OUT_DIR="/iopsstor/scratch/cscs/athomsen/deep_lss/claude/bench/combined"
 JSONL="$OUT_DIR/benchmark_results.jsonl"
 mkdir -p "$OUT_DIR/slurm"
 

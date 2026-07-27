@@ -8,7 +8,7 @@
 #SBATCH --gpus-per-task=1
 #SBATCH --cpus-per-task=72
 #SBATCH --job-name=bench_t6
-#SBATCH --output=/iopsstor/scratch/cscs/athomsen/deep_lss/bench_t6/slurm/slurm-%j.out
+#SBATCH --output=/iopsstor/scratch/cscs/athomsen/deep_lss/claude/bench/t6/slurm/slurm-%j.out
 
 # Benchmark the bench_t6 nested-transformer configs (lighter global attention: global_blocks 4->1)
 # for GPU-memory fit and step time, to pick per-config training batch sizes (fill the 120 GB GH200,
@@ -28,7 +28,7 @@ R="/users/athomsen/dlss/repos"
 SCRIPT="$R/y3-deep-lss/deep_lss/apps/benchmark_transformer.py"
 T6_DIR="$R/y3-deep-lss/configs/transformer/lensing/bench_t6"
 ANCHOR="$R/y3-deep-lss/configs/transformer/lensing/maps+cls.yaml"
-OUT_DIR="/iopsstor/scratch/cscs/athomsen/deep_lss/bench_t6"
+OUT_DIR="/iopsstor/scratch/cscs/athomsen/deep_lss/claude/bench/t6"
 JSONL="$OUT_DIR/benchmark_results.jsonl"
 mkdir -p "$OUT_DIR/slurm"
 

@@ -15,7 +15,7 @@ import numpy as np
 import tensorflow as tf
 
 REPOS = "/users/athomsen/dlss/repos"
-OUT = "/iopsstor/scratch/cscs/athomsen/deep_lss/runs/smoke_multires_gcnn"
+OUT = "/iopsstor/scratch/cscs/athomsen/deep_lss/claude/tmp/smoke_multires_gcnn"
 
 from msfm.utils import input_output
 from deep_lss.utils import configuration

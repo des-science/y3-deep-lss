@@ -6,7 +6,7 @@
 #SBATCH --exclusive
 #SBATCH --mem=450G
 #SBATCH --job-name=cls_tf_seeds
-#SBATCH --output=/iopsstor/scratch/cscs/athomsen/deep_lss/slurm/slurm-%j.out
+#SBATCH --output=/iopsstor/scratch/cscs/athomsen/deep_lss/claude/jobs/misc/slurm-%j.out
 
 # Phase 1b: SEED REPLICATION of the size ladder's top rungs.
 #
@@ -45,7 +45,7 @@ BASE_MODEL_NAME="v1_seeds"
 INPUT="$MYSCRATCH/deep_lss/data/$VERSION/$SUBVERSION"
 OUTPUT="$MYSCRATCH/deep_lss/runs/$VERSION/$SUBVERSION/cls/$PROBE"
 
-mkdir -p "$MYSCRATCH/deep_lss/slurm"
+mkdir -p "$MYSCRATCH/deep_lss/claude/jobs/misc"
 
 # The hard_rebinned cache was written by job 2770501 and is net/seed-independent, so no precache step.
 # 8 runs over 4 GPUs = 2 rounds; each rung early-stopped in 3-6 min at seed 42, so ~15 min total.

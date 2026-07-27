@@ -6,7 +6,7 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=288
 #SBATCH --job-name=bench_dataloader
-#SBATCH --output=/iopsstor/scratch/cscs/athomsen/deep_lss/runs/bench_dataloader/slurm-%j.out
+#SBATCH --output=/iopsstor/scratch/cscs/athomsen/deep_lss/claude/bench/dataloader/slurm-%j.out
 
 # Benchmark the GridPipeline input pipeline (no network, no GPU) across an OFAT sweep of the
 # performance knobs, for lensing / clustering / combined. One python process per configuration so
@@ -33,7 +33,7 @@ INPUT="$MYSCRATCH/deep_lss/data/$VERSION/$SUBVERSION"
 TRAIN_TFR="$INPUT/tfrecords/grid/DESy3_grid_dmb_????.tfrecord"
 MSFM_CONFIG="$REPOS/multiprobe-simulation-forward-model/configs/$VERSION/$SUBVERSION.yaml"
 
-OUTDIR="$MYSCRATCH/deep_lss/runs/bench_dataloader/${SLURM_JOB_ID:-manual}"
+OUTDIR="$MYSCRATCH/deep_lss/claude/bench/dataloader/${SLURM_JOB_ID:-manual}"
 mkdir -p "$OUTDIR"
 RESULTS="$OUTDIR/results.jsonl"
 echo "Writing results to $RESULTS"
