@@ -1,0 +1,28 @@
+# Hyperparameters for the HEALPix dense-regression U-Net (HealpixDeepNestedUNet).
+#
+# These are the tunable network knobs only. The geometry arguments
+# (num_pixels, nside, nside_down, in_channels) are fixed by the data and are set
+# in the example script, NOT here. Values below are the module defaults.
+
+# --- Capacity (reach for these first) ---
+base_embed_dim: 64        # channel width at the finest level; primary capacity dial
+growth: double            # width scaling toward the bottleneck: constant | double | full | 128
+
+# --- Depth ---
+local_blocks_per_level: 1 # local-window blocks per level (applied on encoder AND decoder side)
+global_blocks: 2          # global-attention blocks in the bottleneck (>= 1)
+
+# --- Attention ---
+num_heads: 4              # attention heads; every channel width must be divisible by this
+window_levels: 3          # nested levels each local-window attention spans
+
+# --- Compute / resolution ---
+stem_levels: 0            # fold the finest N levels into the in/out projection (0 = per-pixel in/out)
+
+# --- Regularization / stability (leave off / at defaults unless overfitting or diverging) ---
+drop_path_rate: null      # stochastic depth; null disables it (suits shallow networks)
+drop_path_schedule: linear
+residual_dropout: 0.0
+layerscale_init: null     # e.g. 1.0e-4 to stabilize deeper stacks (note: 1.0e-4, not 1e-4, for YAML)
+pre_norm: true
+mlp_ratio: 4
