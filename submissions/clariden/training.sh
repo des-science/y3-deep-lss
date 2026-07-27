@@ -40,58 +40,66 @@ fi
 REPOS="/users/athomsen/dlss/repos"
 MYSCRATCH="/iopsstor/scratch/cscs/athomsen"
 
-# VERSION/SUBVERSION may be overridden from the environment to point at a different dataset,
-# e.g. VERSION=v17 SUBVERSION=baseline (the standard-NLA, bta-free dataset — pair it with the
-# *_nla probes configs via PROBE_CONFIG=lensing_nla / combined_nla, and
-# CLS_PROBES_CONFIG=.../combined_nla.yaml).
-VERSION="${VERSION:-v16}"
-SUBVERSION="${SUBVERSION:-rot_in_place}"
+# VERSION/SUBVERSION select the dataset. Default v17/baseline: the standard-NLA, bta-free data that
+# all the per-probe defaults below (PROBE_CONFIG, CLS_PROBES_CONFIG, NET_CONFIG) are set up for.
+# To use an older dataset, override these and the non-nla probe configs, e.g.:
+#   VERSION=v16 SUBVERSION=rot_in_place PROBE_CONFIG=lensing CLS_PROBES_CONFIG=.../combined.yaml
+VERSION="${VERSION:-v17}"
+SUBVERSION="${SUBVERSION:-baseline}"
 
 STRATEGY="mirrored"
-# LOSS may be overridden from the environment (e.g. LOSS=vmim_gmm for the GMM-head control)
-LOSS="${LOSS:-vmim}"
 DATA="default"
 
 # SCALES may be overridden from the environment (e.g. SCALES=unsmoothed, SCALES=lmax_1024)
 SCALES="${SCALES:-8wl,32gc}"
 
-# PROBE may be overridden from the environment. Options: lensing / clustering / combined
-# PROBE names the physical probe and is what the run directory and the wandb tag are keyed on.
-# PROBE_CONFIG selects which configs/probes/*.yaml supplies it, defaulting to the probe name. Split
-# the two when a dataset needs a variant config but should keep the standard run layout -- e.g. on
-# the bta-free v17+ data (msfm extended_nla: False):
-#   VERSION=v17 SUBVERSION=baseline PROBE=lensing PROBE_CONFIG=lensing_nla
-# trains from lensing_nla.yaml but still writes to maps/lensing.
+# PROBE may be overridden from the environment. Options: lensing / clustering / combined.
+# PROBE names the physical probe and keys the run directory and the wandb tag.
+# PROBE_CONFIG selects which configs/probes/*.yaml supplies it. Default is auto-derived for the v17
+# NLA data: lensing/combined -> *_nla (bta-free, msfm extended_nla: False), clustering -> plain (no
+# IA params, no _nla variant). The run still writes to maps/<PROBE> regardless. On the v16 data set
+# PROBE_CONFIG=<probe> explicitly to pick the non-nla config.
 PROBE="${PROBE:-lensing}"
-PROBE_CONFIG="${PROBE_CONFIG:-$PROBE}"
+if [ -z "${PROBE_CONFIG:-}" ]; then
+    case "$PROBE" in
+        lensing|combined) PROBE_CONFIG="${PROBE}_nla" ;;
+        *)                PROBE_CONFIG="$PROBE" ;;
+    esac
+fi
 
-ARCH="transformer"
+# LOSS selects the VMIM variational head via configs/loss/<LOSS>.yaml (vmim = RealNVP flow,
+# vmim_gmm = Gaussian-mixture). The head is NOT carried in the per-probe net config — it lives in the
+# loss config, so the per-probe default is set here (2026-07-21): clustering defaults to the GMM head,
+# lensing/combined to the flow. Rationale: the GMM beats the flow on clustering DES FoM (seen on both
+# DeepSphere and the transformer); the flow wins or ties on the other probes. Applies to every ARCH
+# (the head is orthogonal to the network). Override LOSS to force either head on any probe.
+if [ -z "${LOSS:-}" ]; then
+    case "$PROBE" in
+        clustering) LOSS="vmim_gmm" ;;
+        *)          LOSS="vmim" ;;
+    esac
+fi
 
-# MODEL selects a bench_t8 config: the bench_t6/default.yaml winning architecture, now with the
-# cosine LR schedule (cosine did well back in bench_t4; bench_t6/t7 used constant LR). Options:
-#   flat        — the FLAT-schedule control (scheduler Null); the t8_flat run dir is a copy of the
-#                 finished t7_default run, so no retrain is needed (run MODEL=flat only to reproduce).
-#   default     — flat's architecture + cosine schedule.
-#   geodesic    — default arch + scalar geodesic distance-kernel attention bias (concat merge), + cosine.
-#   masked      — default arch + masked attention, + cosine.
-#   multiscale  — default arch + per-stage multi-scale readout, + cosine.
-# Each config carries its own local_batch_size and n_steps (sized for ~11 h; geodesic runs at batch 18
-# because the distance-bias pathway pushes batch 20 into the ~89.6 GB NCCL time-bomb zone, the rest at 20).
-# Override MODEL from the environment to sweep the variants.
-MODEL="${MODEL:-default}"
+ARCH="${ARCH:-transformer}"
 
 PROBES_CONFIG="$REPOS/y3-deep-lss/configs/probes/${PROBE_CONFIG}.yaml"
 
-# The rebinned-Cls precache below spans ALL probe pairs, so it uses the combined probes config
-# regardless of PROBE. Override for bta-free datasets: CLS_PROBES_CONFIG=.../combined_nla.yaml (v17+).
-CLS_PROBES_CONFIG="${CLS_PROBES_CONFIG:-$REPOS/y3-deep-lss/configs/probes/combined.yaml}"
-# NET_CONFIG and MODEL_DIR default to the bench_t8 sweep but may be overridden from the environment,
-# e.g. to run the winning base under a different scale cut, or the combined multi-res maps+cls config:
-#   NET_CONFIG=.../bench_t6/default.yaml SCALES=unsmoothed MODEL_DIR=default_unsmoothed
-#   PROBE=combined NET_CONFIG=.../combined/maps+cls.yaml MODEL_DIR=combined_maps+cls
-NET_CONFIG="${NET_CONFIG:-$REPOS/y3-deep-lss/configs/transformer/lensing/bench_t8/${MODEL}.yaml}"
+# The rebinned-Cls precache spans ALL probe pairs, so it always uses the combined probes config
+# regardless of PROBE. Default is the v17 NLA variant; on v16 set CLS_PROBES_CONFIG=.../combined.yaml.
+CLS_PROBES_CONFIG="${CLS_PROBES_CONFIG:-$REPOS/y3-deep-lss/configs/probes/combined_nla.yaml}"
+# NET_CONFIG points at the network + training config. Default: the finalized per-probe unified recipe
+# (configs/transformer/<probe>/maps+cls.yaml — flow VMIM head, per-probe 12 h budget). Override to run
+# the maps-only variant or an archived bench config, e.g.:
+#   NET_CONFIG=$REPOS/y3-deep-lss/configs/transformer/lensing/maps.yaml
+#   NET_CONFIG=$REPOS/y3-deep-lss/configs/transformer/lensing/bench_t8/masked.yaml
+NET_CONFIG="${NET_CONFIG:-$REPOS/y3-deep-lss/configs/transformer/${PROBE}/maps+cls.yaml}"
 
-MODEL_DIR="${MODEL_DIR:-t8_${MODEL}}"
+# NET_NAME (config basename, e.g. "maps+cls") tags the run in wandb and names the default run dir.
+NET_NAME="$(basename "${NET_CONFIG%.yaml}")"
+# MODEL_DIR is the run directory under maps/<probe>/. Defaults to the config name so a bare run is
+# self-describing and will not clobber the curated t2_* runs — set it per run for anything to keep
+# (e.g. MODEL_DIR=t2_cls).
+MODEL_DIR="${MODEL_DIR:-$NET_NAME}"
 
 
 INPUT="$MYSCRATCH/deep_lss/data/$VERSION/$SUBVERSION"
@@ -139,7 +147,7 @@ srun --environment=tensorflow --gpu-bind=none --output=""$LOG"_training.log" \
         --net_config=$NET_CONFIG \
         --dist_strategy="$STRATEGY" \
         --wandb \
-        --wandb_tags "$VERSION" "$SUBVERSION" "$PROBE" "$LOSS" "$STRATEGY" "$ARCH" "$MODEL" "$SCALES" \
+        --wandb_tags "$VERSION" "$SUBVERSION" "$PROBE" "$LOSS" "$STRATEGY" "$ARCH" "$NET_NAME" "$SCALES" \
         $RESTORE_FLAG $PROFILE_FLAG
 
 # SKIP_EVAL=1 stops after training and skips the evaluation + inference tail. Use it for short

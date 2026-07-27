@@ -38,7 +38,7 @@ read -r -a PROBES <<< "${PROBES:-lensing clustering 2x2pt combined}"
 NET="${NET:-mlp}"
 CLS_CONFIG="${CLS_CONFIG:-default}"
 
-LOSS="vmim"
+LOSS="${LOSS:-vmim}"
 # LOSS="vmim_vicreg_inv"
 # LOSS="vmim_vicreg_inv_10"
 # LOSS="vmim_vicreg"
