@@ -1,20 +1,24 @@
 #!/bin/bash
+# Moved to deprecated/ 2026-08-04: superseded by submissions/clariden/cls_experiment.sh, the
+# generalized form of this launcher (MODEL_NAME/PROBE/LOSS/NET/CLS_CONFIG env vars).
 #SBATCH --account=a0158
 #SBATCH --partition=normal
 #SBATCH --time=04:00:00
 #SBATCH --nodes=1
 #SBATCH --exclusive
 #SBATCH --mem=450G
-#SBATCH --job-name=cls_flow_std_vmim
-#SBATCH --output=/iopsstor/scratch/cscs/athomsen/deep_lss/runs/v16/rot_in_place/cls/lensing/lmax_1024_flow_std/logs/slurm-%j.out
+#SBATCH --job-name=cls_min_vmim
+#SBATCH --output=/iopsstor/scratch/cscs/athomsen/deep_lss/runs/v16/rot_in_place/cls/lensing/lmax_1024_min/logs/slurm-%j.out
 
-# Flow-head counterpart of cls_std_vmim.sh: 6-param lmax_1024 baseline with the RealNVP
-# variational head (now the configs/loss/vmim.yaml default; recorded run: fac=1, 6 coupling layers, 2x128, theta
-# standardization -- newly implemented for the flow head in nets/estimators/normalizing_flow.py).
-# Tests whether the historical flow-head instability was the unstandardized theta (raw theta feeds
-# the coupling MLPs directly). The head vali NLL is directly comparable to the GMM lmax_1024_std
-# run (both physical-unit NLLs over the same target) = a bound-tightness measurement.
-# Everything lands in cls/lensing/lmax_1024_flow_std/, no existing run is touched.
+# Dimensionality control for the full-VMIM ext test: retrain the lmax_1024 lensing Cls compression
+# with the mutual-information target REDUCED to (Om, s8, w0) only, implicitly marginalizing the IA
+# parameters like the DES Y3 SBI reference papers (whose flows live in this 3D space). 3-dim
+# summaries + a 6-dim flow joint (vs 12 baseline / 22 ext). Readout: if the 2d/3d FoM(Om,S8) and
+# marginals match the 6-param lmax_1024 baseline, compression and density estimation are healthy at
+# 6 params and the ext-run degradation is a pure target/flow-dimensionality cost; a GAIN here would
+# mean even the 6-param target already pays a dimensionality penalty vs the references' setup.
+# Everything lands in cls/lensing/lmax_1024_min/, no existing run is touched; the lmax_1024 Cls
+# cache is scale-dependent but probe/params-independent and already exists.
 
 export SLURM_CPUS_PER_TASK=72
 export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK}
@@ -27,14 +31,12 @@ VERSION="v16"
 SUBVERSION="rot_in_place"
 INPUT="$MYSCRATCH/deep_lss/data/$VERSION/$SUBVERSION"
 
-PROBE="lensing"
+PROBE="lensing_min"
 SCALES="lmax_1024"
 MLP="default"
-LOSS="vmim"  # vmim_flow_std.yaml became the vmim.yaml default (flow head + standardization);
-             # NOTE vmim.yaml now also sets permute: true -- the recorded lmax_1024_flow_std run
-             # (job 2737883) trained WITHOUT permutation (equivalent downstream, see ablation)
+LOSS="vmim_gmm"  # standardized GMM head; the recorded lmax_1024_min run used the pre-2026-07-12 vmim.yaml (GMM, unstandardized)
 DATA="default"
-MODEL_NAME="lmax_1024_flow_std"
+MODEL_NAME="lmax_1024_min"
 
 OUTPUT="$MYSCRATCH/deep_lss/runs/$VERSION/$SUBVERSION/cls/lensing"
 FLOW_CONFIG="$REPOS/multiprobe-simulation-inference/configs/flow/maf.yaml"

@@ -1,4 +1,8 @@
 #!/bin/bash
+# Moved to deprecated/ 2026-08-04: this is a copy-paste of dev/cls_zreg_ablation.sh differing
+# only in which PROBE line is commented out -- and its own --job-name below was never updated
+# off the source file's ("cls_zreg_ablation"). Do not resurrect; use dev/cls_zreg_ablation.sh
+# with PROBE overridden instead.
 #SBATCH --account=a0158
 #SBATCH --partition=normal
 #SBATCH --time=01:00:00

@@ -1,22 +1,26 @@
 #!/bin/bash
+# Moved to deprecated/ 2026-08-04: superseded by submissions/clariden/cls_experiment.sh, the
+# generalized form of this launcher (MODEL_NAME/PROBE/LOSS/NET/CLS_CONFIG env vars).
 #SBATCH --account=a0158
 #SBATCH --partition=normal
 #SBATCH --time=04:00:00
 #SBATCH --nodes=1
 #SBATCH --exclusive
 #SBATCH --mem=450G
-#SBATCH --job-name=cls_min_vmim
-#SBATCH --output=/iopsstor/scratch/cscs/athomsen/deep_lss/runs/v16/rot_in_place/cls/lensing/lmax_1024_min/logs/slurm-%j.out
+#SBATCH --job-name=cls_min_fac2_vmim
+#SBATCH --output=/iopsstor/scratch/cscs/athomsen/deep_lss/runs/v16/rot_in_place/cls/lensing/lmax_1024_min_fac2/logs/slurm-%j.out
 
-# Dimensionality control for the full-VMIM ext test: retrain the lmax_1024 lensing Cls compression
-# with the mutual-information target REDUCED to (Om, s8, w0) only, implicitly marginalizing the IA
-# parameters like the DES Y3 SBI reference papers (whose flows live in this 3D space). 3-dim
-# summaries + a 6-dim flow joint (vs 12 baseline / 22 ext). Readout: if the 2d/3d FoM(Om,S8) and
-# marginals match the 6-param lmax_1024 baseline, compression and density estimation are healthy at
-# 6 params and the ext-run degradation is a pure target/flow-dimensionality cost; a GAIN here would
-# mean even the 6-param target already pays a dimensionality penalty vs the references' setup.
-# Everything lands in cls/lensing/lmax_1024_min/, no existing run is touched; the lmax_1024 Cls
-# cache is scale-dependent but probe/params-independent and already exists.
+# Decoupling test for the VMIM target-dimensionality penalty: 3-param target (Om, s8, w0) like
+# lmax_1024_min, but with dim_summary_fac=2 so the summary stays 6-dim like the baseline. This
+# separates the two components that were scaled together in the 3p/6p/11p ladder (dim_summary_fac=1
+# ties dim(s) = n_params): the compression target content vs the flow's random-variable dimension.
+# Readout against DESy3 FoM2D(Om,S8) wCDM min 452 / baseline 352: FoM ~ min -> the 6-dim summary
+# costs the flow ~nothing and the 3p->6p penalty is compression-side (MI target diluting info into
+# the IA directions); FoM ~ baseline -> the penalty is the flow's 6-dim density estimation and
+# shrinking the target buys nothing on its own. Caveat (from the since-removed configs/loss/cls/vmim_flow_fac1.yaml):
+# fac=2 once produced overconfident posteriors with the flow head (v28_vmim) -- check coverage,
+# not just FoM. Everything lands in cls/lensing/lmax_1024_min_fac2/, no existing run is touched;
+# the lmax_1024 Cls cache is scale-dependent but probe/params-independent and already exists.
 
 export SLURM_CPUS_PER_TASK=72
 export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK}
@@ -32,9 +36,9 @@ INPUT="$MYSCRATCH/deep_lss/data/$VERSION/$SUBVERSION"
 PROBE="lensing_min"
 SCALES="lmax_1024"
 MLP="default"
-LOSS="vmim_gmm"  # standardized GMM head; the recorded lmax_1024_min run used the pre-2026-07-12 vmim.yaml (GMM, unstandardized)
+LOSS="vmim_fac2"
 DATA="default"
-MODEL_NAME="lmax_1024_min"
+MODEL_NAME="lmax_1024_min_fac2"
 
 OUTPUT="$MYSCRATCH/deep_lss/runs/$VERSION/$SUBVERSION/cls/lensing"
 FLOW_CONFIG="$REPOS/multiprobe-simulation-inference/configs/flow/maf.yaml"

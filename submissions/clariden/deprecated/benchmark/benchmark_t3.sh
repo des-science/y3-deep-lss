@@ -1,4 +1,6 @@
 #!/bin/bash
+# Moved to deprecated/ 2026-08-04: superseded by submissions/clariden/benchmark_sweep.sh, the
+# generalized form of this harness (BENCH_SCRIPT/CONFIGS_GLOB/OUT_DIR/BATCH_SIZES env vars).
 #SBATCH --account=a0158
 #SBATCH --partition=normal
 #SBATCH --time=02:00:00
@@ -7,30 +9,32 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-task=1
 #SBATCH --cpus-per-task=72
-#SBATCH --job-name=bench_t6
-#SBATCH --output=/iopsstor/scratch/cscs/athomsen/deep_lss/claude/bench/t6/slurm/slurm-%j.out
+#SBATCH --job-name=bench_t3
+#SBATCH --output=/iopsstor/scratch/cscs/athomsen/deep_lss/claude/bench/t3/slurm/slurm-%j.out
 
-# Benchmark the bench_t6 nested-transformer configs (lighter global attention: global_blocks 4->1)
-# for GPU-memory fit and step time, to pick per-config training batch sizes (fill the 120 GB GH200,
-# keep NCCL comm-buffer headroom) and a step count for < 10 h of training.
+# Benchmark the bench_t3 nested-transformer configs for GPU-memory fit and step time, to pick
+# per-config training batch sizes (fill the 120 GB GH200 / stay under the softmax kernel-launch
+# ceiling) and a step count for ~10 h of training.
 #
-# Sweeps default.yaml (maps+cls arch, global_blocks 1) and stem.yaml (default + patchified stem,
-# one hierarchical level fewer -> much lighter) over per-config batch ladders. Also benchmarks
-# maps+cls.yaml @ batch 20 as a synthetic->real calibration anchor: its real 4-GPU wall time is
-# known (t5_cls job 2702990: 120000 steps in 9h22m31s = 281 ms/step effective, incl vali/ckpt).
+# Sweeps each bench_t3/*.yaml over a batch ladder. Also benchmarks a few bench_t2 configs at
+# batch 16 as synthetic->real calibration anchors (we have their real 4-GPU it/s from the t2
+# training logs), so the single-GPU synthetic step_ms can be mapped to real 4-GPU wall time.
 #
 # Each (config, batch) runs as its own `srun --environment=tensorflow` step (only form that
 # reliably has TF in the CSCS container); a fresh process releases GPU memory between runs and
 # contains OOM / kernel-launch crashes, which the loop classifies (OK / OOM / KERNEL / ERROR).
-# precision (bfloat16) and jit_compile_body (true) come from each config, as in real training.
 
 R="/users/athomsen/dlss/repos"
 SCRIPT="$R/y3-deep-lss/deep_lss/apps/benchmark_transformer.py"
-T6_DIR="$R/y3-deep-lss/configs/transformer/lensing/bench_t6"
-ANCHOR="$R/y3-deep-lss/configs/transformer/lensing/maps+cls.yaml"
-OUT_DIR="/iopsstor/scratch/cscs/athomsen/deep_lss/claude/bench/t6"
+T3_DIR="$R/y3-deep-lss/configs/transformer/lensing/bench_t3"
+T2_DIR="$R/y3-deep-lss/configs/transformer/lensing/bench_t2"
+OUT_DIR="/iopsstor/scratch/cscs/athomsen/deep_lss/claude/bench/t3"
 JSONL="$OUT_DIR/benchmark_results.jsonl"
 mkdir -p "$OUT_DIR/slurm"
+
+T3_BATCHES="${T3_BATCHES:-16 24 32 48 64}"
+T2_BATCHES="${T2_BATCHES:-16}"
+T2_CAL="default deep wide global"   # bench_t2 configs with real 4-GPU logs -> calibration
 
 MSFM="$R/multiprobe-simulation-forward-model/configs/v16/rot_in_place.yaml"
 PROBES="$R/y3-deep-lss/configs/probes/lensing.yaml"
@@ -72,20 +76,20 @@ run_one () {  # $1=config path  $2=batch
 
 : > "$JSONL"
 
-echo "===== bench_t6/default.yaml (global_blocks 1) ====="
-for bs in 20 24 32 48 64; do
-    run_one "$T6_DIR/default.yaml" "$bs"
+echo "===== bench_t3 sweep (batches: $T3_BATCHES) ====="
+for cfg in "$T3_DIR"/*.yaml; do
+    for bs in $T3_BATCHES; do
+        run_one "$cfg" "$bs"
+    done
 done
 
 echo ""
-echo "===== bench_t6/stem.yaml (stem_levels 1, one hierarchical level fewer) ====="
-for bs in 32 48 64 96 128; do
-    run_one "$T6_DIR/stem.yaml" "$bs"
+echo "===== bench_t2 calibration anchors (batches: $T2_BATCHES) ====="
+for c in $T2_CAL; do
+    for bs in $T2_BATCHES; do
+        run_one "$T2_DIR/$c.yaml" "$bs"
+    done
 done
-
-echo ""
-echo "===== maps+cls.yaml calibration anchor (batch 20; real 4-GPU wall = 281 ms/step) ====="
-run_one "$ANCHOR" 20
 
 echo ""
 echo "=== aggregating ==="

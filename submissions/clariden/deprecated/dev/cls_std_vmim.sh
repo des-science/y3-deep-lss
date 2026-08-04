@@ -1,22 +1,23 @@
 #!/bin/bash
+# Moved to deprecated/ 2026-08-04: superseded by submissions/clariden/cls_experiment.sh, the
+# generalized form of this launcher (MODEL_NAME/PROBE/LOSS/NET/CLS_CONFIG env vars).
 #SBATCH --account=a0158
 #SBATCH --partition=normal
 #SBATCH --time=04:00:00
 #SBATCH --nodes=1
 #SBATCH --exclusive
 #SBATCH --mem=450G
-#SBATCH --job-name=cls_ext_vmim
-#SBATCH --output=/iopsstor/scratch/cscs/athomsen/deep_lss/runs/v16/rot_in_place/cls/lensing/lmax_1024_ext/logs/slurm-%j.out
+#SBATCH --job-name=cls_std_vmim
+#SBATCH --output=/iopsstor/scratch/cscs/athomsen/deep_lss/runs/v16/rot_in_place/cls/lensing/lmax_1024_std/logs/slurm-%j.out
 
-# Full VMIM constraining-power test (follow-up to the frozen-summary null result): retrain the
-# lmax_1024 lensing Cls compression with the mutual-information target extended by the implicitly
-# marginalized grid parameters (ns, Ob, H0, bary_Mc, bary_nu; see configs/probes/lensing_ext.yaml).
-# The 11-dim summaries + flow then feed the usual inference stage, which auto-runs the
-# reference-prior (Gower-Street) DES variants since ns/Ob/H0 are in the params list.
-# Readout: FoM(Om,S8) of chain_DESy3_*_refpriors vs the plain chains, compared to the frozen-summary
-# ext flow and the lmax_1024 baseline. Everything lands in cls/lensing/lmax_1024_ext/, no existing
-# run is touched. The lmax_1024 Cls cache is scale-dependent but probe/params-independent and
-# already exists, so no precache step is needed.
+# Head-conditioning test: exact 6-param lmax_1024 baseline rerun with standardize_theta=true in
+# the VMIM GMM head (config since folded into vmim_gmm.yaml + the standardize_theta default). The MI-bound optimum is
+# affine-invariant, so any FoM difference vs lmax_1024 (DESy3 wCDM FoM2D 352) is pure head
+# optimization: the physical 6-param target spans ~30x in scale (Om vs n_Aia), which the
+# scale-homogeneous 3-param min target does not -- a gain here would mean part of the measured
+# 3p->6p dimensionality penalty is just unnormalized theta in the regression head.
+# Everything lands in cls/lensing/lmax_1024_std/, no existing run is touched; the lmax_1024 Cls
+# cache is scale-dependent but probe/params-independent and already exists.
 
 export SLURM_CPUS_PER_TASK=72
 export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK}
@@ -29,12 +30,12 @@ VERSION="v16"
 SUBVERSION="rot_in_place"
 INPUT="$MYSCRATCH/deep_lss/data/$VERSION/$SUBVERSION"
 
-PROBE="lensing_ext"
+PROBE="lensing"
 SCALES="lmax_1024"
 MLP="default"
-LOSS="vmim_gmm"  # standardized GMM head (vmim_ext.yaml was folded into vmim_gmm.yaml + the standardize_theta default)
+LOSS="vmim_gmm"  # vmim_std.yaml was folded into vmim_gmm.yaml + the standardize_theta default
 DATA="default"
-MODEL_NAME="lmax_1024_ext"
+MODEL_NAME="lmax_1024_std"
 
 OUTPUT="$MYSCRATCH/deep_lss/runs/$VERSION/$SUBVERSION/cls/lensing"
 FLOW_CONFIG="$REPOS/multiprobe-simulation-inference/configs/flow/maf.yaml"

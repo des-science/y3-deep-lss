@@ -1,4 +1,6 @@
 #!/bin/bash
+# Moved to deprecated/ 2026-08-04: superseded by submissions/clariden/benchmark_sweep.sh, the
+# generalized form of this harness (BENCH_SCRIPT/CONFIGS_GLOB/OUT_DIR/BATCH_SIZES env vars).
 #SBATCH --account=a0158
 #SBATCH --partition=normal
 #SBATCH --time=01:00:00

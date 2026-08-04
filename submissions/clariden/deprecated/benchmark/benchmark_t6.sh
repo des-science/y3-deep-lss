@@ -1,31 +1,36 @@
 #!/bin/bash
+# Moved to deprecated/ 2026-08-04: superseded by submissions/clariden/benchmark_sweep.sh, the
+# generalized form of this harness (BENCH_SCRIPT/CONFIGS_GLOB/OUT_DIR/BATCH_SIZES env vars).
 #SBATCH --account=a0158
 #SBATCH --partition=normal
-#SBATCH --time=00:40:00
+#SBATCH --time=02:00:00
 #SBATCH --nodes=1
 #SBATCH --gpus-per-node=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-task=1
 #SBATCH --cpus-per-task=72
-#SBATCH --job-name=bench_t7
-#SBATCH --output=/iopsstor/scratch/cscs/athomsen/deep_lss/claude/bench/t7/slurm/slurm-%j.out
+#SBATCH --job-name=bench_t6
+#SBATCH --output=/iopsstor/scratch/cscs/athomsen/deep_lss/claude/bench/t6/slurm/slurm-%j.out
 
-# Quick double-check of the bench_t7 configs: each is bench_t6/default.yaml (the winning base
-# architecture) + one feature toggle. Confirm that at the base training batch (local_batch_size 20)
-# every variant stays inside the ~85 GB NCCL-safe memory band and that its step time is near the
-# base (default.yaml @ b20: 81.6 GB, 181.6 ms synthetic single-GPU bf16), so the inherited
-# n_steps=150000 / ~11 h sizing holds. real 4-GPU wall/step ~= K x synthetic, K=1.4528.
+# Benchmark the bench_t6 nested-transformer configs (lighter global attention: global_blocks 4->1)
+# for GPU-memory fit and step time, to pick per-config training batch sizes (fill the 120 GB GH200,
+# keep NCCL comm-buffer headroom) and a step count for < 10 h of training.
 #
-# default.yaml is re-benchmarked here at b20 as an in-run anchor (apples-to-apples with the
-# variants in this same allocation). Each (config, batch) runs as its own
-# `srun --environment=tensorflow` step; precision (bf16) and jit_compile_body (true) come from
-# each config, as in real training.
+# Sweeps default.yaml (maps+cls arch, global_blocks 1) and stem.yaml (default + patchified stem,
+# one hierarchical level fewer -> much lighter) over per-config batch ladders. Also benchmarks
+# maps+cls.yaml @ batch 20 as a synthetic->real calibration anchor: its real 4-GPU wall time is
+# known (t5_cls job 2702990: 120000 steps in 9h22m31s = 281 ms/step effective, incl vali/ckpt).
+#
+# Each (config, batch) runs as its own `srun --environment=tensorflow` step (only form that
+# reliably has TF in the CSCS container); a fresh process releases GPU memory between runs and
+# contains OOM / kernel-launch crashes, which the loop classifies (OK / OOM / KERNEL / ERROR).
+# precision (bfloat16) and jit_compile_body (true) come from each config, as in real training.
 
 R="/users/athomsen/dlss/repos"
 SCRIPT="$R/y3-deep-lss/deep_lss/apps/benchmark_transformer.py"
 T6_DIR="$R/y3-deep-lss/configs/transformer/lensing/bench_t6"
-T7_DIR="$R/y3-deep-lss/configs/transformer/lensing/bench_t7"
-OUT_DIR="/iopsstor/scratch/cscs/athomsen/deep_lss/claude/bench/t7"
+ANCHOR="$R/y3-deep-lss/configs/transformer/lensing/maps+cls.yaml"
+OUT_DIR="/iopsstor/scratch/cscs/athomsen/deep_lss/claude/bench/t6"
 JSONL="$OUT_DIR/benchmark_results.jsonl"
 mkdir -p "$OUT_DIR/slurm"
 
@@ -48,7 +53,7 @@ run_one () {  # $1=config path  $2=batch
         > "$log" 2>&1 || true
 
     if grep -q '^BENCH_JSON ' "$log"; then
-        grep '^BENCH_JSON ' "$log" | head -1 | sed 's/^BENCH_JSON //' | tee -a "$JSONL"
+        grep '^BENCH_JSON ' "$log" | head -1 | sed 's/^BENCH_JSON //' >> "$JSONL"
         echo "    OK"
     else
         low="$(tr 'A-Z' 'a-z' < "$log")"
@@ -69,14 +74,20 @@ run_one () {  # $1=config path  $2=batch
 
 : > "$JSONL"
 
-echo "===== bench_t6/default.yaml (base anchor) ====="
-run_one "$T6_DIR/default.yaml" 20
+echo "===== bench_t6/default.yaml (global_blocks 1) ====="
+for bs in 20 24 32 48 64; do
+    run_one "$T6_DIR/default.yaml" "$bs"
+done
 
 echo ""
-echo "===== bench_t7 variants (base + one feature) at the training batch (b20) ====="
-for cfg in dropout masked multiscale pool symmetric; do
-    run_one "$T7_DIR/$cfg.yaml" 20
+echo "===== bench_t6/stem.yaml (stem_levels 1, one hierarchical level fewer) ====="
+for bs in 32 48 64 96 128; do
+    run_one "$T6_DIR/stem.yaml" "$bs"
 done
+
+echo ""
+echo "===== maps+cls.yaml calibration anchor (batch 20; real 4-GPU wall = 281 ms/step) ====="
+run_one "$ANCHOR" 20
 
 echo ""
 echo "=== aggregating ==="

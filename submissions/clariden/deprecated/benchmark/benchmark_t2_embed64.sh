@@ -1,4 +1,6 @@
 #!/bin/bash
+# Moved to deprecated/ 2026-08-04: superseded by submissions/clariden/benchmark_sweep.sh, the
+# generalized form of this harness (BENCH_SCRIPT/CONFIGS_GLOB/OUT_DIR/BATCH_SIZES env vars).
 #SBATCH --account=a0158
 #SBATCH --partition=normal
 #SBATCH --time=02:00:00
@@ -7,35 +9,33 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-task=1
 #SBATCH --cpus-per-task=72
-#SBATCH --job-name=bench_t3
-#SBATCH --output=/iopsstor/scratch/cscs/athomsen/deep_lss/claude/bench/t3/slurm/slurm-%j.out
+#SBATCH --job-name=bench_t2_embed64
+#SBATCH --output=/iopsstor/scratch/cscs/athomsen/deep_lss/claude/bench/t2/slurm/slurm-%j.out
 
-# Benchmark the bench_t3 nested-transformer configs for GPU-memory fit and step time, to pick
-# per-config training batch sizes (fill the 120 GB GH200 / stay under the softmax kernel-launch
-# ceiling) and a step count for ~10 h of training.
+# Size the bench_t2/embed64.yaml clustering config (base_embed_dim 32 -> 64, the lensing-matched
+# stem width): GPU-memory fit and step time over a batch ladder, to pick the training batch (largest
+# inside the ~85 GB NCCL-safe band, then judged against the loader ceiling) and n_steps for ~10.5 h.
 #
-# Sweeps each bench_t3/*.yaml over a batch ladder. Also benchmarks a few bench_t2 configs at
-# batch 16 as synthetic->real calibration anchors (we have their real 4-GPU it/s from the t2
-# training logs), so the single-GPU synthetic step_ms can be mapped to real 4-GPU wall time.
+# Calibration anchor: ../maps+cls.yaml (base 32) @ batch 48 — its real 4-GPU wall is known
+# (t1_cls job 2774050: 120000 steps in 10h03m30s = 302 ms/step effective, incl vali/ckpt), and its
+# real loader budget is known (data_time 0.188 s ~= 158 examples/s at native-res reads). The
+# synthetic->real factor K = 302 / bench_step_ms(anchor) converts embed64 bench times to expected
+# real wall; if the implied examples/s exceeds ~158 the run stays I/O-bound and the base-32 read
+# ceiling applies instead.
 #
-# Each (config, batch) runs as its own `srun --environment=tensorflow` step (only form that
-# reliably has TF in the CSCS container); a fresh process releases GPU memory between runs and
-# contains OOM / kernel-launch crashes, which the loop classifies (OK / OOM / KERNEL / ERROR).
+# Same harness as benchmark_t6.sh: each (config, batch) is its own srun step so OOM/kernel crashes
+# are contained and classified (OK / OOM / KERNEL / ERROR); precision (bfloat16) and
+# jit_compile_body (true) come from the config, as in real training.
 
 R="/users/athomsen/dlss/repos"
 SCRIPT="$R/y3-deep-lss/deep_lss/apps/benchmark_transformer.py"
-T3_DIR="$R/y3-deep-lss/configs/transformer/lensing/bench_t3"
-T2_DIR="$R/y3-deep-lss/configs/transformer/lensing/bench_t2"
-OUT_DIR="/iopsstor/scratch/cscs/athomsen/deep_lss/claude/bench/t3"
+CFG_DIR="$R/y3-deep-lss/configs/transformer/clustering"
+OUT_DIR="/iopsstor/scratch/cscs/athomsen/deep_lss/claude/bench/t2"
 JSONL="$OUT_DIR/benchmark_results.jsonl"
 mkdir -p "$OUT_DIR/slurm"
 
-T3_BATCHES="${T3_BATCHES:-16 24 32 48 64}"
-T2_BATCHES="${T2_BATCHES:-16}"
-T2_CAL="default deep wide global"   # bench_t2 configs with real 4-GPU logs -> calibration
-
-MSFM="$R/multiprobe-simulation-forward-model/configs/v16/rot_in_place.yaml"
-PROBES="$R/y3-deep-lss/configs/probes/lensing.yaml"
+MSFM="$R/multiprobe-simulation-forward-model/configs/v17/baseline.yaml"
+PROBES="$R/y3-deep-lss/configs/probes/clustering.yaml"
 SCALES="$R/y3-deep-lss/configs/scales/8wl,32gc.yaml"
 LOSS="$R/y3-deep-lss/configs/loss/vmim.yaml"
 DATA="$R/y3-deep-lss/configs/data/default.yaml"
@@ -74,20 +74,14 @@ run_one () {  # $1=config path  $2=batch
 
 : > "$JSONL"
 
-echo "===== bench_t3 sweep (batches: $T3_BATCHES) ====="
-for cfg in "$T3_DIR"/*.yaml; do
-    for bs in $T3_BATCHES; do
-        run_one "$cfg" "$bs"
-    done
+echo "===== bench_t2/embed64.yaml (base_embed_dim 64, lensing-matched widths) ====="
+for bs in 16 24 32 48 64 96; do
+    run_one "$CFG_DIR/bench_t2/embed64.yaml" "$bs"
 done
 
 echo ""
-echo "===== bench_t2 calibration anchors (batches: $T2_BATCHES) ====="
-for c in $T2_CAL; do
-    for bs in $T2_BATCHES; do
-        run_one "$T2_DIR/$c.yaml" "$bs"
-    done
-done
+echo "===== maps+cls.yaml calibration anchor (base 32, batch 48; real 4-GPU wall = 302 ms/step) ====="
+run_one "$CFG_DIR/maps+cls.yaml" 48
 
 echo ""
 echo "=== aggregating ==="

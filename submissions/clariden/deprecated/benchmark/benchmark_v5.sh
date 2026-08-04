@@ -1,4 +1,6 @@
 #!/bin/bash
+# Moved to deprecated/ 2026-08-04: superseded by submissions/clariden/benchmark_sweep.sh, the
+# generalized form of this harness (BENCH_SCRIPT/CONFIGS_GLOB/OUT_DIR/BATCH_SIZES env vars).
 #SBATCH --account=a0158
 #SBATCH --partition=normal
 #SBATCH --time=02:00:00
@@ -7,35 +9,36 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-task=1
 #SBATCH --cpus-per-task=72
-#SBATCH --job-name=bench_v4
-#SBATCH --output=/iopsstor/scratch/cscs/athomsen/deep_lss/claude/bench/resnet/v4/slurm/slurm-%j.out
+#SBATCH --job-name=bench_v5
+#SBATCH --output=/iopsstor/scratch/cscs/athomsen/deep_lss/claude/bench/resnet/v5/slurm/slurm-%j.out
 
-# Benchmark the configs/deepsphere/combined/bench_v4/ architecture sweep (combined maps+cls).
-# Goal for THIS round: at the fixed comparison batch (20), record peak_gb / step_ms / throughput
-# per variant so we can (a) confirm batch 20 fits and clears the cuSPARSE SPARSE_LIMIT, and
-# (b) set each variant's ONE-12h-job n_steps from its measured it/s (so the cosine schedule
-# completes within 12 h -- see the header of bench_v4/default.yaml). No training happens here.
+# Benchmark the configs/deepsphere/combined/bench_v5/ ConvNeXt-body sweep (combined maps+cls).
+# Goal for THIS round: at the fixed comparison batch (16, the pool_head recipe batch), record
+# peak_gb / step_ms / throughput per variant so we can set each variant's ONE-12h-job n_steps from
+# its measured it/s (so the cosine schedule completes within 12 h -- see default.yaml header).
+# The ConvNeXt block changes step time (one graph conv/block vs two -> fewer spmm, but bigk raises K
+# and deep/wide add work), so the 190k placeholders in every bench_v5/*.yaml MUST be reset from here.
+# No training happens; batches are synthetic.
 #
-# Model of submissions/clariden/benchmark/benchmark_resnet.sh: each (config, batch) is its own
-# `srun --environment=tensorflow` step (fresh process -> memory released, OOM/kernel-limit contained
-# and classified, not fatal to the sweep). GCNN memory is tiny; the binding constraint is the
-# cuSPARSE nnz(a)*output.shape[1] > 2^31 kernel-launch ceiling (classified as SPARSE_LIMIT) -- the
-# wide (w64) / hi-res-trunk (hires_trunk) / single-res (singleres) variants are the ones to watch.
+# Model of benchmark_v4.sh: each (config, batch) is its own `srun --environment=tensorflow` step
+# (fresh process -> memory released, OOM/kernel-limit contained and classified, not fatal to the
+# sweep). GCNN memory is tiny; the binding constraint is the cuSPARSE nnz(a)*output.shape[1] > 2^31
+# kernel-launch ceiling (classified as SPARSE_LIMIT) -- convnext_wide is the one to watch.
 #
-# Submit:  sbatch submissions/clariden/benchmark/benchmark_v4.sh
-# Headroom check (does batch fit above 20?):
-#          BATCH_SIZES="20 32 48" sbatch submissions/clariden/benchmark/benchmark_v4.sh
+# Submit:  sbatch submissions/clariden/benchmark/benchmark_v5.sh
+# Headroom check (does batch fit above 16?):
+#          BATCH_SIZES="16 32 48" sbatch submissions/clariden/benchmark/benchmark_v5.sh
 
 R="/users/athomsen/dlss/repos"
 SCRIPT="$R/y3-deep-lss/deep_lss/apps/benchmark_resnet.py"
-OUT_DIR="/iopsstor/scratch/cscs/athomsen/deep_lss/claude/bench/resnet/v4"
+OUT_DIR="/iopsstor/scratch/cscs/athomsen/deep_lss/claude/bench/resnet/v5"
 JSONL="$OUT_DIR/benchmark_results.jsonl"
 
-# Fixed comparison batch for this round (unified recipe). Override to probe headroom.
-BATCH_SIZES="${BATCH_SIZES:-20}"
+# Fixed comparison batch for this round (pool_head recipe). Override to probe headroom.
+BATCH_SIZES="${BATCH_SIZES:-16}"
 
-# Same forward-model / scales / loss / data as benchmark_resnet.sh (synthetic batches, so these
-# only fix the map geometry + channel count + loss head used to build the model).
+# Same forward-model / scales / loss / data as benchmark_v4.sh (synthetic batches, so these only fix
+# the map geometry + channel count + loss head used to build the model).
 MSFM="$R/multiprobe-simulation-forward-model/configs/v16/rot_in_place.yaml"
 SCALES="$R/y3-deep-lss/configs/scales/8wl,32gc.yaml"
 LOSS="$R/y3-deep-lss/configs/loss/vmim.yaml"
@@ -43,14 +46,14 @@ DATA="$R/y3-deep-lss/configs/data/default.yaml"
 PROBE="combined"
 PROBES_CONFIG="$R/y3-deep-lss/configs/probes/${PROBE}.yaml"
 
-# All bench_v4 variants (default + one-knob siblings).
-BENCH_DIR="$R/y3-deep-lss/configs/deepsphere/combined/bench_v4"
+# All bench_v5 variants (default + convnext siblings).
+BENCH_DIR="$R/y3-deep-lss/configs/deepsphere/combined/bench_v5"
 # BENCH_CONFIGS override: space-separated basenames (or paths) to time ONLY those configs and
 # APPEND to the existing JSONL, instead of re-timing the whole dir. Use it to add a newly-created
 # variant without re-running the siblings whose step time is already recorded (their geometry is
-# unchanged). Example: BENCH_CONFIGS="bernstein.yaml global_attn.yaml" sbatch benchmark_v4.sh
-# extglob must be enabled at PARSE time of the !(*_2x) glob below; set it here at top level so it
-# is active before the if-compound is parsed at runtime (a shopt inside the branch would be too late).
+# unchanged). Example: BENCH_CONFIGS="convnext_wide.yaml" sbatch benchmark_v5.sh
+# extglob must be enabled at PARSE time of the glob below; set it here at top level so it is active
+# before the if-compound is parsed at runtime (a shopt inside the branch would be too late).
 shopt -s nullglob extglob
 if [ -n "${BENCH_CONFIGS:-}" ]; then
     CONFIGS=()
@@ -63,9 +66,7 @@ if [ -n "${BENCH_CONFIGS:-}" ]; then
     done
     APPEND_JSONL=1
 else
-    # Skip *_2x.yaml: the chained (2x12 h) long-run variants share default/w64 geometry, so their
-    # step time is identical -- no separate timing needed (their n_steps just follow ~2x the parent).
-    CONFIGS=("$BENCH_DIR"/!(*_2x).yaml)
+    CONFIGS=("$BENCH_DIR"/*.yaml)
     APPEND_JSONL=0
 fi
 shopt -u nullglob extglob
@@ -82,9 +83,9 @@ mkdir -p "$OUT_DIR/slurm"
 # already-recorded siblings (drop any prior rows for the configs being re-timed to avoid dupes).
 if [ "$APPEND_JSONL" -eq 1 ] && [ -f "$JSONL" ]; then
     for cfg in "${CONFIGS[@]}"; do
-        # benchmark_resnet.py writes "config" as the bare basename (e.g. "bernstein.yaml"); the
-        # shell failure-path writes "bench_v4/<basename>". Match the basename + closing quote to
-        # drop any prior row for this config in either form before re-appending.
+        # benchmark_resnet.py writes "config" as the bare basename (e.g. "convnext.yaml"); the shell
+        # failure-path writes "bench_v5/<basename>". Match the basename + closing quote to drop any
+        # prior row for this config in either form before re-appending.
         base="$(basename "$cfg")"
         grep -vF "$base\"" "$JSONL" > "$JSONL.tmp" && mv "$JSONL.tmp" "$JSONL"
     done
@@ -93,7 +94,7 @@ else
 fi
 
 for cfg in "${CONFIGS[@]}"; do
-    cfg_name="$(basename "$(dirname "$cfg")")/$(basename "$cfg")"   # e.g. bench_v4/w64.yaml
+    cfg_name="$(basename "$(dirname "$cfg")")/$(basename "$cfg")"   # e.g. bench_v5/convnext.yaml
     for bs in $BATCH_SIZES; do
         echo ">>> ${cfg_name}  batch=$bs ..."
         log="$(mktemp)"
