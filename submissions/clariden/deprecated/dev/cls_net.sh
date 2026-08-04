@@ -1,11 +1,14 @@
 #!/bin/bash
+# Moved to deprecated/ 2026-08-04: broken -- --mlp_config/configs/mlp/ path no longer exists
+# (current: --net_config/configs/cls/mlp/), plus hardcoded stale VERSION=v16/rot_in_place. Do not
+# resurrect without porting to the current --net_config convention and v17/baseline.
 #SBATCH --account=a0158
 #SBATCH --partition=normal
-#SBATCH --time=01:00:00
+#SBATCH --time=03:00:00
 #SBATCH --nodes=1
 #SBATCH --exclusive
 #SBATCH --mem=450G
-#SBATCH --job-name=cls_zreg_ablation
+#SBATCH --job-name=cls_net
 #SBATCH --output=/users/athomsen/dlss/repos/y3-deep-lss/submissions/clariden/slurm/slurm-%j.out
 
 export SLURM_CPUS_PER_TASK=72
@@ -17,29 +20,39 @@ MYSCRATCH="/iopsstor/scratch/cscs/athomsen"
 
 VERSION="v16"
 SUBVERSION="rot_in_place"
-# PROBE="lensing"
+PROBE="lensing"
 # PROBE="clustering"
-PROBE="combined"
+# PROBE="combined"
 
-MLP="no_xla"
-# MLP="default"
+# Learning-rate schedule = subfolder of configs/mlp/. The two folders hold the SAME four
+# preprocessing variants and differ only in the schedule; flip this to test the other folder.
+# LR_SCHED="lr_plateau"
+LR_SCHED="lr_constant"
+
+# Four network/preprocessing configs run in parallel (one GPU each):
+#   default     -> asinh_per_feature transform, no PCA
+#   log         -> fixed log1p transform, no PCA
+#   pca         -> asinh_per_feature + PCA
+#   pca_whiten  -> asinh_per_feature + PCA + whitening
+NET_CONFIGS=("default" "log" "pca" "pca_whiten")
+
+LOSS="vmim"
 SCALES="8wl,32gc"
 DATA="default"
-BASE_MODEL_NAME="v30"
+BASE_MODEL_NAME="v36_net_${LR_SCHED}"
 
 FLOW_CONFIG="$REPOS/multiprobe-simulation-inference/configs/flow/maf.yaml"
-# LOSS_CONFIGS=("vmim" "vmim_fac1" "vmim_sw" "vmim_vicreg_inv")
-LOSS_CONFIGS=("vmim" "vmim_vicreg" "vmim_vicreg_var_cov" "vmim_vicreg_inv")
 
 INPUT="$MYSCRATCH/deep_lss/data/$VERSION/$SUBVERSION"
 OUTPUT="$MYSCRATCH/deep_lss/runs/$VERSION/$SUBVERSION/cls/$PROBE"
 
-# Pre-compute the shared hard_rebinned Cls cache with full-node resources before
-# the per-GPU training workers start. The cache is loss-config-independent, so
-# any loss config satisfies the required CLI argument.
+# Pre-compute the shared hard_rebinned Cls cache with full-node resources before the per-GPU
+# training workers start. The cache is mlp/loss-config-independent (covers all pairs; probe and
+# preprocessing selection happen at load time), and all four net configs share the same
+# scale_cut / cls_n_bins, so a single precache serves all of them.
 SCALE_CUT=$(srun -N1 --ntasks-per-node=1 --environment=tensorflow python -c "
 import yaml
-with open('$REPOS/y3-deep-lss/configs/mlp/${MLP}.yaml') as f:
+with open('$REPOS/y3-deep-lss/configs/mlp/${LR_SCHED}/${NET_CONFIGS[0]}.yaml') as f:
     print(yaml.safe_load(f).get('scale_cut', 'soft_pruned'))
 ")
 
@@ -53,8 +66,8 @@ if [ "$SCALE_CUT" = "hard_rebinned" ]; then
             --msfm_config="$REPOS/multiprobe-simulation-forward-model/configs/$VERSION/$SUBVERSION.yaml" \
             --probes_config="$REPOS/y3-deep-lss/configs/probes/${PROBE}.yaml" \
             --scales_config="$REPOS/y3-deep-lss/configs/scales/${SCALES}.yaml" \
-            --loss_config="$REPOS/y3-deep-lss/configs/loss/${LOSS_CONFIGS[0]}.yaml" \
-            --mlp_config="$REPOS/y3-deep-lss/configs/mlp/${MLP}.yaml" \
+            --loss_config="$REPOS/y3-deep-lss/configs/loss/${LOSS}.yaml" \
+            --mlp_config="$REPOS/y3-deep-lss/configs/mlp/${LR_SCHED}/${NET_CONFIGS[0]}.yaml" \
             --data_config="$REPOS/y3-deep-lss/configs/data/${DATA}.yaml" \
             --data_dir="$INPUT" \
             --out_dir="$INPUT" \
@@ -62,8 +75,8 @@ if [ "$SCALE_CUT" = "hard_rebinned" ]; then
             --precache_only
 fi
 
-for LOSS in "${LOSS_CONFIGS[@]}"; do
-    MODEL_NAME="${BASE_MODEL_NAME}_${LOSS}"
+for NET in "${NET_CONFIGS[@]}"; do
+    MODEL_NAME="${BASE_MODEL_NAME}_${NET}"
     LOG="$OUTPUT/$MODEL_NAME/logs/${SLURM_JOB_ID}"
     mkdir -p "$(dirname "$LOG")"
 
@@ -76,7 +89,7 @@ for LOSS in "${LOSS_CONFIGS[@]}"; do
                 --probes_config="$REPOS/y3-deep-lss/configs/probes/${PROBE}.yaml" \
                 --scales_config="$REPOS/y3-deep-lss/configs/scales/${SCALES}.yaml" \
                 --loss_config="$REPOS/y3-deep-lss/configs/loss/${LOSS}.yaml" \
-                --mlp_config="$REPOS/y3-deep-lss/configs/mlp/${MLP}.yaml" \
+                --mlp_config="$REPOS/y3-deep-lss/configs/mlp/${LR_SCHED}/${NET}.yaml" \
                 --data_config="$REPOS/y3-deep-lss/configs/data/${DATA}.yaml" \
                 --data_dir="$INPUT" \
                 --out_dir="$OUTPUT" \

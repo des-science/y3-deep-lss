@@ -1,4 +1,7 @@
 #!/bin/bash
+# Moved to deprecated/ 2026-08-04: broken -- --mlp_config/configs/mlp/ path no longer exists
+# (current: --net_config/configs/cls/mlp/), plus hardcoded stale VERSION=v16/rot_in_place. Do not
+# resurrect without porting to the current --net_config convention and v17/baseline.
 #SBATCH --account=a0158
 #SBATCH --partition=normal
 #SBATCH --time=02:00:00

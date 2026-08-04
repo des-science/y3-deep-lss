@@ -1,4 +1,8 @@
 #!/bin/bash
+# Moved to deprecated/ 2026-08-04: hardcoded stale VERSION=v16/rot_in_place and a dead model
+# name (v29_vmim_fac1), no env-var overrides at all. Same shape as the already-deprecated
+# inference_probes.sh/inference_steps.sh -- for a one-off flow-config sweep today, copy this
+# pattern with current VERSION/SUBVERSION and a live model_name instead of resurrecting it.
 #SBATCH --account=a0158
 #SBATCH --partition=normal
 #SBATCH --time=02:00:00
