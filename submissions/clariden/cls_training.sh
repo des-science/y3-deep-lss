@@ -19,16 +19,10 @@ VERSION="${VERSION:-v17}"
 SUBVERSION="${SUBVERSION:-baseline}"
 INPUT="$MYSCRATCH/deep_lss/data/$VERSION/$SUBVERSION"
 
-# PROBES / NET / MODEL_NAME may be overridden from the environment (space-separated for PROBES),
-# e.g.  NET=transformer MODEL_NAME=v39_transformer PROBES="lensing clustering 2x2pt combined" sbatch cls_training.sh
-# The four default probes fit the node's 4 GPUs in a single wave.
-#
-# Each PROBES entry is "probe" or "probe:probes_config". The probe names the physical probe and is
-# what the run directory is keyed on; the optional probes_config selects which configs/probes/*.yaml
-# supplies it (defaults to the probe name). This keeps the run layout stable when a dataset needs a
-# variant config -- e.g. on the bta-free v17+ data (msfm extended_nla: False),
+# PROBES/NET/MODEL_NAME overridable (PROBES space-separated; the 4 defaults fit the node's 4 GPUs).
+# Each PROBES entry is "probe" or "probe:probes_config" -- probe keys the run dir, probes_config
+# selects configs/probes/*.yaml (defaults to the probe name), e.g. for the v17 NLA data:
 #   PROBES="lensing:lensing_nla 2x2pt:2x2pt_nla combined:combined_nla clustering"
-# trains from the *_nla configs but still writes to cls/lensing, cls/2x2pt, cls/combined.
 read -r -a PROBES <<< "${PROBES:-lensing clustering 2x2pt combined}"
 
 # Cls summary architecture: configs/cls/${NET}/${CLS_CONFIG}.yaml selects network.name (mlp | cls_cnn |
@@ -51,9 +45,7 @@ MODEL_NAME="${MODEL_NAME:-v1}"
 
 FLOW_CONFIG="$REPOS/multiprobe-simulation-inference/configs/flow/maf.yaml"
 
-# For hard_rebinned: pre-compute the shared Cls cache with full-node resources
-# before the per-GPU training workers start.  Runs once for all probes since the
-# cache is probe-independent (covers all pairs; probe selection happens at load time).
+# hard_rebinned needs the shared Cls cache built once up front (probe-independent, covers all pairs)
 SCALE_CUT=$(srun -N1 --ntasks-per-node=1 --environment=tensorflow python -c "
 import yaml
 with open('$REPOS/y3-deep-lss/configs/cls/${NET}/${CLS_CONFIG}.yaml') as f:
