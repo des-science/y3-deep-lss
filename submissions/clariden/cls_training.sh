@@ -12,6 +12,16 @@ export SLURM_CPUS_PER_TASK=72
 export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK}
 export TF_NUM_INTRAOP_THREADS=${SLURM_CPUS_PER_TASK}
 
+# Aborts the per-probe subshell instead of letting inference silently run against a stale
+# preds_*.h5 if the training+eval stage fails. Inherited by the "( ... ) &" subshells below.
+check_stage() {
+    local status=$1 stage=$2 log=$3
+    if [ "$status" -ne 0 ]; then
+        echo "$stage failed (exit $status) — see $log. Aborting before the next stage." >&2
+        exit "$status"
+    fi
+}
+
 REPOS="/users/athomsen/dlss/repos"
 MYSCRATCH="/iopsstor/scratch/cscs/athomsen"
 
@@ -97,6 +107,7 @@ for ENTRY in "${PROBES[@]}"; do
                 --include_grid \
                 --include_des \
                 --include_mocks
+        check_stage $? "Training+evaluation ($PROBE)" "${LOG}_training.log"
 
         srun -N1 --ntasks-per-node=1 --exclusive --gpus-per-task=1 --cpus-per-gpu=72 --mem=110G \
             --uenv=pytorch/v2.9.1:v2 --view=default \

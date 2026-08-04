@@ -21,6 +21,15 @@ export TF_NUM_INTRAOP_THREADS=${SLURM_CPUS_PER_TASK}
 
 RUN_NUM=${RUN_NUM:-1}
 
+# Aborts instead of letting inference silently run against a stale preds_*.h5 if evaluation fails.
+check_stage() {
+    local status=$1 stage=$2 log=$3
+    if [ "$status" -ne 0 ]; then
+        echo "$stage failed (exit $status) — see $log. Aborting before the next stage." >&2
+        exit "$status"
+    fi
+}
+
 # EVAL_SCOPE=mocks: --include_mocks only (default "full" = grid+des+mocks).
 EVAL_SCOPE="${EVAL_SCOPE:-full}"
 # LOAD_FLOW=1: inference reuses the existing flow (--load_flow) instead of retraining it.
@@ -59,6 +68,7 @@ srun --environment=tensorflow --gpu-bind=none --output=""$LOG"_evaluation.log" \
         --grid_vali_tfr_pattern=$TRAIN_TFR \
         --data_dir=$INPUT \
         $EVAL_SCOPE_FLAGS
+check_stage $? "Evaluation" "${LOG}_evaluation.log"
 
 sleep 30
 

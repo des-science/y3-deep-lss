@@ -19,6 +19,17 @@ export WANDB_API_KEY=$(awk '/password/ {print $2}' ~/.netrc)
 export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK}
 export TF_NUM_INTRAOP_THREADS=${SLURM_CPUS_PER_TASK}
 
+# Aborts the job instead of silently letting a later stage run against stale/incomplete output
+# from a stage that just failed (e.g. training.sh used to run eval+inference against an old
+# preds_*.h5 after a mid-chain evaluation crash, with no indication anything was wrong).
+check_stage() {
+    local status=$1 stage=$2 log=$3
+    if [ "$status" -ne 0 ]; then
+        echo "$stage failed (exit $status) — see $log. Aborting before the next stage." >&2
+        exit "$status"
+    fi
+}
+
 RUN_NUM=${RUN_NUM:-1}
 RESTORE_FLAG=""
 if [ "$RUN_NUM" -gt 1 ]; then
@@ -122,6 +133,7 @@ srun --environment=tensorflow --gpu-bind=none --output=""$LOG"_training.log" \
         --wandb \
         --wandb_tags "$VERSION" "$SUBVERSION" "$PROBE" "$LOSS" "$STRATEGY" "$ARCH" "$NET_NAME" "$SCALES" \
         $RESTORE_FLAG $PROFILE_FLAG
+check_stage $? "Training" "${LOG}_training.log"
 
 # SKIP_EVAL=1 stops after training and skips the evaluation + inference tail. Use it for short
 # benchmark/profiling jobs where the model is undertrained and eval/inference would only waste the
@@ -141,6 +153,7 @@ srun --environment=tensorflow --gpu-bind=none --output=""$LOG"_evaluation.log" \
         --include_grid \
         --include_des \
         --include_mocks
+check_stage $? "Evaluation" "${LOG}_evaluation.log"
 
 sleep 30
 
