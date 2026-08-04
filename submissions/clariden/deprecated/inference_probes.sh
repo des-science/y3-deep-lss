@@ -1,4 +1,7 @@
 #!/bin/bash
+# Moved to deprecated/ 2026-08-04: hardcoded to dead v16 model names (v33), never
+# parameterized. For a one-off multi-probe inference sweep today, loop inference.sh by hand
+# (see its header) or add a new script under dev/.
 #SBATCH --account=a0158
 #SBATCH --partition=normal
 #SBATCH --time=01:00:00
@@ -14,29 +17,31 @@ MYSCRATCH="/iopsstor/scratch/cscs/athomsen"
 VERSION="v16"
 SUBVERSION="rot_in_place"
 
-# MODEL="v6"
-MODEL="v8_cls"
+# SUMMARY="maps"
+# MODEL="v8_cls"
 
-PROBE="combined"
+SUMMARY="cls"
+MODEL="v33"
 
-N_STEPS=(200000 250000)
+# Each probe in PROBES runs on its own GPU in parallel.
+# Use a single-element list to run just one probe on one GPU.
+# PROBES=("lensing" "clustering" "combined")
+PROBES=("lensing")
 
 FLOW_CONFIG="$REPOS/multiprobe-simulation-inference/configs/flow/maf.yaml"
 
-OUTPUT="$MYSCRATCH/deep_lss/runs/$VERSION/$SUBVERSION/maps/$PROBE"
-
 run_inference() {
-    local n_steps="$1"
-    local log="$OUTPUT/$MODEL/logs/${SLURM_JOB_ID}"
+    local probe="$1"
+    local output="$MYSCRATCH/deep_lss/runs/$VERSION/$SUBVERSION/$SUMMARY/$probe"
+    local log="$output/$MODEL/logs/${SLURM_JOB_ID}"
     mkdir -p "$(dirname "$log")"
 
     srun -N1 --ntasks-per-node=1 --exclusive --gpus-per-task=1 --cpus-per-gpu=72 --mem=110G \
         --uenv=pytorch/v2.9.1:v2 --view=default \
-        --output="${log}_${n_steps}_inference.log" \
+        --output="${log}_inference.log" \
         bash -c "source ~/dlss/torch_env/bin/activate && python $REPOS/multiprobe-simulation-inference/msi/apps/run_inference.py \
-            --out_dir=\"$OUTPUT\" \
+            --out_dir=\"$output\" \
             --model_name=\"$MODEL\" \
-            --n_steps=$n_steps \
             --flow_config=\"$FLOW_CONFIG\" \
             --n_flows=4 \
             --sample_posterior \
@@ -45,7 +50,7 @@ run_inference() {
             --include_mocks"
 }
 
-for n_steps in "${N_STEPS[@]}"; do
-    run_inference "$n_steps" &
+for probe in "${PROBES[@]}"; do
+    run_inference "$probe" &
 done
 wait

@@ -1,4 +1,9 @@
 #!/bin/bash
+# Superseded 2026-08-04 by training_chainer.sh, which now covers both fresh-start and resume
+# via START_RUN (plus the same AFTER-gating this script introduced) and uses
+# --dependency=afterany (this used afterok, wrong for a job that's designed to TIMEOUT — see
+# training_chainer.sh's header).
+#
 # Chain resume_training.sh runs for a given PROBE/MODEL. Each run restores the previous
 # checkpoint (+ configs.yaml) and trains another n_steps, so runs 1/2/3 accumulate to
 # 120k/240k/360k steps. This is the resume-side analogue of training_chainer.sh (which

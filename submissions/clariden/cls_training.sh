@@ -15,10 +15,8 @@ export TF_NUM_INTRAOP_THREADS=${SLURM_CPUS_PER_TASK}
 REPOS="/users/athomsen/dlss/repos"
 MYSCRATCH="/iopsstor/scratch/cscs/athomsen"
 
-# VERSION="v16"
-VERSION="v17"
-# SUBVERSION="rot_in_place"
-SUBVERSION="baseline"
+VERSION="${VERSION:-v17}"
+SUBVERSION="${SUBVERSION:-baseline}"
 INPUT="$MYSCRATCH/deep_lss/data/$VERSION/$SUBVERSION"
 
 # PROBES / NET / MODEL_NAME may be overridden from the environment (space-separated for PROBES),

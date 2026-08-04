@@ -11,18 +11,20 @@
 REPOS="/users/athomsen/dlss/repos"
 MYSCRATCH="/iopsstor/scratch/cscs/athomsen"
 
-VERSION="v16"
-# SUBVERSION="default"
-# SUBVERSION="no_sc"
-SUBVERSION="rot_in_place"
+# VERSION/SUBVERSION/PROBES/MAPS_MODEL/CLS_MODEL_NAME may be overridden from the environment
+# (space-separated for PROBES), e.g.
+#   VERSION=v17 SUBVERSION=baseline PROBES="lensing combined" MAPS_MODEL=t2_cls \
+#       CLS_MODEL_NAME=v39_transformer sbatch combined_inference.sh
+VERSION="${VERSION:-v16}"
+SUBVERSION="${SUBVERSION:-rot_in_place}"
 
-PROBES=("lensing" "clustering" "combined")
+read -r -a PROBES <<< "${PROBES:-lensing clustering combined}"
 
 # Map-level model (trained by training.sh, written under runs/.../maps/$PROBE/$MAPS_MODEL)
-MAPS_MODEL="v6"
+MAPS_MODEL="${MAPS_MODEL:-v6}"
 
 # Power-spectrum / Cls-level model (trained by cls_training.sh, written under runs/.../cls/$PROBE/$CLS_MODEL_NAME)
-CLS_MODEL_NAME="v22"
+CLS_MODEL_NAME="${CLS_MODEL_NAME:-v22}"
 
 FLOW_CONFIG="$REPOS/multiprobe-simulation-inference/configs/flow/maf.yaml"
 
