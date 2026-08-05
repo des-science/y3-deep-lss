@@ -11,15 +11,22 @@
 #
 # All training.sh env vars (VERSION, SUBVERSION, PROBE, LOSS, ARCH, SCALES, ...) are forwarded.
 
+# --- Repository roots --------------------------------------------------------------------------
+
 REPOS="/users/athomsen/dlss/repos"
-MAPS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/.."
+DEEP_LSS="$REPOS/y3-deep-lss"
+MAPS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/.."  # resolved from here, not the caller's CWD
+
+# --- Overridable defaults ----------------------------------------------------------------------
 
 : "${CONFIGS_GLOB:?set CONFIGS_GLOB, e.g. configs/deepsphere/combined/bench_v7/*.yaml}"
 : "${MODEL_PREFIX:?set MODEL_PREFIX, e.g. bench_v7}"
-CHAIN="${CHAIN:-0}"
+CHAIN="${CHAIN:-0}"  # 1 submits a training_chainer.sh chain per config instead of a single job
+
+# --- Derived config list -----------------------------------------------------------------------
 
 GLOB_ABS="$CONFIGS_GLOB"
-case "$CONFIGS_GLOB" in /*) ;; *) GLOB_ABS="$REPOS/y3-deep-lss/$CONFIGS_GLOB" ;; esac
+case "$CONFIGS_GLOB" in /*) ;; *) GLOB_ABS="$DEEP_LSS/$CONFIGS_GLOB" ;; esac
 
 shopt -s nullglob
 CONFIGS=($GLOB_ABS)
@@ -28,6 +35,8 @@ if [ ${#CONFIGS[@]} -eq 0 ]; then
     echo "No configs matched $CONFIGS_GLOB" >&2
     exit 1
 fi
+
+# --- Submit one run per config -----------------------------------------------------------------
 
 for f in "${CONFIGS[@]}"; do
     name="$(basename "${f%.yaml}")"

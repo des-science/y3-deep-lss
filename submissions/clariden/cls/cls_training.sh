@@ -8,14 +8,59 @@
 #SBATCH --job-name=cls_training
 #SBATCH --output=/users/athomsen/dlss/repos/y3-deep-lss/submissions/clariden/slurm/slurm-%j.out
 
-# Cls-summary train+eval+infer, multi-probe parallel. Unlike maps/ (which has standalone
-# eval-only/infer-only recovery scripts in maps/rerun/), there's no such counterpart here yet --
-# a failed eval/inference step means rerunning this whole script. Cls ablations/experiments
-# live in cls/experiments/.
+# Cls-summary train+eval+infer, one probe per GPU in parallel. Unlike maps/, there is no
+# eval-only/infer-only recovery counterpart (no cls/rerun/) -- a failed stage means rerunning the
+# whole script. One-off Cls ablations go through experiments/cls_experiment.sh.
 
+# --- Runtime environment ---------------------------------------------------------------------
+
+# Each probe runs as its own 1-GPU/72-CPU srun step, so the thread pools are sized per step rather
+# than for the whole 288-core node.
 export SLURM_CPUS_PER_TASK=72
 export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK}
 export TF_NUM_INTRAOP_THREADS=${SLURM_CPUS_PER_TASK}
+
+# --- Repository and scratch roots ------------------------------------------------------------
+
+REPOS="/users/athomsen/dlss/repos"
+MYSCRATCH="/iopsstor/scratch/cscs/athomsen"
+
+DEEP_LSS="$REPOS/y3-deep-lss"
+MSFM="$REPOS/multiprobe-simulation-forward-model"
+MSI="$REPOS/multiprobe-simulation-inference"
+
+# --- Overridable defaults ----------------------------------------------------------------------
+
+VERSION="${VERSION:-v17}"
+SUBVERSION="${SUBVERSION:-baseline}"
+
+# Space-separated; the 4 defaults fill the node's 4 GPUs. Each entry is "probe" or
+# "probe:probes_config" -- the probe keys the run dir, the config selects configs/probes/*.yaml
+# (defaulting to the probe name). v17 is standard-NLA data, so it wants the _nla configs:
+#   PROBES="lensing:lensing_nla 2x2pt:2x2pt_nla combined:combined_nla clustering"
+read -r -a PROBES <<< "${PROBES:-lensing clustering 2x2pt combined}"
+
+# Summary architecture: configs/cls/<NET>/<CLS_CONFIG>.yaml sets network.name (mlp | cls_cnn |
+# cls_transformer) -- see run_cls_training+evaluation.py for the switch.
+NET="${NET:-mlp}"                 # mlp | cnn | transformer
+CLS_CONFIG="${CLS_CONFIG:-default}"
+
+LOSS="${LOSS:-vmim}"              # configs/loss/: also vmim_vicreg, vmim_vicreg_inv, vmim_vicreg_inv_10
+SCALES="${SCALES:-8wl,32gc}"      # configs/scales/: also 8wl,40gc, unsmoothed, lmax_1024
+DATA="${DATA:-default}"           # configs/data/<DATA>.yaml
+MODEL_NAME="${MODEL_NAME:-v1}"    # run dir under cls/<probe>/
+
+# --- Derived paths, configs and flags ----------------------------------------------------------
+
+INPUT="$MYSCRATCH/deep_lss/data/$VERSION/$SUBVERSION"
+RUNS="$MYSCRATCH/deep_lss/runs/$VERSION/$SUBVERSION/cls"
+
+MSFM_CONFIG="$MSFM/configs/$VERSION/$SUBVERSION.yaml"
+SCALES_CONFIG="$DEEP_LSS/configs/scales/${SCALES}.yaml"
+LOSS_CONFIG="$DEEP_LSS/configs/loss/${LOSS}.yaml"
+DATA_CONFIG="$DEEP_LSS/configs/data/${DATA}.yaml"
+NET_CONFIG="$DEEP_LSS/configs/cls/${NET}/${CLS_CONFIG}.yaml"
+FLOW_CONFIG="$MSI/configs/flow/maf.yaml"
 
 # Aborts the per-probe subshell instead of letting inference silently run against a stale
 # preds_*.h5 if the training+eval stage fails. Inherited by the "( ... ) &" subshells below.
@@ -27,71 +72,44 @@ check_stage() {
     fi
 }
 
-REPOS="/users/athomsen/dlss/repos"
-MYSCRATCH="/iopsstor/scratch/cscs/athomsen"
+# --- Stage 0: Cls precache (hard_rebinned scale cut only) --------------------------------------
 
-VERSION="${VERSION:-v17}"
-SUBVERSION="${SUBVERSION:-baseline}"
-INPUT="$MYSCRATCH/deep_lss/data/$VERSION/$SUBVERSION"
-
-# PROBES/NET/MODEL_NAME overridable (PROBES space-separated; the 4 defaults fit the node's 4 GPUs).
-# Each PROBES entry is "probe" or "probe:probes_config" -- probe keys the run dir, probes_config
-# selects configs/probes/*.yaml (defaults to the probe name), e.g. for the v17 NLA data:
-#   PROBES="lensing:lensing_nla 2x2pt:2x2pt_nla combined:combined_nla clustering"
-read -r -a PROBES <<< "${PROBES:-lensing clustering 2x2pt combined}"
-
-# Cls summary architecture: configs/cls/${NET}/${CLS_CONFIG}.yaml selects network.name (mlp | cls_cnn |
-# cls_transformer). See run_cls_training+evaluation.py for the switch. Options: mlp | cnn | transformer.
-NET="${NET:-mlp}"
-CLS_CONFIG="${CLS_CONFIG:-default}"
-
-LOSS="${LOSS:-vmim}"
-# LOSS="vmim_vicreg_inv"
-# LOSS="vmim_vicreg_inv_10"
-# LOSS="vmim_vicreg"
-
-SCALES="8wl,32gc"
-# SCALES="8wl,40gc"
-# SCALES="unsmoothed"
-# SCALES="lmax_1024"
-
-DATA="default"
-MODEL_NAME="${MODEL_NAME:-v1}"
-
-FLOW_CONFIG="$REPOS/multiprobe-simulation-inference/configs/flow/maf.yaml"
-
-# hard_rebinned needs the shared Cls cache built once up front (probe-independent, covers all pairs)
+# The rebinned-Cls cache is probe-independent (it covers all probe pairs), so it is built once up
+# front rather than raced for by the parallel probes below. Only hard_rebinned reads it.
 SCALE_CUT=$(srun -N1 --ntasks-per-node=1 --environment=tensorflow python -c "
 import yaml
-with open('$REPOS/y3-deep-lss/configs/cls/${NET}/${CLS_CONFIG}.yaml') as f:
+with open('$NET_CONFIG') as f:
     print(yaml.safe_load(f).get('scale_cut', 'soft_pruned'))
 ")
 
 if [ "$SCALE_CUT" = "hard_rebinned" ]; then
-    LOG_PRECACHE="$MYSCRATCH/deep_lss/runs/$VERSION/$SUBVERSION/cls/lensing/$MODEL_NAME/logs/${SLURM_JOB_ID}_precache"
+    # combined.yaml, not combined_nla.yaml: the two differ only in their `params` list, which does
+    # not reach the cache -- the probe/channel structure that does is identical.
+    LOG_PRECACHE="$RUNS/lensing/$MODEL_NAME/logs/${SLURM_JOB_ID}_precache"
     mkdir -p "$(dirname "$LOG_PRECACHE")"
     srun -N1 --ntasks-per-node=1 --exclusive --cpus-per-task=288 --mem=450G \
         --environment=tensorflow \
         --output="${LOG_PRECACHE}.log" \
-        python "$REPOS/y3-deep-lss/deep_lss/apps/run_cls_training+evaluation.py" \
-            --msfm_config="$REPOS/multiprobe-simulation-forward-model/configs/$VERSION/$SUBVERSION.yaml" \
-            --probes_config="$REPOS/y3-deep-lss/configs/probes/combined.yaml" \
-            --scales_config="$REPOS/y3-deep-lss/configs/scales/${SCALES}.yaml" \
-            --loss_config="$REPOS/y3-deep-lss/configs/loss/${LOSS}.yaml" \
-            --net_config="$REPOS/y3-deep-lss/configs/cls/${NET}/${CLS_CONFIG}.yaml" \
-            --data_config="$REPOS/y3-deep-lss/configs/data/${DATA}.yaml" \
+        python "$DEEP_LSS/deep_lss/apps/run_cls_training+evaluation.py" \
+            --msfm_config="$MSFM_CONFIG" \
+            --probes_config="$DEEP_LSS/configs/probes/combined.yaml" \
+            --scales_config="$SCALES_CONFIG" \
+            --loss_config="$LOSS_CONFIG" \
+            --net_config="$NET_CONFIG" \
+            --data_config="$DATA_CONFIG" \
             --data_dir="$INPUT" \
             --out_dir="$INPUT" \
             --model_name="precache" \
             --precache_only
 fi
 
+# --- Stage 1: Per-probe train+eval, then inference (one probe per GPU, in parallel) ------------
+
 for ENTRY in "${PROBES[@]}"; do
-    # "probe" or "probe:probes_config" -- the probe keys the run dir, the config supplies the params
     PROBE="${ENTRY%%:*}"
     PROBE_CONFIG="${ENTRY##*:}"
 
-    OUTPUT="$MYSCRATCH/deep_lss/runs/$VERSION/$SUBVERSION/cls/$PROBE"
+    OUTPUT="$RUNS/$PROBE"
     LOG="$OUTPUT/$MODEL_NAME/logs/${SLURM_JOB_ID}"
     mkdir -p "$(dirname "$LOG")"
 
@@ -99,13 +117,13 @@ for ENTRY in "${PROBES[@]}"; do
         srun -N1 --ntasks-per-node=1 --exclusive --gpus-per-task=1 --cpus-per-gpu=72 --mem=110G \
             --environment=tensorflow \
             --output="${LOG}_training.log" \
-            python "$REPOS/y3-deep-lss/deep_lss/apps/run_cls_training+evaluation.py" \
-                --msfm_config="$REPOS/multiprobe-simulation-forward-model/configs/$VERSION/$SUBVERSION.yaml" \
-                --probes_config="$REPOS/y3-deep-lss/configs/probes/${PROBE_CONFIG}.yaml" \
-                --scales_config="$REPOS/y3-deep-lss/configs/scales/${SCALES}.yaml" \
-                --loss_config="$REPOS/y3-deep-lss/configs/loss/${LOSS}.yaml" \
-                --net_config="$REPOS/y3-deep-lss/configs/cls/${NET}/${CLS_CONFIG}.yaml" \
-                --data_config="$REPOS/y3-deep-lss/configs/data/${DATA}.yaml" \
+            python "$DEEP_LSS/deep_lss/apps/run_cls_training+evaluation.py" \
+                --msfm_config="$MSFM_CONFIG" \
+                --probes_config="$DEEP_LSS/configs/probes/${PROBE_CONFIG}.yaml" \
+                --scales_config="$SCALES_CONFIG" \
+                --loss_config="$LOSS_CONFIG" \
+                --net_config="$NET_CONFIG" \
+                --data_config="$DATA_CONFIG" \
                 --data_dir="$INPUT" \
                 --out_dir="$OUTPUT" \
                 --model_name="$MODEL_NAME" \
@@ -117,7 +135,7 @@ for ENTRY in "${PROBES[@]}"; do
         srun -N1 --ntasks-per-node=1 --exclusive --gpus-per-task=1 --cpus-per-gpu=72 --mem=110G \
             --uenv=pytorch/v2.9.1:v2 --view=default \
             --output="${LOG}_inference.log" \
-            bash -c "source ~/dlss/torch_env/bin/activate && python $REPOS/multiprobe-simulation-inference/msi/apps/run_inference.py \
+            bash -c "source ~/dlss/torch_env/bin/activate && python $MSI/msi/apps/run_inference.py \
                 --out_dir=\"$OUTPUT\" \
                 --model_name=\"$MODEL_NAME\" \
                 --flow_config=\"$FLOW_CONFIG\" \

@@ -26,19 +26,32 @@
 #
 # Training-only runs, so grid preds exist but DES/mock preds do not -> --include_grid only.
 
+# --- Runtime environment -------------------------------------------------------------------------
+
 export SLURM_CPUS_PER_TASK=72
 export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK}
 export TF_NUM_INTRAOP_THREADS=${SLURM_CPUS_PER_TASK}
 
+# --- Repository and scratch roots ----------------------------------------------------------------
+
 REPOS="/users/athomsen/dlss/repos"
 MYSCRATCH="/iopsstor/scratch/cscs/athomsen"
+
+MSI="$REPOS/multiprobe-simulation-inference"
+
+# --- Fixed settings ------------------------------------------------------------------------------
 
 VERSION="v17"
 SUBVERSION="baseline"
 PROBE="lensing_nla"
+
+# --- Derived paths and configs -------------------------------------------------------------------
+
 OUTPUT="$MYSCRATCH/deep_lss/runs/$VERSION/$SUBVERSION/cls/$PROBE"
 
-FLOW_CONFIG="$REPOS/multiprobe-simulation-inference/configs/flow/maf.yaml"
+FLOW_CONFIG="$MSI/configs/flow/maf.yaml"
+
+# --- Stage 1: Inference on each existing checkpoint, 4 at a time ---------------------------------
 
 # 3 seeds x 2 configs. Seed 42 came from the ladder (job 2770501), 43/44 from the replication
 # (job 2770593), so the model_name prefixes differ.
@@ -56,7 +69,7 @@ for M in "${MODELS[@]}"; do
         srun -N1 --ntasks-per-node=1 --exclusive --gpus-per-task=1 --cpus-per-gpu=72 --mem=110G \
             --uenv=pytorch/v2.9.1:v2 --view=default \
             --output="${LOG}.log" \
-            bash -c "source ~/dlss/torch_env/bin/activate && python $REPOS/multiprobe-simulation-inference/msi/apps/run_inference.py \
+            bash -c "source ~/dlss/torch_env/bin/activate && python $MSI/msi/apps/run_inference.py \
                 --out_dir=\"$OUTPUT\" \
                 --model_name=\"$M\" \
                 --flow_config=\"$FLOW_CONFIG\" \

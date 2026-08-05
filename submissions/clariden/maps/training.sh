@@ -10,87 +10,58 @@
 #SBATCH --job-name=training
 #SBATCH --output=/users/athomsen/dlss/repos/y3-deep-lss/submissions/clariden/slurm/slurm-%j.out
 
-# Maps-domain full train+eval+infer, one 12h job. Chained across multiple jobs via
-# training_chainer.sh; eval/inference-only recovery for an existing run lives in rerun/;
-# maps-specific benchmarks/ and experiments/ live alongside this script.
+# Maps-domain train+eval+infer in one 12 h job. Chain several via training_chainer.sh; recover a run
+# whose eval/inference didn't complete from rerun/; benchmarks/ and experiments/ sit alongside.
 
-# avoid a crashing task filling the /users quota with a core dump
-ulimit -c 0
+# --- Runtime environment ---------------------------------------------------------------------
 
-# W&B API key from .netrc, passed explicitly so it reaches the container
-export WANDB_API_KEY=$(awk '/password/ {print $2}' ~/.netrc)
+ulimit -c 0  # a crashing task would otherwise fill the /users quota with a core dump
 
+export WANDB_API_KEY=$(awk '/password/ {print $2}' ~/.netrc)  # exported so it reaches the container
 export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK}
 export TF_NUM_INTRAOP_THREADS=${SLURM_CPUS_PER_TASK}
 
-# Aborts the job instead of silently letting a later stage run against stale/incomplete output
-# from a stage that just failed (e.g. training.sh used to run eval+inference against an old
-# preds_*.h5 after a mid-chain evaluation crash, with no indication anything was wrong).
-check_stage() {
-    local status=$1 stage=$2 log=$3
-    if [ "$status" -ne 0 ]; then
-        echo "$stage failed (exit $status) — see $log. Aborting before the next stage." >&2
-        exit "$status"
-    fi
-}
-
-RUN_NUM=${RUN_NUM:-1}
-RESTORE_FLAG=""
-if [ "$RUN_NUM" -gt 1 ]; then
-    RESTORE_FLAG="--restore_checkpoint"
-fi
-
-# PROFILE=1 traces steps 800->805 (run_training.py --profile); one-off diagnostics only.
-PROFILE_FLAG=""
-if [ "${PROFILE:-0}" = "1" ]; then
-    PROFILE_FLAG="--profile"
-fi
+# --- Repository and scratch roots ------------------------------------------------------------
 
 REPOS="/users/athomsen/dlss/repos"
 MYSCRATCH="/iopsstor/scratch/cscs/athomsen"
 
-# To use an older dataset, override these plus PROBE_CONFIG/CLS_PROBES_CONFIG (see below), e.g.:
-#   VERSION=v16 SUBVERSION=rot_in_place PROBE_CONFIG=lensing CLS_PROBES_CONFIG=.../combined.yaml
+DEEP_LSS="$REPOS/y3-deep-lss"
+MSFM="$REPOS/multiprobe-simulation-forward-model"
+MSI="$REPOS/multiprobe-simulation-inference"
+
+# --- Overridable defaults (set from the environment, e.g. by training_chainer.sh) -------------
+
+# Dataset; on v16 also set PROBE=lensing and CLS_PROBES_CONFIG=.../combined.yaml (no _nla configs).
 VERSION="${VERSION:-v17}"
 SUBVERSION="${SUBVERSION:-baseline}"
 
-STRATEGY="mirrored"
-DATA="default"
+SCALES="${SCALES:-8wl,32gc}"   # configs/scales/<SCALES>.yaml, e.g. unsmoothed, lmax_1024
+LOSS="${LOSS:-vmim}"           # configs/loss/<LOSS>.yaml: vmim = flow head, vmim_gmm = mixture head
+PROBE="${PROBE:-lensing_nla}"  # configs/probes/<PROBE>.yaml; also the run dir and the wandb tag
 
-# SCALES may be overridden from the environment (e.g. SCALES=unsmoothed, SCALES=lmax_1024)
-SCALES="${SCALES:-8wl,32gc}"
+# Cls precache only: it spans ALL probe pairs, so it uses the combined config rather than PROBE's.
+CLS_PROBES_CONFIG="${CLS_PROBES_CONFIG:-$DEEP_LSS/configs/probes/combined_nla.yaml}"
 
-# PROBE: lensing / clustering / combined -- keys the run directory and wandb tag.
-# PROBE_CONFIG selects configs/probes/*.yaml; defaults to the _nla variant for lensing/combined
-# (v17 data). Set PROBE_CONFIG=<probe> explicitly on v16 to pick the non-nla config.
-PROBE="${PROBE:-lensing}"
-if [ -z "${PROBE_CONFIG:-}" ]; then
-    case "$PROBE" in
-        lensing|combined) PROBE_CONFIG="${PROBE}_nla" ;;
-        *)                PROBE_CONFIG="$PROBE" ;;
-    esac
-fi
+# The per-probe net configs differ in n_steps, smooth_nside and local_batch_size, so set NET_CONFIG
+# together with PROBE. ARCH only tags the run in wandb -- keep it in step with NET_CONFIG.
+ARCH="${ARCH:-deepsphere}"
+NET_CONFIG="${NET_CONFIG:-$DEEP_LSS/configs/deepsphere/lensing/maps+cls.yaml}"
 
-# LOSS selects the VMIM head via configs/loss/<LOSS>.yaml (vmim = flow, vmim_gmm = Gaussian
-# mixture); orthogonal to ARCH/PROBE. Default: flow on every probe.
-LOSS="${LOSS:-vmim}"
-
-ARCH="${ARCH:-transformer}"
-
-PROBES_CONFIG="$REPOS/y3-deep-lss/configs/probes/${PROBE_CONFIG}.yaml"
-
-# The rebinned-Cls precache spans ALL probe pairs, so it always uses the combined config
-# regardless of PROBE (on v16 set CLS_PROBES_CONFIG=.../combined.yaml).
-CLS_PROBES_CONFIG="${CLS_PROBES_CONFIG:-$REPOS/y3-deep-lss/configs/probes/combined_nla.yaml}"
-# NET_CONFIG: network + training config, e.g. override to
-#   $REPOS/y3-deep-lss/configs/transformer/lensing/maps.yaml (maps-only) or a bench_*/ variant.
-NET_CONFIG="${NET_CONFIG:-$REPOS/y3-deep-lss/configs/transformer/${PROBE}/maps+cls.yaml}"
-
-# NET_NAME (config basename) tags the run in wandb. MODEL_DIR (run dir under maps/<probe>/)
-# defaults to it -- set MODEL_DIR explicitly for anything to keep (e.g. MODEL_DIR=t2_cls).
+# Run dir under maps/<probe>/; set it explicitly for anything worth keeping, e.g. MODEL_DIR=t2_cls.
 NET_NAME="$(basename "${NET_CONFIG%.yaml}")"
 MODEL_DIR="${MODEL_DIR:-$NET_NAME}"
 
+RUN_NUM="${RUN_NUM:-1}"      # position in a training_chainer.sh chain; >1 restores the checkpoint
+PROFILE="${PROFILE:-0}"      # 1 traces steps 800->805 (run_training.py --profile); diagnostics only
+SKIP_EVAL="${SKIP_EVAL:-0}"  # 1 stops after training -- for benchmarks whose model is throwaway
+
+# --- Fixed settings --------------------------------------------------------------------------
+
+STRATEGY="mirrored"  # TF distribution strategy; also tags the run and names the logs
+DATA="default"       # configs/data/<DATA>.yaml
+
+# --- Derived paths, configs and flags --------------------------------------------------------
 
 INPUT="$MYSCRATCH/deep_lss/data/$VERSION/$SUBVERSION"
 OUTPUT="$MYSCRATCH/deep_lss/runs/$VERSION/$SUBVERSION/maps/$PROBE"
@@ -99,21 +70,42 @@ mkdir -p "$(dirname "$LOG")"
 
 TRAIN_TFR="$INPUT/tfrecords/grid/DESy3_grid_dmb_????.tfrecord"
 
-# maps+cls runs need a rebinned-Cls calibration cache; run_training.py only reads it (aborts if
-# missing), so build it here when the net_config carries a cls block and it's absent. Idempotent.
+MSFM_CONFIG="$MSFM/configs/$VERSION/$SUBVERSION.yaml"
+PROBES_CONFIG="$DEEP_LSS/configs/probes/${PROBE}.yaml"
+SCALES_CONFIG="$DEEP_LSS/configs/scales/${SCALES}.yaml"
+LOSS_CONFIG="$DEEP_LSS/configs/loss/${LOSS}.yaml"
+DATA_CONFIG="$DEEP_LSS/configs/data/${DATA}.yaml"
+FLOW_CONFIG="$MSI/configs/flow/maf.yaml"
+
+RESTORE_FLAG=""; [ "$RUN_NUM" -gt 1 ] && RESTORE_FLAG="--restore_checkpoint"
+PROFILE_FLAG=""; [ "$PROFILE" = "1" ] && PROFILE_FLAG="--profile"
+
+# Abort rather than let a stage run against stale output from one that just failed.
+check_stage() {
+    local status=$1 stage=$2 log=$3
+    if [ "$status" -ne 0 ]; then
+        echo "$stage failed (exit $status) — see $log. Aborting before the next stage." >&2
+        exit "$status"
+    fi
+}
+
+# --- Stage 0: Cls precache (maps+cls runs only) ----------------------------------------------
+
+# run_training.py only reads the rebinned-Cls calibration cache and aborts if it is missing, so
+# build it here when the net config carries a cls block and the cache is absent. Idempotent.
 CLS_N_BINS=$(grep -E '^\s*n_bins:' "$NET_CONFIG" | head -1 | grep -oE '[0-9]+')
-CLS_N_BINS=${CLS_N_BINS:-16}
-CLS_CACHE="$INPUT/cls/rebinned_nb${CLS_N_BINS}_${SCALES}.h5"
+CLS_CACHE="$INPUT/cls/rebinned_nb${CLS_N_BINS:-16}_${SCALES}.h5"
+
 if grep -qE '^\s*cls:' "$NET_CONFIG" && [ ! -f "$CLS_CACHE" ]; then
     echo "maps+cls run: Cls cache $CLS_CACHE missing — building it before training."
-    srun --environment=tensorflow --gpu-bind=none --output=""$LOG"_precache.log" \
-        python $REPOS/y3-deep-lss/deep_lss/apps/run_cls_training+evaluation.py \
-            --msfm_config="$REPOS/multiprobe-simulation-forward-model/configs/$VERSION/$SUBVERSION.yaml" \
+    srun --environment=tensorflow --gpu-bind=none --output="${LOG}_precache.log" \
+        python "$DEEP_LSS/deep_lss/apps/run_cls_training+evaluation.py" \
+            --msfm_config="$MSFM_CONFIG" \
             --probes_config="$CLS_PROBES_CONFIG" \
-            --scales_config="$REPOS/y3-deep-lss/configs/scales/${SCALES}.yaml" \
-            --loss_config="$REPOS/y3-deep-lss/configs/loss/${LOSS}.yaml" \
-            --net_config="$REPOS/y3-deep-lss/configs/cls/mlp/default.yaml" \
-            --data_config="$REPOS/y3-deep-lss/configs/data/${DATA}.yaml" \
+            --scales_config="$SCALES_CONFIG" \
+            --loss_config="$LOSS_CONFIG" \
+            --net_config="$DEEP_LSS/configs/cls/mlp/default.yaml" \
+            --data_config="$DATA_CONFIG" \
             --data_dir="$INPUT" \
             --out_dir="$INPUT" \
             --model_name="precache" \
@@ -121,55 +113,53 @@ if grep -qE '^\s*cls:' "$NET_CONFIG" && [ ! -f "$CLS_CACHE" ]; then
     sleep 10
 fi
 
-srun --environment=tensorflow --gpu-bind=none --output=""$LOG"_training.log" \
-    python $REPOS/y3-deep-lss/deep_lss/apps/run_training.py \
-        --dir_base=$OUTPUT \
-        --dir_model=$MODEL_DIR \
-        --train_tfr_pattern=$TRAIN_TFR \
-        --data_dir=$INPUT \
-        --msfm_config="$REPOS/multiprobe-simulation-forward-model/configs/$VERSION/$SUBVERSION.yaml" \
-        --probes_config=$PROBES_CONFIG \
-        --scales_config="$REPOS/y3-deep-lss/configs/scales/${SCALES}.yaml" \
-        --loss_config="$REPOS/y3-deep-lss/configs/loss/${LOSS}.yaml" \
-        --data_config="$REPOS/y3-deep-lss/configs/data/${DATA}.yaml" \
-        --net_config=$NET_CONFIG \
+# --- Stage 1: Training -----------------------------------------------------------------------
+
+srun --environment=tensorflow --gpu-bind=none --output="${LOG}_training.log" \
+    python "$DEEP_LSS/deep_lss/apps/run_training.py" \
+        --dir_base="$OUTPUT" \
+        --dir_model="$MODEL_DIR" \
+        --train_tfr_pattern="$TRAIN_TFR" \
+        --data_dir="$INPUT" \
+        --msfm_config="$MSFM_CONFIG" \
+        --probes_config="$PROBES_CONFIG" \
+        --scales_config="$SCALES_CONFIG" \
+        --loss_config="$LOSS_CONFIG" \
+        --data_config="$DATA_CONFIG" \
+        --net_config="$NET_CONFIG" \
         --dist_strategy="$STRATEGY" \
         --wandb \
         --wandb_tags "$VERSION" "$SUBVERSION" "$PROBE" "$LOSS" "$STRATEGY" "$ARCH" "$NET_NAME" "$SCALES" \
         $RESTORE_FLAG $PROFILE_FLAG
 check_stage $? "Training" "${LOG}_training.log"
 
-# SKIP_EVAL=1 stops after training and skips the evaluation + inference tail. Use it for short
-# benchmark/profiling jobs where the model is undertrained and eval/inference would only waste the
-# allocation. Leave unset for production runs.
-if [ "${SKIP_EVAL:-0}" = "1" ]; then
+if [ "$SKIP_EVAL" = "1" ]; then
     echo "SKIP_EVAL=1: skipping evaluation and inference."
     exit 0
 fi
 
+# --- Stage 2: Evaluation ---------------------------------------------------------------------
+
 sleep 30
 
-srun --environment=tensorflow --gpu-bind=none --output=""$LOG"_evaluation.log" \
-    python $REPOS/y3-deep-lss/deep_lss/apps/run_evaluation.py \
+srun --environment=tensorflow --gpu-bind=none --output="${LOG}_evaluation.log" \
+    python "$DEEP_LSS/deep_lss/apps/run_evaluation.py" \
         --dist_strategy="$STRATEGY" \
-        --grid_vali_tfr_pattern=$TRAIN_TFR \
-        --data_dir=$INPUT \
+        --grid_vali_tfr_pattern="$TRAIN_TFR" \
+        --data_dir="$INPUT" \
         --include_grid \
         --include_des \
         --include_mocks
 check_stage $? "Evaluation" "${LOG}_evaluation.log"
 
+# --- Stage 3: Inference ----------------------------------------------------------------------
+
 sleep 30
 
-FLOW_CONFIG="$REPOS/multiprobe-simulation-inference/configs/flow/maf.yaml"
-
-# --cpu-bind=none: without it, this 1-GPU/72-CPU sub-allocation fails to launch ("Unable to
-# satisfy cpu bind request" -> step CANCELLED, empty log) since SLURM maps the 72 CPUs to a
-# single socket's mask.
 srun -N1 --ntasks-per-node=1 --gpus-per-task=1 --cpus-per-task=72 --mem=110G --cpu-bind=none \
     --uenv=pytorch/v2.9.1:v2 --view=default \
-    --output=""$LOG"_inference.log" \
-    bash -c "source ~/dlss/torch_env/bin/activate && python $REPOS/multiprobe-simulation-inference/msi/apps/run_inference.py \
+    --output="${LOG}_inference.log" \
+    bash -c "source ~/dlss/torch_env/bin/activate && python $MSI/msi/apps/run_inference.py \
         --out_dir=\"$OUTPUT\" \
         --model_name=\"$MODEL_DIR\" \
         --flow_config=\"$FLOW_CONFIG\" \

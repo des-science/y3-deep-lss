@@ -9,39 +9,53 @@
 #SBATCH --cpus-per-task=72
 #SBATCH --job-name=benchmark_sweep
 #SBATCH --output=/users/athomsen/dlss/repos/y3-deep-lss/submissions/clariden/slurm/slurm-%j.out
-
-# Single-GPU synthetic (config x batch) step-time/memory sweep -- generic form of the harness
+#
+# Single-GPU synthetic (config x batch) step-time/memory sweep -- the generic form of the harness
 # that used to be ~15 near-identical scripts under benchmark/. Each (config, batch) is its own
 # `srun` step (fresh process -> memory released; OOM/kernel errors classified, not fatal to the
 # sweep), appended to a JSONL, then aggregated into CSV/markdown.
 #
+# Domain-agnostic: BENCH_SCRIPT names any deep_lss/apps/benchmark_*.py, which is why this lives in
+# shared/ rather than under maps/ or cls/.
+#
 # Usage:
 #   BENCH_SCRIPT=benchmark_transformer.py CONFIGS_GLOB="configs/transformer/lensing/bench_t7/*.yaml" \
 #       OUT_DIR=/iopsstor/scratch/cscs/athomsen/deep_lss/claude/bench/<name> \
-#       BATCH_SIZES="16 32" sbatch benchmark_sweep.sh
+#       BATCH_SIZES="16 32" sbatch shared/benchmark_sweep.sh
 #
 # BENCH_CONFIGS="a.yaml b.yaml" times only those (paths relative to CONFIGS_GLOB's dir, or
 # repo-relative, or absolute) and APPENDS to JSONL instead of truncating -- use to add a config
 # without re-timing ones already recorded.
 
-BENCH_SCRIPT="${BENCH_SCRIPT:-benchmark_transformer.py}"
-R="/users/athomsen/dlss/repos"
-SCRIPT="$R/y3-deep-lss/deep_lss/apps/$BENCH_SCRIPT"
+# --- Repository and scratch roots ------------------------------------------------------------
+
+REPOS="/users/athomsen/dlss/repos"
+DEEP_LSS="$REPOS/y3-deep-lss"
+
+# --- Overridable defaults ----------------------------------------------------------------------
 
 : "${CONFIGS_GLOB:?set CONFIGS_GLOB, e.g. configs/transformer/lensing/bench_t7/*.yaml}"
 : "${OUT_DIR:?set OUT_DIR, e.g. /iopsstor/scratch/cscs/athomsen/deep_lss/claude/bench/<name>}"
+
+BENCH_SCRIPT="${BENCH_SCRIPT:-benchmark_transformer.py}"  # any deep_lss/apps/benchmark_*.py
+BATCH_SIZES="${BATCH_SIZES:-16}"                          # space-separated, swept per config
+PROBE="${PROBE:-combined}"
+
+# NOTE: unlike every other script here, these five are full PATHS, not config names -- the sweep
+# takes ad hoc yamls that may not live under configs/ at all.
+MSFM="${MSFM:-$REPOS/multiprobe-simulation-forward-model/configs/v17/baseline.yaml}"
+SCALES="${SCALES:-$DEEP_LSS/configs/scales/8wl,32gc.yaml}"
+LOSS="${LOSS:-$DEEP_LSS/configs/loss/vmim.yaml}"
+DATA="${DATA:-$DEEP_LSS/configs/data/default.yaml}"
+PROBES_CONFIG="${PROBES_CONFIG:-$DEEP_LSS/configs/probes/${PROBE}.yaml}"
+
+# --- Derived paths and the config list ---------------------------------------------------------
+
+SCRIPT="$DEEP_LSS/deep_lss/apps/$BENCH_SCRIPT"
 JSONL="$OUT_DIR/benchmark_results.jsonl"
 
-BATCH_SIZES="${BATCH_SIZES:-16}"
-PROBE="${PROBE:-combined}"
-MSFM="${MSFM:-$R/multiprobe-simulation-forward-model/configs/v17/baseline.yaml}"
-SCALES="${SCALES:-$R/y3-deep-lss/configs/scales/8wl,32gc.yaml}"
-LOSS="${LOSS:-$R/y3-deep-lss/configs/loss/vmim.yaml}"
-DATA="${DATA:-$R/y3-deep-lss/configs/data/default.yaml}"
-PROBES_CONFIG="${PROBES_CONFIG:-$R/y3-deep-lss/configs/probes/${PROBE}.yaml}"
-
 GLOB_ABS="$CONFIGS_GLOB"
-case "$CONFIGS_GLOB" in /*) ;; *) GLOB_ABS="$R/y3-deep-lss/$CONFIGS_GLOB" ;; esac
+case "$CONFIGS_GLOB" in /*) ;; *) GLOB_ABS="$DEEP_LSS/$CONFIGS_GLOB" ;; esac
 
 shopt -s nullglob
 if [ -n "${BENCH_CONFIGS:-}" ]; then
@@ -49,7 +63,7 @@ if [ -n "${BENCH_CONFIGS:-}" ]; then
     for c in $BENCH_CONFIGS; do
         case "$c" in
             /*) CONFIGS+=("$c") ;;
-            */*) CONFIGS+=("$R/$c") ;;
+            */*) CONFIGS+=("$REPOS/$c") ;;
             *) CONFIGS+=("$(dirname "$GLOB_ABS")/$c") ;;
         esac
     done
@@ -67,6 +81,7 @@ for cfg in "${CONFIGS[@]}"; do
     [ -f "$cfg" ] || { echo "Config not found: $cfg" >&2; exit 1; }
 done
 
+# Append mode drops any pre-existing rows for the configs being re-timed, so they aren't duplicated.
 mkdir -p "$OUT_DIR/slurm"
 if [ "$APPEND_JSONL" -eq 1 ] && [ -f "$JSONL" ]; then
     for cfg in "${CONFIGS[@]}"; do
@@ -76,6 +91,8 @@ if [ "$APPEND_JSONL" -eq 1 ] && [ -f "$JSONL" ]; then
 else
     : > "$JSONL"
 fi
+
+# --- Stage 1: Time every (config, batch) pair --------------------------------------------------
 
 for cfg in "${CONFIGS[@]}"; do
     cfg_name="$(basename "$(dirname "$cfg")")/$(basename "$cfg")"
@@ -89,6 +106,8 @@ for cfg in "${CONFIGS[@]}"; do
                 --loss_config '$LOSS' --data_config '$DATA'" \
             > "$log" 2>&1 || true
 
+        # A failed point is classified and recorded, not fatal: OOM/kernel limits are the answer
+        # the sweep is looking for, so the remaining points must still run.
         if grep -q '^BENCH_JSON ' "$log"; then
             row="$(grep '^BENCH_JSON ' "$log" | head -1 | sed 's/^BENCH_JSON //')"
             echo "${row/\{/\{\"probe\": \"$PROBE\", }" >> "$JSONL"
@@ -110,6 +129,8 @@ for cfg in "${CONFIGS[@]}"; do
         rm -f "$log"
     done
 done
+
+# --- Stage 2: Aggregate the JSONL into CSV/markdown --------------------------------------------
 
 echo ""
 echo "=== aggregating ==="

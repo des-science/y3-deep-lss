@@ -20,12 +20,21 @@
 # mlp_ref as the baseline. Everything but (d_model, num_layers) is fixed, so this is one factor.
 # Start at the bottom; only climb if the metric actually improves.
 
+# --- Runtime environment -------------------------------------------------------------------------
+
 export SLURM_CPUS_PER_TASK=72
 export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK}
 export TF_NUM_INTRAOP_THREADS=${SLURM_CPUS_PER_TASK}
 
+# --- Repository and scratch roots ----------------------------------------------------------------
+
 REPOS="/users/athomsen/dlss/repos"
 MYSCRATCH="/iopsstor/scratch/cscs/athomsen"
+
+DEEP_LSS="$REPOS/y3-deep-lss"
+MSFM="$REPOS/multiprobe-simulation-forward-model"
+
+# --- Fixed settings ------------------------------------------------------------------------------
 
 VERSION="v17"
 SUBVERSION="baseline"
@@ -41,11 +50,15 @@ SCALES="8wl,32gc"
 DATA="default"
 BASE_MODEL_NAME="v1_bench"
 
+# --- Derived paths and configs -------------------------------------------------------------------
+
 INPUT="$MYSCRATCH/deep_lss/data/$VERSION/$SUBVERSION"
 OUTPUT="$MYSCRATCH/deep_lss/runs/$VERSION/$SUBVERSION/cls/$PROBE"
 
 # SLURM --output goes to scratch, not home: the home VAST quota silently drops writes mid-job.
 mkdir -p "$MYSCRATCH/deep_lss/claude/jobs/misc"
+
+# --- Stage 0: Cls precache (shared by every rung) ------------------------------------------------
 
 # The hard_rebinned cache is net/loss-independent and all rungs share scale_cut + cls_n_bins, so one
 # precache serves all of them. Idempotent: a no-op (~40 s) when the file is already there, which it
@@ -55,17 +68,19 @@ mkdir -p "$(dirname "$LOG_PRECACHE")"
 srun -N1 --ntasks-per-node=1 --exclusive --cpus-per-task=288 --mem=450G \
     --environment=tensorflow \
     --output="${LOG_PRECACHE}.log" \
-    python "$REPOS/y3-deep-lss/deep_lss/apps/run_cls_training+evaluation.py" \
-        --msfm_config="$REPOS/multiprobe-simulation-forward-model/configs/$VERSION/$SUBVERSION.yaml" \
-        --probes_config="$REPOS/y3-deep-lss/configs/probes/${PROBE}.yaml" \
-        --scales_config="$REPOS/y3-deep-lss/configs/scales/${SCALES}.yaml" \
-        --loss_config="$REPOS/y3-deep-lss/configs/loss/${LOSS}.yaml" \
-        --net_config="$REPOS/y3-deep-lss/configs/${NET_DIR}/${NET_CONFIGS[0]}.yaml" \
-        --data_config="$REPOS/y3-deep-lss/configs/data/${DATA}.yaml" \
+    python "$DEEP_LSS/deep_lss/apps/run_cls_training+evaluation.py" \
+        --msfm_config="$MSFM/configs/$VERSION/$SUBVERSION.yaml" \
+        --probes_config="$DEEP_LSS/configs/probes/${PROBE}.yaml" \
+        --scales_config="$DEEP_LSS/configs/scales/${SCALES}.yaml" \
+        --loss_config="$DEEP_LSS/configs/loss/${LOSS}.yaml" \
+        --net_config="$DEEP_LSS/configs/${NET_DIR}/${NET_CONFIGS[0]}.yaml" \
+        --data_config="$DEEP_LSS/configs/data/${DATA}.yaml" \
         --data_dir="$INPUT" \
         --out_dir="$INPUT" \
         --model_name="precache" \
         --precache_only
+
+# --- Stage 1: One training run per rung, in parallel ---------------------------------------------
 
 # One GPU per rung. There are 5 rungs and 4 GPUs, so the last one starts as a slot frees up; with
 # early stopping each rung is minutes, so the tail cost is small.
@@ -78,13 +93,13 @@ for NET in "${NET_CONFIGS[@]}"; do
         srun -N1 --ntasks-per-node=1 --exclusive --gpus-per-task=1 --cpus-per-gpu=72 --mem=110G \
             --environment=tensorflow \
             --output="${LOG}_training.log" \
-            python "$REPOS/y3-deep-lss/deep_lss/apps/run_cls_training+evaluation.py" \
-                --msfm_config="$REPOS/multiprobe-simulation-forward-model/configs/$VERSION/$SUBVERSION.yaml" \
-                --probes_config="$REPOS/y3-deep-lss/configs/probes/${PROBE}.yaml" \
-                --scales_config="$REPOS/y3-deep-lss/configs/scales/${SCALES}.yaml" \
-                --loss_config="$REPOS/y3-deep-lss/configs/loss/${LOSS}.yaml" \
-                --net_config="$REPOS/y3-deep-lss/configs/${NET_DIR}/${NET}.yaml" \
-                --data_config="$REPOS/y3-deep-lss/configs/data/${DATA}.yaml" \
+            python "$DEEP_LSS/deep_lss/apps/run_cls_training+evaluation.py" \
+                --msfm_config="$MSFM/configs/$VERSION/$SUBVERSION.yaml" \
+                --probes_config="$DEEP_LSS/configs/probes/${PROBE}.yaml" \
+                --scales_config="$DEEP_LSS/configs/scales/${SCALES}.yaml" \
+                --loss_config="$DEEP_LSS/configs/loss/${LOSS}.yaml" \
+                --net_config="$DEEP_LSS/configs/${NET_DIR}/${NET}.yaml" \
+                --data_config="$DEEP_LSS/configs/data/${DATA}.yaml" \
                 --data_dir="$INPUT" \
                 --out_dir="$OUTPUT" \
                 --model_name="$MODEL_NAME" \

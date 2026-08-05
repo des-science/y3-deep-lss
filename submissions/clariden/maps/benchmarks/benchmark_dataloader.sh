@@ -15,30 +15,43 @@
 # CPU-only benchmark, but we still take a whole node so the 288-core thread pools match training.
 # Outputs go to /iopsstor scratch (home VAST quota silently drops big writes).
 
-set -euo pipefail
+# --- Runtime environment ---------------------------------------------------------------------
+
+set -euo pipefail  # NB: the "X=\"\"; [ test ] && X=flag" idiom used elsewhere would abort here
 
 # match training.sh thread-pool tuning for the 288 cores
 export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK}
 export TF_NUM_INTRAOP_THREADS=${SLURM_CPUS_PER_TASK}
 
+# --- Repository and scratch roots ------------------------------------------------------------
+
 REPOS="/users/athomsen/dlss/repos"
 MYSCRATCH="/iopsstor/scratch/cscs/athomsen"
+
+DEEP_LSS="$REPOS/y3-deep-lss"
+MSFM="$REPOS/multiprobe-simulation-forward-model"
+
+# --- Fixed settings ----------------------------------------------------------------------------
 
 VERSION="v16"
 SUBVERSION="rot_in_place"
 SCALES="8wl,32gc"
 DATA="default"
 
+# --- Derived paths and configs -----------------------------------------------------------------
+
 INPUT="$MYSCRATCH/deep_lss/data/$VERSION/$SUBVERSION"
 TRAIN_TFR="$INPUT/tfrecords/grid/DESy3_grid_dmb_????.tfrecord"
-MSFM_CONFIG="$REPOS/multiprobe-simulation-forward-model/configs/$VERSION/$SUBVERSION.yaml"
+MSFM_CONFIG="$MSFM/configs/$VERSION/$SUBVERSION.yaml"
 
 OUTDIR="$MYSCRATCH/deep_lss/claude/bench/dataloader/${SLURM_JOB_ID:-manual}"
 mkdir -p "$OUTDIR"
 RESULTS="$OUTDIR/results.jsonl"
 echo "Writing results to $RESULTS"
 
-SCRIPT="$REPOS/y3-deep-lss/deep_lss/apps/benchmark_dataloader.py"
+SCRIPT="$DEEP_LSS/deep_lss/apps/benchmark_dataloader.py"
+
+# --- Stage 1: OFAT sweep, one python process per configuration ---------------------------------
 
 # probe -> (probes_config, net_config). Clustering has no dedicated net config yet; it reuses the
 # lensing transformer architecture (arch is irrelevant to the input pipeline — same 4 z-bins, same
@@ -47,12 +60,12 @@ run_probe () {
     local PROBE="$1"
     local PROBES_CONFIG NET_CONFIG
     case "$PROBE" in
-        lensing)    PROBES_CONFIG="$REPOS/y3-deep-lss/configs/probes/lensing.yaml"
-                    NET_CONFIG="$REPOS/y3-deep-lss/configs/transformer/lensing/maps.yaml" ;;
-        clustering) PROBES_CONFIG="$REPOS/y3-deep-lss/configs/probes/clustering.yaml"
-                    NET_CONFIG="$REPOS/y3-deep-lss/configs/transformer/lensing/maps.yaml" ;;
-        combined)   PROBES_CONFIG="$REPOS/y3-deep-lss/configs/probes/combined.yaml"
-                    NET_CONFIG="$REPOS/y3-deep-lss/configs/transformer/combined/maps.yaml" ;;
+        lensing)    PROBES_CONFIG="$DEEP_LSS/configs/probes/lensing.yaml"
+                    NET_CONFIG="$DEEP_LSS/configs/transformer/lensing/maps.yaml" ;;
+        clustering) PROBES_CONFIG="$DEEP_LSS/configs/probes/clustering.yaml"
+                    NET_CONFIG="$DEEP_LSS/configs/transformer/lensing/maps.yaml" ;;
+        combined)   PROBES_CONFIG="$DEEP_LSS/configs/probes/combined.yaml"
+                    NET_CONFIG="$DEEP_LSS/configs/transformer/combined/maps.yaml" ;;
         *) echo "unknown probe $PROBE"; return 1 ;;
     esac
 
@@ -68,8 +81,8 @@ run_probe () {
                 --train_tfr_pattern="$TRAIN_TFR" \
                 --net_config="$NET_CONFIG" \
                 --probes_config="$PROBES_CONFIG" \
-                --scales_config="$REPOS/y3-deep-lss/configs/scales/${SCALES}.yaml" \
-                --data_config="$REPOS/y3-deep-lss/configs/data/${DATA}.yaml" \
+                --scales_config="$DEEP_LSS/configs/scales/${SCALES}.yaml" \
+                --data_config="$DEEP_LSS/configs/data/${DATA}.yaml" \
                 --msfm_config="$MSFM_CONFIG" \
                 --local_batch_size="$batch" --n_readers="$readers" --n_prefetch="$prefetch" \
                 --n_workers="$workers" --file_name_shuffle_buffer="$fshuf" --examples_shuffle_buffer="$eshuf" \
@@ -98,4 +111,4 @@ for probe in $PROBES; do
 done
 
 echo "Done. Summarize with:"
-echo "  python $REPOS/y3-deep-lss/deep_lss/apps/benchmark_dataloader_summary.py $RESULTS"
+echo "  python $DEEP_LSS/deep_lss/apps/benchmark_dataloader_summary.py $RESULTS"

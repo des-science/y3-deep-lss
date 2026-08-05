@@ -30,20 +30,32 @@
 # on Clariden CE, the run reports "Running on 1 replicas" or crashes — either is a valid negative
 # result, multi_worker_mirrored is the primary candidate.
 
+# --- Runtime environment ---------------------------------------------------------------------
+
 ulimit -c 0
 
 export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK}
 export TF_NUM_INTRAOP_THREADS=${SLURM_CPUS_PER_TASK}
 
+# --- Repository and scratch roots ------------------------------------------------------------
+
 REPOS="/users/athomsen/dlss/repos"
 MYSCRATCH="/iopsstor/scratch/cscs/athomsen"
 
-VERSION="${VERSION:-v17}"
-SUBVERSION="${SUBVERSION:-baseline}"
+DEEP_LSS="$REPOS/y3-deep-lss"
+MSFM="$REPOS/multiprobe-simulation-forward-model"
+
+# --- Fixed settings ----------------------------------------------------------------------------
+
 PROBE="clustering"
 LOSS="vmim"
 DATA="default"
 SCALES="8wl,32gc"
+
+# --- Overridable defaults (the benchmark point; see the table above) ---------------------------
+
+VERSION="${VERSION:-v17}"
+SUBVERSION="${SUBVERSION:-baseline}"
 
 STRATEGY="${STRATEGY:-multi_worker_mirrored}"
 CFG="${CFG:-b10}"
@@ -52,7 +64,9 @@ TAG="${TAG:-${STRATEGY}_${CFG}}"
 # task/replica sees exactly its own GPU (there is no in-code GPU pinning)
 GPU_BIND="${GPU_BIND:-single:1}"
 
-NET_CONFIG="$REPOS/y3-deep-lss/configs/transformer/clustering/bench_2node/${CFG}.yaml"
+# --- Derived paths, configs and flags ----------------------------------------------------------
+
+NET_CONFIG="$DEEP_LSS/configs/transformer/clustering/bench_2node/${CFG}.yaml"
 
 INPUT="$MYSCRATCH/deep_lss/data/$VERSION/$SUBVERSION"
 OUTPUT="$MYSCRATCH/deep_lss/runs/$VERSION/$SUBVERSION/maps/$PROBE"
@@ -66,11 +80,15 @@ TRAIN_TFR="$INPUT/tfrecords/grid/DESy3_grid_dmb_????.tfrecord"
 # from the production clustering runs — fail fast instead of building it here.
 CLS_CACHE="$INPUT/cls/rebinned_nb16_${SCALES}.h5"
 if [ ! -f "$CLS_CACHE" ]; then
-    echo "ERROR: Cls cache $CLS_CACHE missing — build it via submissions/clariden/maps/training.sh / submissions/clariden/cls/cls_training.sh first."
+    echo "ERROR: Cls cache $CLS_CACHE missing — build it via" \
+         "submissions/clariden/maps/training.sh or submissions/clariden/cls/cls_training.sh first."
     exit 1
 fi
 
-echo "bench_2node: TAG=$TAG STRATEGY=$STRATEGY CFG=$CFG nodes=$SLURM_JOB_NUM_NODES tasks/node=$SLURM_NTASKS_PER_NODE gpu-bind=$GPU_BIND"
+# --- Stage 1: Throughput-only training run -----------------------------------------------------
+
+echo "bench_2node: TAG=$TAG STRATEGY=$STRATEGY CFG=$CFG nodes=$SLURM_JOB_NUM_NODES" \
+     "tasks/node=$SLURM_NTASKS_PER_NODE gpu-bind=$GPU_BIND"
 
 # horovod rendezvous goes through the container's OpenMPI, which needs srun to provide PMIx
 # (without it: "OPAL ERROR: Unreachable in pmix3x_client.c", observed job 2795158)
@@ -81,16 +99,16 @@ fi
 
 # %t = task rank, so the 4-8 multi-worker tasks don't interleave one file
 srun $SRUN_MPI --environment=tensorflow --gpu-bind=$GPU_BIND --output="$LOG"_training_%t.log \
-    python $REPOS/y3-deep-lss/deep_lss/apps/run_training.py \
+    python $DEEP_LSS/deep_lss/apps/run_training.py \
         --dir_base=$OUTPUT \
         --dir_model=$MODEL_DIR \
         --train_tfr_pattern=$TRAIN_TFR \
         --data_dir=$INPUT \
-        --msfm_config="$REPOS/multiprobe-simulation-forward-model/configs/$VERSION/$SUBVERSION.yaml" \
-        --probes_config="$REPOS/y3-deep-lss/configs/probes/${PROBE}.yaml" \
-        --scales_config="$REPOS/y3-deep-lss/configs/scales/${SCALES}.yaml" \
-        --loss_config="$REPOS/y3-deep-lss/configs/loss/${LOSS}.yaml" \
-        --data_config="$REPOS/y3-deep-lss/configs/data/${DATA}.yaml" \
+        --msfm_config="$MSFM/configs/$VERSION/$SUBVERSION.yaml" \
+        --probes_config="$DEEP_LSS/configs/probes/${PROBE}.yaml" \
+        --scales_config="$DEEP_LSS/configs/scales/${SCALES}.yaml" \
+        --loss_config="$DEEP_LSS/configs/loss/${LOSS}.yaml" \
+        --data_config="$DEEP_LSS/configs/data/${DATA}.yaml" \
         --net_config=$NET_CONFIG \
         --dist_strategy="$STRATEGY" \
         --pasc_throughput
