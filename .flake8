@@ -12,4 +12,16 @@ exclude =
     build,
     dist,
     *.egg-info,
-    .ipynb_checkpoints
+    .ipynb_checkpoints,
+    # Retired code, kept for reference only
+    deep_lss/deprecated
+per-file-ignores =
+    # E402: imports in these scripts must stay below the _filter_stderr() call and
+    # the TF_CPP_MIN_LOG_LEVEL / warnings setup at the top of the file -- hoisting
+    # them above that block breaks the TensorFlow log suppression it exists for.
+    deep_lss/apps/*.py: E402
+    # Re-export facade: the names are imported here to be re-exported, and are used
+    # as distribute.check_devices() / .get_strategy() by the app scripts.
+    deep_lss/utils/distribute/__init__.py: F401,F403
+    # Re-export facade for the network classes (see the comment in the file).
+    deep_lss/nets/__init__.py: F401
