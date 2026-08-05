@@ -19,13 +19,16 @@ footprint (not per-GPU). Under Horovod each rank would run its own copy of this 
 Run CPU-only: set CUDA_VISIBLE_DEVICES="" so TF never grabs a GPU (done below, before importing TF).
 """
 
-import os, sys, json, argparse, time, threading
+import os
+import json
+import argparse
+import time
+import threading
 
 # CPU-only: we benchmark the input pipeline, not the network. Must happen before TF import.
 os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
 
-import tensorflow as tf
 
 from msfm.grid_pipeline import GridPipeline
 from msfm.utils import input_output, files

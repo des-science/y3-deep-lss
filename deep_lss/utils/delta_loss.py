@@ -344,17 +344,17 @@ def delta_loss(
                 identity = tf.scalar_mul(eps, tf.eye(n_params, batch_shape=[1], dtype=current_float))
                 # we use that 2*log(det(A)) = log(det(A)^2) = log(det(A)*det(A)) = log(det(A)*det(A^T))
                 #                           = log(det(A*A^T))tf.eye
-                with tf.name_scope("jac_logdet") as scope:
+                with tf.name_scope("jac_logdet"):
                     jt_j = tf.einsum("aji,ajk->aik", jacobian, jacobian)
                     jac_log_det = tf.linalg.logdet(tf.add(jt_j, identity))
-                with tf.name_scope("cov_logdet") as scope:
+                with tf.name_scope("cov_logdet"):
                     cov_log_det = tf.linalg.logdet(tf.add(cov, identity))
                     cov_det_loss = tf.subtract(cov_log_det, jac_log_det)
             # NOTE no tikhonov regularization is the default
             else:
-                with tf.name_scope("jac_logdet") as scope:
+                with tf.name_scope("jac_logdet"):
                     jac_log_det = tf.math.log(tf.math.abs(tf.linalg.det(jacobian)) + eps)
-                with tf.name_scope("cov_logdet") as scope:
+                with tf.name_scope("cov_logdet"):
                     # We add a abs here because of instabilities
                     cov_log_det = tf.math.log(tf.math.abs(tf.linalg.det(cov)) + eps)
 
@@ -376,15 +376,15 @@ def delta_loss(
             if tikhonov_regu:
                 id_dim = np.minimum(n_params, n_partial)
                 identity = tf.scalar_mul(eps, tf.eye(id_dim, batch_shape=[1], dtype=current_float))
-                with tf.name_scope("jac_logdet") as scope:
+                with tf.name_scope("jac_logdet"):
                     jac_log_det = tf.linalg.logdet(tf.add(jt_j, identity))
-                with tf.name_scope("cov_logdet") as scope:
+                with tf.name_scope("cov_logdet"):
                     cov_log_det = tf.linalg.logdet(tf.add(jt_cov_j, identity))
             else:
                 # We add a abs here because of instabilities
-                with tf.name_scope("jac_logdet") as scope:
+                with tf.name_scope("jac_logdet"):
                     jac_log_det = tf.math.log(tf.math.abs(tf.linalg.det(jt_j)) + eps)
-                with tf.name_scope("cov_logdet") as scope:
+                with tf.name_scope("cov_logdet"):
                     cov_log_det = tf.math.log(tf.math.abs(tf.linalg.det(jt_cov_j)) + eps)
 
             cov_det_loss = tf.subtract(cov_log_det, tf.scalar_mul(2.0, jac_log_det))

@@ -570,7 +570,6 @@ def preprocess_obs_hard_rebinned(
             (for plotting / diagnostics).
     """
     from msfm.utils import files, cross_statistics
-    from msfm.utils.power_spectra import get_cl_bins
 
     msfm_conf = files.load_config(msfm_conf)
 

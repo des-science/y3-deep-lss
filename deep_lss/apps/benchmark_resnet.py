@@ -35,7 +35,15 @@ one-time cost (seconds, scaling with n_neighbors/nside) that happens before the 
 NOT part of the per-step GPU cost being measured.
 """
 
-import os, sys, json, glob, argparse, subprocess, statistics, csv, warnings
+import os
+import sys
+import json
+import glob
+import argparse
+import subprocess
+import statistics
+import csv
+import warnings
 
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
 os.environ.setdefault("NUMBA_WARNINGS", "0")
@@ -60,7 +68,8 @@ DEFAULTS = {
 # child mode: build + time a single (config, batch)
 # --------------------------------------------------------------------------------------
 def run_single(args):
-    import tempfile, time
+    import tempfile
+    import time
     import numpy as np
     import tensorflow as tf
 

@@ -10,7 +10,10 @@ maximizing loss to find an informative summary statistic.
 Meant for the GPU nodes of the Perlmutter cluster at NERSC.
 """
 
-import os, sys, threading, warnings
+import os
+import sys
+import threading
+import warnings
 
 
 def _filter_stderr():
@@ -42,7 +45,10 @@ warnings.filterwarnings("once", category=UserWarning)
 
 import tensorflow as tf
 import horovod.tensorflow as hvd
-import argparse, yaml, wandb, shutil
+import argparse
+import yaml
+import wandb
+import shutil
 
 from datetime import datetime
 from time import time
@@ -269,7 +275,7 @@ def setup():
             if device.device_type == "GPU":
                 tf.config.experimental.set_memory_growth(device, True)
         LOGGER.info("Configured the GPUs to memory growth mode")
-    except:
+    except (RuntimeError, ValueError):
         # Invalid device or cannot modify virtual devices once initialized.
         LOGGER.warning(
             "Could not configure the GPUs to memory growth mode, all available GPU memory is reserved for TensorFlow"

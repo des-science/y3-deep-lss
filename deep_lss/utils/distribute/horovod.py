@@ -6,7 +6,6 @@ Author: Arne Thomsen
 """
 
 import horovod.tensorflow as hvd
-import os
 import tensorflow as tf
 
 from msfm.utils import logger

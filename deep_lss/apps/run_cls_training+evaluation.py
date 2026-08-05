@@ -1,4 +1,8 @@
-import argparse, h5py, os, random, yaml
+import argparse
+import h5py
+import os
+import random
+import yaml
 from pathlib import Path
 
 import numpy as np

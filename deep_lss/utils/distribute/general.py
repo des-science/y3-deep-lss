@@ -8,7 +8,8 @@ Utils for distributed training with tf.distribute and horovod.
 """
 
 import tensorflow as tf
-import os, wandb
+import os
+import wandb
 
 from deep_lss.utils.distribute import tensorflow, horovod
 

@@ -26,7 +26,15 @@ Run inside the TensorFlow container on a single GPU, e.g. via submissions/clarid
 or an interactive ``srun --environment=tensorflow`` allocation.
 """
 
-import os, sys, json, glob, argparse, subprocess, statistics, csv, warnings
+import os
+import sys
+import json
+import glob
+import argparse
+import subprocess
+import statistics
+import csv
+import warnings
 
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
 os.environ.setdefault("NUMBA_WARNINGS", "0")
@@ -62,7 +70,7 @@ def run_single(args):
         except Exception:
             pass
 
-    from msfm.utils import input_output, files, parameters
+    from msfm.utils import input_output, files
     from deep_lss.utils import configuration, optimization
     from deep_lss.models.grid_model import GridLossModel
     from deep_lss.nets.encoders.maps.transformer.network import HealpixTransformerNetwork
@@ -96,7 +104,6 @@ def run_single(args):
         tf.keras.mixed_precision.set_global_policy(f"mixed_{precision}")
 
     # geometry / channels — same logic as run_training.py
-    n_side = msfm_conf["analysis"]["n_side"]
     data_vec_pix, _, _, _ = files.load_pixel_file(msfm_conf)
     smooth_nside, smooth_indices, parent_output_idx = configuration.resolve_smooth_nside(
         net_conf, dlss_conf, msfm_conf

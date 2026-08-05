@@ -9,12 +9,17 @@ Evaluate the DeepSphere graph neural networks on the CosmoGrid
 
 import numpy as np
 import tensorflow as tf
-import os, warnings, h5py, math, logging, wandb
+import os
+import warnings
+import h5py
+import math
+import logging
+import wandb
 from trianglechain import TriangleChain
 
 from msfm.fiducial_pipeline import FiducialPipeline
 from msfm.grid_pipeline import GridPipeline
-from msfm.utils import logger, files
+from msfm.utils import logger
 
 from deep_lss.utils import distribute, configuration
 from deep_lss.utils.distribute import HorovodStrategy
@@ -616,7 +621,6 @@ def evaluate_obs_benchmark(model_fn, pred_file, msfm_conf, dlss_conf, data_dir, 
     with_lensing = dset_common["with_lensing"]
     with_clustering = dset_common["with_clustering"]
     n_z_lensing = len(msfm_conf["survey"]["metacal"]["z_bins"])
-    n_z_clustering = len(msfm_conf["survey"]["maglim"]["z_bins"])
 
     norm_lensing = msfm_conf["analysis"]["normalization"]["lensing"]
     norm_clustering = msfm_conf["analysis"]["normalization"]["clustering"]

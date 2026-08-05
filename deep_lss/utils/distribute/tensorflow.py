@@ -6,7 +6,10 @@ Author: Arne Thomsen
 """
 
 import tensorflow as tf
-import os, atexit, json, re
+import os
+import atexit
+import json
+import re
 
 from msfm.utils import logger
 

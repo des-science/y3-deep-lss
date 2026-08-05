@@ -13,7 +13,8 @@ checkpointing is handled differently.
 
 import tensorflow as tf
 import horovod.tensorflow as hvd
-import os, warnings
+import os
+import warnings
 
 from deepsphere import HealpyGCNN
 

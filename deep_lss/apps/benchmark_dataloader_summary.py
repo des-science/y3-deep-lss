@@ -8,7 +8,8 @@ Pretty-print the JSONL produced by benchmark_dataloader.py as one table per prob
     python benchmark_dataloader_summary.py /path/to/results.jsonl
 """
 
-import sys, json
+import sys
+import json
 from collections import defaultdict
 
 COLS = [
