@@ -1180,19 +1180,20 @@ def training(args=None):
                 vali_dset_kwargs["local_batch_size"] = local_batch_size
 
                 # this is equal to the cov_det_loss term in the delta loss
-                non_regularized_loss_fn = lambda batch: delta_loss.delta_loss(
-                    batch,
-                    n_params=n_params,
-                    n_same=local_batch_size,
-                    off_sets=perts,
-                    n_output=n_params,
-                    force_params_value=None,
-                    jac_weight=None,
-                    jac_cond_weight=None,
-                    tikhonov_regu=False,
-                    training=False,
-                    strategy=strategy,
-                )
+                def non_regularized_loss_fn(batch):
+                    return delta_loss.delta_loss(
+                        batch,
+                        n_params=n_params,
+                        n_same=local_batch_size,
+                        off_sets=perts,
+                        n_output=n_params,
+                        force_params_value=None,
+                        jac_weight=None,
+                        jac_cond_weight=None,
+                        tikhonov_regu=False,
+                        training=False,
+                        strategy=strategy,
+                    )
 
                 @tf.function
                 def vali_loss_fn(batch):

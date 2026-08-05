@@ -484,7 +484,10 @@ if __name__ == "__main__":
             return model(x, training=False).numpy()
 
     if parent_output_idx is not None:
-        model_fn = lambda x, cls_raw=None: _call_model(_downsample(x), cls_raw)
+
+        def model_fn(x, cls_raw=None):
+            return _call_model(_downsample(x), cls_raw)
+
     else:
         model_fn = _call_model
 

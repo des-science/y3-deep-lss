@@ -242,23 +242,29 @@ class GridLossModel(BaseModel):
 
                 if distributed:
                     # to be compatible with the delta loss, the loss is averaged per replica
-                    loss_fn = lambda preds, theta, training=True: (1.0 / batch_size) * tf.reduce_sum(
-                        tf.reduce_mean(tf.square(w * (preds - theta)), axis=-1)
-                    )
+                    def loss_fn(preds, theta, training=True):
+                        return (1.0 / batch_size) * tf.reduce_sum(
+                            tf.reduce_mean(tf.square(w * (preds - theta)), axis=-1)
+                        )
+
                 else:
-                    loss_fn = lambda preds, theta, training=True: tf.reduce_mean(tf.square(w * (preds - theta)))
+
+                    def loss_fn(preds, theta, training=True):
+                        return tf.reduce_mean(tf.square(w * (preds - theta)))
 
                 LOGGER.warning(f"Using the Mean Squared Error, label-std-weighted (label_std={label_std})")
             else:
                 if distributed:
                     # to be compatible with the delta loss, the loss is averaged per replica
-                    loss_fn = lambda preds, theta, training=True: (
-                        1.0 / batch_size
-                    ) * tf.keras.losses.MeanSquaredError(reduction=tf.keras.losses.Reduction.SUM)(preds, theta)
+                    def loss_fn(preds, theta, training=True):
+                        return (1.0 / batch_size) * tf.keras.losses.MeanSquaredError(
+                            reduction=tf.keras.losses.Reduction.SUM
+                        )(preds, theta)
+
                 else:
-                    loss_fn = lambda preds, theta, training=True: tf.keras.losses.MeanSquaredError(
-                        reduction=tf.keras.losses.Reduction.AUTO
-                    )(preds, theta)
+
+                    def loss_fn(preds, theta, training=True):
+                        return tf.keras.losses.MeanSquaredError(reduction=tf.keras.losses.Reduction.AUTO)(preds, theta)
 
                 LOGGER.warning("Using the Mean Squared Error. Note that the labels should be normalized!")
 
@@ -322,16 +328,16 @@ class GridLossModel(BaseModel):
 
                 self.trainable_variables = self.variational_head.trainable_variables + self.network.trainable_variables
 
-                loss_fn = lambda preds, theta, training=True: tf.reduce_mean(
-                    self.variational_head([preds, theta], training=training)
-                )
+                def loss_fn(preds, theta, training=True):
+                    return tf.reduce_mean(self.variational_head([preds, theta], training=training))
+
                 self.vali_posterior_mean_fn = self.variational_head.estimator.mean
 
             # see https://arxiv.org/pdf/2010.10079
             elif mutual_info_estimator == "distance_correlation":
-                loss_fn = lambda preds, theta, training=True: mutual_info_loss.distance_correlation(
-                    preds, theta, training=training
-                )
+
+                def loss_fn(preds, theta, training=True):
+                    return mutual_info_loss.distance_correlation(preds, theta, training=training)
 
             # see https://arxiv.org/pdf/2010.10079
             elif mutual_info_estimator == "jensen_shannon":

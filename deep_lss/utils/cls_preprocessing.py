@@ -444,7 +444,9 @@ def get_rebinned_cls_dsets(
     grid_cosmos_train = grid_cosmos[:, train_mask, :]
     grid_cosmos_test = grid_cosmos[:, eval_mask, :]
 
-    _concat = lambda arr: np.concatenate([arr[i] for i in range(arr.shape[0])], axis=0)
+    def _concat(arr):
+        return np.concatenate([arr[i] for i in range(arr.shape[0])], axis=0)
+
     grid_cls_train = _concat(grid_cls_train)
     grid_cls_test = _concat(grid_cls_test)
     grid_cosmos_train = _concat(grid_cosmos_train)

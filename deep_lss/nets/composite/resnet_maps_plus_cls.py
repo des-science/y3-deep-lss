@@ -156,7 +156,7 @@ class ResNetMapsPlusCLSNetwork(tf.keras.Model):
         self.cls_embedding_layers = cls_embedding_layers
         self.regression_head_layers = regression_head_layers
 
-        dense_widths = [l.units for l in cls_embedding_layers if hasattr(l, "units")]
+        dense_widths = [layer.units for layer in cls_embedding_layers if hasattr(layer, "units")]
         cls_out_dim = dense_widths[-1] if dense_widths else self.cls_layer.n_cls_flat
         LOGGER.warning(
             f"ResNetMapsPlusCLSNetwork: map_pool={map_pool or 'None (flatten)'}, map_feature_dim="
