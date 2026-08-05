@@ -60,7 +60,7 @@ def neg_likelihood_loss(
         tf.Tensor: Mean loss value over the batch.
     """
 
-    LOGGER.warning(f"Tracing neg_likelihood_loss")
+    LOGGER.warning("Tracing neg_likelihood_loss")
 
     # number of entries in a triangular matrix (including the diagonal), as used to construct the covariance matrix
     # via the Cholesky decomposition

@@ -244,16 +244,16 @@ def setup():
 
     if args.xla:
         LOGGER.warning(
-            f"Using XLA jit compilation. This doesn't work in most cases, as the SparseDenseMatrixMultiplication "
-            f"(DeepSphere smoothing and graph convolutions) and MatrixDeterminant (delta loss) operators are not "
-            f"supported"
+            "Using XLA jit compilation. This doesn't work in most cases, as the SparseDenseMatrixMultiplication "
+            "(DeepSphere smoothing and graph convolutions) and MatrixDeterminant (delta loss) operators are not "
+            "supported"
         )
 
         if args.dist_strategy == "mirrored":
-            LOGGER.warning(f"XLA + MirroredStrategy freezes for unknown reasons")
+            LOGGER.warning("XLA + MirroredStrategy freezes for unknown reasons")
         elif args.dist_strategy == "horovod":
             LOGGER.warning(
-                f"XLA + HorovodStrategy freezes for unknown reasons, see https://horovod.readthedocs.io/en/latest/xla.html"
+                "XLA + HorovodStrategy freezes for unknown reasons, see https://horovod.readthedocs.io/en/latest/xla.html"
             )
 
     if args.debug:
@@ -261,18 +261,18 @@ def setup():
         # tf.config.set_soft_device_placement(False)
         # tf.debugging.set_log_device_placement(True)
         # tf.data.experimental.enable_debug_mode()
-        LOGGER.warning(f"!!!!! Running the training in test mode, TensorFlow is executed eagerly !!!!!")
+        LOGGER.warning("!!!!! Running the training in test mode, TensorFlow is executed eagerly !!!!!")
 
     physical_devices = tf.config.list_physical_devices("GPU")
     try:
         for device in physical_devices:
             if device.device_type == "GPU":
                 tf.config.experimental.set_memory_growth(device, True)
-        LOGGER.info(f"Configured the GPUs to memory growth mode")
+        LOGGER.info("Configured the GPUs to memory growth mode")
     except:
         # Invalid device or cannot modify virtual devices once initialized.
         LOGGER.warning(
-            f"Could not configure the GPUs to memory growth mode, all available GPU memory is reserved for TensorFlow"
+            "Could not configure the GPUs to memory growth mode, all available GPU memory is reserved for TensorFlow"
         )
 
     if not args.restore_checkpoint:
@@ -307,7 +307,7 @@ def training(args=None):
             raise ValueError(
                 "loss_function not set; either pass --loss_function or use a --loss_config with a loss_function key"
             )
-        LOGGER.info(f"Loaded configs from the provided paths")
+        LOGGER.info("Loaded configs from the provided paths")
 
         if args.dir_model is None:
             net_name = net_conf["name"]
@@ -359,10 +359,10 @@ def training(args=None):
 
         if args.loss_function is None:
             args.loss_function = conf["run"]["loss_func"]
-        LOGGER.info(f"Loaded configs from the model directory")
+        LOGGER.info("Loaded configs from the model directory")
 
     else:
-        raise ValueError(f"Can't restore the model from an unspecified dir_model")
+        raise ValueError("Can't restore the model from an unspecified dir_model")
 
     # numerical precision: net_conf["network"]["precision"] is the default (float32 = full
     # precision); the --mixed_precision CLI flag overrides it. Set the global Keras policy here,
@@ -448,7 +448,7 @@ def training(args=None):
                     net_conf = configuration.update_nested_dict(net_conf, nested_hyperparam_conf["net"])
 
                 net_conf = strategy.broadcast_object(net_conf, root_rank=0)
-                LOGGER.info(f"Broadcast the chief/agent's hyperparameters to the other ranks")
+                LOGGER.info("Broadcast the chief/agent's hyperparameters to the other ranks")
 
             else:
                 # in the wandb sweep config, the hyperparameters are defined like net.optimization.optimizer, while the
@@ -637,7 +637,7 @@ def training(args=None):
             n_z_bins += len(msfm_conf["survey"]["metacal"]["z_bins"]) * len(msfm_conf["survey"]["maglim"]["z_bins"])
 
     # dataset
-    LOGGER.info(f"Training set")
+    LOGGER.info("Training set")
     pipe_kwargs = {
         k: v
         for k, v in {**dlss_conf["dset"]["common"], **dlss_conf["dset"]["training"], **noise_kwargs}.items()
@@ -1227,7 +1227,7 @@ def training(args=None):
                         loss_non_regu = loss
                         return loss, loss_non_regu
 
-            LOGGER.info(f"Fiducial validation set")
+            LOGGER.info("Fiducial validation set")
             vali_fidu_pipe = FiducialPipeline(conf=msfm_conf, **vali_pipe_kwargs)
 
             def vali_dset_fn(input_context):
@@ -1259,7 +1259,7 @@ def training(args=None):
 
             vali_dset_kwargs.update(net_conf["dset"]["validation"]["grid"])
 
-            LOGGER.info(f"Grid validation set")
+            LOGGER.info("Grid validation set")
             n_vali_examples_per_replica = (
                 n_vali_batches * vali_dset_kwargs["local_batch_size"] if n_vali_batches is not None else None
             )
@@ -1307,7 +1307,7 @@ def training(args=None):
                     return loss, rmse
 
             else:
-                raise NotImplementedError(f"Validation for the grid dataset is not implemented yet for other losses")
+                raise NotImplementedError("Validation for the grid dataset is not implemented yet for other losses")
 
             dist_vali_dset = strategy.distribute_datasets_from_function(vali_dset_fn)
 
@@ -1340,7 +1340,7 @@ def training(args=None):
         if start_step >= n_steps:
             LOGGER.warning(f"Restored step {start_step} >= n_steps {n_steps}: nothing left to train")
 
-    LOGGER.info(f"Starting training")
+    LOGGER.info("Starting training")
     LOGGER.timer.start("training")
     t_prev = time()
     t_accum = 0.0
@@ -1392,7 +1392,7 @@ def training(args=None):
 
             # horovod
             if isinstance(model.strategy, HorovodStrategy) and step == start_step + 1:
-                LOGGER.info(f"First step, broadcasting the variables through Horovod")
+                LOGGER.info("First step, broadcasting the variables through Horovod")
                 model.horovod_broadcast_variables()
 
             # delta loss
@@ -1465,7 +1465,7 @@ def training(args=None):
                             file_label=train_step,
                         )
                 else:
-                    LOGGER.warning(f"Skipping evaluation of the fiducial training set")
+                    LOGGER.warning("Skipping evaluation of the fiducial training set")
 
                 # fiducial evaluation
                 if args.fidu_eval_tfr_pattern is not None:
@@ -1481,7 +1481,7 @@ def training(args=None):
                         training_set=False,
                     )
                 else:
-                    LOGGER.warning(f"Skipping evaluation of the fiducial evaluation set")
+                    LOGGER.warning("Skipping evaluation of the fiducial evaluation set")
 
                 # grid evaluation
                 if args.grid_eval_tfr_pattern is not None:
@@ -1496,7 +1496,7 @@ def training(args=None):
                         file_label=train_step,
                     )
                 else:
-                    LOGGER.warning(f"Skipping evaluation of the grid evaluation set")
+                    LOGGER.warning("Skipping evaluation of the grid evaluation set")
 
                 # log here instead of inside eval to avoid partial duplicate .h5 files
                 if args.wandb and (out_file is not None):
@@ -1510,11 +1510,11 @@ def training(args=None):
             # profile
             if args.profile and step == 800:
                 print("\n")
-                LOGGER.info(f"Starting to profile")
+                LOGGER.info("Starting to profile")
                 tf.profiler.experimental.start(model.summary_dir)
             if args.profile and step == 805:
                 print("\n")
-                LOGGER.info(f"Stopping to profile")
+                LOGGER.info("Stopping to profile")
                 tf.profiler.experimental.stop()
 
             if args.pasc_throughput:
@@ -1557,23 +1557,23 @@ def training(args=None):
     inner_optimizer = getattr(optimizer, "inner_optimizer", optimizer)
     ema_finalized = getattr(inner_optimizer, "use_ema", False)
     if ema_finalized:
-        LOGGER.info(f"Finalizing EMA weights")
+        LOGGER.info("Finalizing EMA weights")
         inner_optimizer.finalize_variable_values(model.trainable_variables)
 
     # save everything at the end if necessary
     if ema_finalized or ((checkpoint_every is not None) and (step % checkpoint_every != 0)):
-        LOGGER.info(f"Creating a final checkpoint")
+        LOGGER.info("Creating a final checkpoint")
         model.save_model()
     elif checkpoint_every is not None:
-        LOGGER.info(f"A final checkpoint already exists")
+        LOGGER.info("A final checkpoint already exists")
     else:
-        LOGGER.info(f"No checkpoint has been saved")
+        LOGGER.info("No checkpoint has been saved")
 
     if args.wandb:
         wandb.finish()
     model.delete_temp_summaries()
 
-    LOGGER.info(f"Script completed successfully")
+    LOGGER.info("Script completed successfully")
     _copy_log(args, dir_model)
 
 

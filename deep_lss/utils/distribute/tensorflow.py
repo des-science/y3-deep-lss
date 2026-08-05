@@ -34,7 +34,7 @@ def setup_tf_distribute_mirrored_strategy():
     n_gpus = len(tf.config.list_physical_devices("GPU"))
     assert n_replicas == n_gpus
 
-    LOGGER.warning(f"Training is distributed, using the MirroredStrategy")
+    LOGGER.warning("Training is distributed, using the MirroredStrategy")
     return strategy
 
 
@@ -81,7 +81,7 @@ def setup_tf_distribute_multi_worker_mirrored_strategy():
         communication_options=communication_options,
     )
 
-    LOGGER.warning(f"Training is distributed, using the MultiWorkerMirroredStrategy")
+    LOGGER.warning("Training is distributed, using the MultiWorkerMirroredStrategy")
     return strategy
 
 
@@ -111,8 +111,8 @@ def _get_handcrafted_tf_config(port_base=12345):
         nodelist = os.environ["SLURM_NODELIST"]
     except KeyError:
         LOGGER.warning(
-            f"One of the slurm environmental variables couldn't be retrieved, can't use the MultiWorkerMirroredStrategy "
-            f"like this"
+            "One of the slurm environmental variables couldn't be retrieved, can't use the MultiWorkerMirroredStrategy "
+            "like this"
         )
 
         raise KeyError

@@ -197,10 +197,10 @@ class BaseModel(object):
             self.restore_model()
         elif (self.checkpoint_manager is not None) and (self.n_init_checkpoints != 0):
             LOGGER.warning(
-                f"The model can not be saved when it is initialized from scratch with a non-empty checkpoint directory"
+                "The model can not be saved when it is initialized from scratch with a non-empty checkpoint directory"
             )
         else:
-            LOGGER.info(f"The network is initialized from scratch.")
+            LOGGER.info("The network is initialized from scratch.")
 
         # set up summary writer
         if self.summary_dir is not None:
@@ -290,7 +290,7 @@ class BaseModel(object):
         """
 
         if self.checkpoint_dir is None:
-            raise ValueError(f"No checkpoint directory was given, the network can not be restored.")
+            raise ValueError("No checkpoint directory was given, the network can not be restored.")
 
         if len(self.checkpoint_manager.checkpoints) == 0:
             raise ValueError(f"A non empty checkpoint_dir {self.checkpoint_dir} has to be passed")
@@ -336,7 +336,7 @@ class BaseModel(object):
         """
 
         if self.checkpoint_dir is None:
-            raise ValueError(f"No checkpoint directory was given, the network can not be restored.")
+            raise ValueError("No checkpoint directory was given, the network can not be restored.")
 
         # expect_partial: evaluation restores from training checkpoints that contain optimizer
         # slots this Checkpoint object doesn't track; the assert still hard-fails if any
@@ -404,7 +404,7 @@ class BaseModel(object):
         Returns:
             str: The temporary directory associated with the worker.
         """
-        assert not self.is_chief(), f"Only the non-chief workers should create temporary directories"
+        assert not self.is_chief(), "Only the non-chief workers should create temporary directories"
 
         assert isinstance(
             self.strategy, (tf.distribute.MultiWorkerMirroredStrategy, HorovodStrategy)
@@ -1071,8 +1071,8 @@ class BaseModel(object):
         # the mean of means is equal to the overall mean if the subgroups all have the same number of samples
         # https://en.wikipedia.org/wiki/Grand_mean
         LOGGER.warning(
-            f"The distributed_train_step makes the assumption that the global batch size is divisible by the number"
-            f" of replicas, ensure that this is the case"
+            "The distributed_train_step makes the assumption that the global batch size is divisible by the number"
+            " of replicas, ensure that this is the case"
         )
         global_loss = self.strategy.reduce(tf.distribute.ReduceOp.MEAN, local_losses, axis=None)
         self.write_summary("loss/total_global", global_loss, skip=self.xla)
@@ -1118,7 +1118,7 @@ class BaseModel(object):
         Returns:
             tf.tensor, np.ndarray: Tensor or array, depending on the numpy argument
         """
-        LOGGER.warning(f"Tracing tf_call")
+        LOGGER.warning("Tracing tf_call")
 
         preds = self.network(input_tensor, training=training, *args, **kwargs)
 

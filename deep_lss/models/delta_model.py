@@ -113,7 +113,7 @@ class DeltaLossModel(BaseModel):
             max_batch_size=max_batch_size,
             initial_Fin=initial_Fin,
         )
-        LOGGER.info(f"Initialized the DeltaLossModel")
+        LOGGER.info("Initialized the DeltaLossModel")
 
     def setup_delta_loss_step(
         self,
@@ -271,7 +271,7 @@ class DeltaLossModel(BaseModel):
 
             @tf.function(input_signature=[tf.TensorSpec(shape=in_shape, dtype=current_float)], jit_compile=False)
             def delta_train_step(input_batch):
-                LOGGER.warning(f"Tracing delta_train_step")
+                LOGGER.warning("Tracing delta_train_step")
                 loss = self.base_train_step(
                     input_tensor=input_batch,
                     loss_function=loss_fn,
@@ -291,7 +291,7 @@ class DeltaLossModel(BaseModel):
             # Instead do like  https://www.tensorflow.org/tutorials/distribute/input#using_the_element_spec_property
             @tf.function(jit_compile=False)
             def delta_train_step(input_batch):
-                LOGGER.warning(f"Tracing distributed delta_train_step")
+                LOGGER.warning("Tracing distributed delta_train_step")
                 global_loss = self.distributed_train_step(
                     input_tensor=input_batch,
                     loss_function=loss_fn,

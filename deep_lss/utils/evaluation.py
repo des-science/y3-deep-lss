@@ -40,7 +40,7 @@ logging.getLogger("tensorflow").addFilter(
 
 def _get_out_file(dir_out, label):
     if label is None:
-        out_file = f"preds.h5"
+        out_file = "preds.h5"
     else:
         out_file = f"preds_{label}.h5"
 
@@ -89,7 +89,7 @@ def _remove_example_axis(array):
     if np.all([np.equal(array[:, i], array[:, i + 1]) for i in range(array.shape[1] - 1)]):
         array = array[:, 0]
     else:
-        raise RuntimeError(f"The cosmologies are not sorted correctly")
+        raise RuntimeError("The cosmologies are not sorted correctly")
 
     return array
 
@@ -118,7 +118,7 @@ def evaluate_grid(
         file_label (str, optional): Optional suffix to append to the output file names. Defaults to None.
     """
     print("\n")
-    LOGGER.info(f"Starting evaluation of the grid")
+    LOGGER.info("Starting evaluation of the grid")
 
     dset_kwargs = {**net_conf["dset"]["eval"]["common"], **data_conf, **net_conf["dset"]["eval"]["grid"]}
     dset_kwargs["drop_remainder"] = True
@@ -241,7 +241,7 @@ def evaluate_grid(
     i_signals = _stack_grid_cosmos(i_signals, sorted_indices, n_examples_per_cosmo)
     if save_second_to_last_layer:
         second_to_last_layer = _stack_grid_cosmos(second_to_last_layer_batch, sorted_indices, n_examples_per_cosmo)
-    LOGGER.info(f"Reshaped the results")
+    LOGGER.info("Reshaped the results")
 
     out_file = _get_out_file(dir_out, file_label)
 
@@ -271,7 +271,7 @@ def evaluate_grid(
 
     if isinstance(model.strategy, (tf.distribute.MultiWorkerMirroredStrategy, HorovodStrategy)):
         if model.is_chief():
-            LOGGER.info(f"Chief here")
+            LOGGER.info("Chief here")
             write_out_file()
     else:
         write_out_file()
@@ -312,7 +312,7 @@ def evaluate_fiducial(
             stored.
     """
     print("\n")
-    LOGGER.info(f"Starting evaluation of the fiducial")
+    LOGGER.info("Starting evaluation of the fiducial")
 
     dset_kwargs = {**net_conf["dset"]["eval"]["common"], **data_conf, **net_conf["dset"]["eval"]["fiducial"]}
 
@@ -418,7 +418,7 @@ def evaluate_fiducial(
     i_noises = tf.concat(i_noises, axis=0)
     if save_second_to_last_layer:
         second_to_last_layer = tf.concat(second_to_last_layer_batch, axis=0)
-    LOGGER.info(f"Reshaped the results")
+    LOGGER.info("Reshaped the results")
 
     # sort according to the example index
     sorted_indices = tf.argsort(i_examples)
@@ -427,7 +427,7 @@ def evaluate_fiducial(
     i_noises = tf.gather(i_noises, sorted_indices)
     if save_second_to_last_layer:
         second_to_last_layer = tf.gather(second_to_last_layer, sorted_indices)
-    LOGGER.info(f"Sorted the results")
+    LOGGER.info("Sorted the results")
 
     out_file = _get_out_file(dir_out, file_label)
 
@@ -462,7 +462,7 @@ def evaluate_fiducial(
 
     if isinstance(model.strategy, (tf.distribute.MultiWorkerMirroredStrategy, HorovodStrategy)):
         if model.is_chief():
-            LOGGER.info(f"Chief here")
+            LOGGER.info("Chief here")
             write_out_file()
     else:
         write_out_file()
@@ -600,8 +600,8 @@ def discover_mock_labels(data_dir):
 
     suffix = "_obs_maps.h5"
     obs_dir = os.path.join(data_dir, "obs")
-    files = sorted(glob.glob(os.path.join(obs_dir, f"*{suffix}")))
-    return [os.path.basename(f)[: -len(suffix)] for f in files]
+    obs_files = sorted(glob.glob(os.path.join(obs_dir, f"*{suffix}")))
+    return [os.path.basename(f)[: -len(suffix)] for f in obs_files]
 
 
 def evaluate_obs_benchmark(model_fn, pred_file, msfm_conf, dlss_conf, data_dir, obs_labels):

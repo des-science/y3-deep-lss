@@ -31,11 +31,11 @@ def get_strategy(strategy_name=None):
         n_tasks = int(os.environ["SLURM_NTASKS"])
         LOGGER.info(f"Running on {n_tasks} tasks in total")
     except KeyError:
-        LOGGER.info(f"Running locally as SLURM_NTASKS is not set")
+        LOGGER.info("Running locally as SLURM_NTASKS is not set")
 
     if strategy_name is None:
         strategy = tf.distribute.get_strategy()
-        LOGGER.warning(f"Training is not distributed, using the default strategy")
+        LOGGER.warning("Training is not distributed, using the default strategy")
     elif strategy_name == "mirrored":
         strategy = tensorflow.setup_tf_distribute_mirrored_strategy()
     elif strategy_name == "multi_worker_mirrored":
@@ -67,7 +67,7 @@ def check_devices():
 
     n_gpus = len(tf.config.list_physical_devices("GPU"))
     if n_gpus == 0:
-        LOGGER.warning(f"No GPU discovered by TensorFlow, running on CPUs only")
+        LOGGER.warning("No GPU discovered by TensorFlow, running on CPUs only")
     else:
         LOGGER.info(f"Individual task(s) running on {n_gpus} GPU(s)")
 
@@ -78,7 +78,7 @@ def check_devices():
         ), f"The number of GPUs in TensorFlow {n_gpus} and CUDA {n_gpus_cuda} should be equal"
     except KeyError:
         if n_gpus == 0:
-            LOGGER.warning(f"No CUDA enabled GPUs found")
+            LOGGER.warning("No CUDA enabled GPUs found")
 
     return n_cpus, n_gpus
 

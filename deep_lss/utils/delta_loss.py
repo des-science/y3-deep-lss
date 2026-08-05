@@ -240,7 +240,7 @@ def delta_loss(
         tf.tensor: The loss value, which can be negative.
     """
 
-    LOGGER.warning(f"Tracing delta_loss")
+    LOGGER.warning("Tracing delta_loss")
 
     # TODO: A fixed epsilon can lead to some problems. E.g. in tikonov regularization might fail because the lack
     # TODO: of precision. A possible solution would be to use the machine epsilon for added regularization
@@ -392,8 +392,8 @@ def delta_loss(
     else:
         # dividing by the jac_det (for info inequality) does not work...
         LOGGER.warning(
-            f"You are using use_log_det=False. Only the determinant of the covariance matrix will be"
-            f" optimized. This loss might be unbouned and could lead to unstable training."
+            "You are using use_log_det=False. Only the determinant of the covariance matrix will be"
+            " optimized. This loss might be unbouned and could lead to unstable training."
         )
         cov_det_loss = tf.linalg.det(cov)
 

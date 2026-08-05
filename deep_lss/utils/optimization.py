@@ -68,7 +68,7 @@ def get_optimizer(net_conf, loss_function="delta_loss", restore_checkpoint=False
                 decay_steps=decay_steps,
                 alpha=end_divided_by_init_learning_rate,
             )
-        LOGGER.info(f"Using cosine learning rate schedule with warmup")
+        LOGGER.info("Using cosine learning rate schedule with warmup")
     elif scheduler == "warmup":
         warmup_init_learning_rate = net_conf["optimization"][loss_function]["warmup_init_learning_rate"]
         warmup_steps = net_conf["optimization"][loss_function]["warmup_steps"]
@@ -99,7 +99,7 @@ def get_optimizer(net_conf, loss_function="delta_loss", restore_checkpoint=False
             optimizer = tf.keras.optimizers.Adam(
                 learning_rate=learning_rate_schedule, **net_conf["optimization"][loss_function]["optimizer_kwargs"]
             )
-            LOGGER.info(f"Using Adam optimizer (non-legacy)")
+            LOGGER.info("Using Adam optimizer (non-legacy)")
     elif optimizer_name == "adamw":
         # weight_decay is passed through optimizer_kwargs (standard ViT/Swin recipe: AdamW, wd ~0.05)
         if ema_momentum is not None:
@@ -115,23 +115,23 @@ def get_optimizer(net_conf, loss_function="delta_loss", restore_checkpoint=False
                 learning_rate=learning_rate_schedule,
                 **net_conf["optimization"][loss_function]["optimizer_kwargs"],
             )
-            LOGGER.info(f"Using AdamW optimizer")
+            LOGGER.info("Using AdamW optimizer")
     elif optimizer_name == "sgd":
         optimizer = tf.keras.optimizers.SGD(
             learning_rate=learning_rate_schedule, **net_conf["optimization"][loss_function]["optimizer_kwargs"]
         )
-        LOGGER.info(f"Using SGD optimizer")
+        LOGGER.info("Using SGD optimizer")
     else:
         raise ValueError(f"Unknown optimizer {optimizer_name}")
 
     if tf.keras.mixed_precision.global_policy().name == "mixed_float16":
-        LOGGER.info(f"Wrapping the optimizer in a LossScaleOptimizer for float16 mixed precision")
+        LOGGER.info("Wrapping the optimizer in a LossScaleOptimizer for float16 mixed precision")
         optimizer = tf.keras.mixed_precision.LossScaleOptimizer(optimizer)
     elif tf.keras.mixed_precision.global_policy().name == "mixed_bfloat16":
         # bfloat16 has the same dynamic range as float32, so gradients do not underflow and no
         # loss scaling is needed — use the optimizer unwrapped. The train step skips scaling
         # automatically because it is guarded by isinstance(optimizer, LossScaleOptimizer).
-        LOGGER.info(f"Using bfloat16 mixed precision without loss scaling (not needed)")
+        LOGGER.info("Using bfloat16 mixed precision without loss scaling (not needed)")
 
     return optimizer
 

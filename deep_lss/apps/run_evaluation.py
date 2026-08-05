@@ -151,7 +151,7 @@ if __name__ == "__main__":
     data_conf = conf["data"]
     msfm_conf = conf["msfm"]
 
-    LOGGER.info(f"Loaded configs from the model directory")
+    LOGGER.info("Loaded configs from the model directory")
 
     # general constants
     all_params = msfm_conf["analysis"]["params"]
@@ -507,7 +507,7 @@ if __name__ == "__main__":
                 training_set=True,
             )
         else:
-            LOGGER.warning(f"Skipping evaluation of the fiducial training set")
+            LOGGER.warning("Skipping evaluation of the fiducial training set")
 
         # fiducial validation
         if args.fidu_vali_tfr_pattern is not None:
@@ -523,7 +523,7 @@ if __name__ == "__main__":
                 training_set=False,
             )
         else:
-            LOGGER.warning(f"Skipping evaluation of the fiducial validation set")
+            LOGGER.warning("Skipping evaluation of the fiducial validation set")
 
         # grid validation
         if args.grid_vali_tfr_pattern is not None:
@@ -539,7 +539,7 @@ if __name__ == "__main__":
                 debug=args.debug,
             )
         else:
-            LOGGER.warning(f"Skipping evaluation of the grid set")
+            LOGGER.warning("Skipping evaluation of the grid set")
 
         # Individual observation evaluation (written into obs/ section of the same HDF5)
         if out_file is not None:
@@ -572,7 +572,7 @@ if __name__ == "__main__":
                 evaluation.evaluate_obs_benchmark(model_fn, out_file, msfm_conf, dlss_conf, args.data_dir, mock_labels)
 
         if args.wandb and out_file is not None:
-            LOGGER.info(f"Logged the predictions to weights & biases")
+            LOGGER.info("Logged the predictions to weights & biases")
             wandb_artifact = wandb.Artifact(name="evaluation-predictions", type="predictions")
             wandb_artifact.add_file(local_path=out_file)
             wandb_run.log_artifact(wandb_artifact)
@@ -582,7 +582,7 @@ if __name__ == "__main__":
         model.restore_model_from_checkpoint_path(args.restore_checkpoint_path)
 
     if args.evaluate_all_checkpoints:
-        LOGGER.warning(f"Evaluating all checkpoints")
+        LOGGER.warning("Evaluating all checkpoints")
 
         # checkpoints = model.checkpoint_manager.checkpoints
         # TODO
@@ -593,7 +593,7 @@ if __name__ == "__main__":
             evaluate_current_checkpoint(model)
 
     else:
-        LOGGER.warning(f"Evaluating only the latest checkpoint")
+        LOGGER.warning("Evaluating only the latest checkpoint")
         evaluate_current_checkpoint(model)
 
     # Release TF checkpoint objects explicitly so _CheckpointRestoreCoordinatorDeleter

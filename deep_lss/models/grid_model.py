@@ -116,7 +116,7 @@ class GridLossModel(BaseModel):
             spmm_backend=spmm_backend,
             z_bank_size=z_bank_size,
         )
-        LOGGER.info(f"Initialized the GridLossModel")
+        LOGGER.info("Initialized the GridLossModel")
 
     def setup_grid_loss_step(
         self,
@@ -198,7 +198,7 @@ class GridLossModel(BaseModel):
         """
 
         if self.xla:
-            LOGGER.warning(f"Using XLA just in time compilation")
+            LOGGER.warning("Using XLA just in time compilation")
 
         # the VICReg invariance term needs per-sample (i_sobol, i_signal) ids; derived once here so the
         # downstream closure builders, the early-error check, and the startup log all stay consistent.
@@ -260,14 +260,14 @@ class GridLossModel(BaseModel):
                         reduction=tf.keras.losses.Reduction.AUTO
                     )(preds, theta)
 
-                LOGGER.warning(f"Using the Mean Squared Error. Note that the labels should be normalized!")
+                LOGGER.warning("Using the Mean Squared Error. Note that the labels should be normalized!")
 
             # for MSE the network predictions are the point estimates of the parameters, so the app's
             # vali_mse metric (preds vs cosmos, physical units) just needs the identity here.
             self.vali_posterior_mean_fn = lambda preds: preds
 
         elif loss == "likelihood":
-            assert dim_theta is not None, f"n_theta must be passed for the likelihood loss"
+            assert dim_theta is not None, "n_theta must be passed for the likelihood loss"
 
             # analogously to the delta loss, the per replica averaging of the likelihood loss is done in
             # likelihood_loss.py, so no distinction between distributed and non-distributed training is necessary here
@@ -286,10 +286,10 @@ class GridLossModel(BaseModel):
 
             vali_loss_kwargs["summary_suffix"] = "_vali"
 
-            LOGGER.warning(f"Using the likelihood loss")
+            LOGGER.warning("Using the likelihood loss")
 
         elif loss == "mutual_info":
-            assert dim_theta is not None, f"n_theta must be passed for the mutual information loss"
+            assert dim_theta is not None, "n_theta must be passed for the mutual information loss"
 
             if dim_summary is None:
                 dim_summary = 2 * dim_theta
@@ -302,7 +302,7 @@ class GridLossModel(BaseModel):
                 )
 
                 if self.checkpoint_manager is not None:
-                    LOGGER.warning(f"Mutual info loss, overwriting the checkpoint manager")
+                    LOGGER.warning("Mutual info loss, overwriting the checkpoint manager")
                     self.checkpoint = tf.train.Checkpoint(
                         network=self.network,
                         optimizer=self.optimizer,
@@ -317,7 +317,7 @@ class GridLossModel(BaseModel):
                         step_counter=self.train_step,
                     )
                 if self.restore_from_checkpoint:
-                    LOGGER.warning(f"Mutual info loss, restoring the model again from within setup_grid_loss_step")
+                    LOGGER.warning("Mutual info loss, restoring the model again from within setup_grid_loss_step")
                     self.restore_model()
 
                 self.trainable_variables = self.variational_head.trainable_variables + self.network.trainable_variables
@@ -387,7 +387,7 @@ class GridLossModel(BaseModel):
 
                 @tf.function(jit_compile=self.xla, **tf_kwargs)
                 def grid_train_step(x, theta):
-                    LOGGER.warning(f"Tracing grid_train_step")
+                    LOGGER.warning("Tracing grid_train_step")
                     loss = self.base_train_step(
                         input_tensor=x,
                         input_labels=theta,
@@ -408,7 +408,7 @@ class GridLossModel(BaseModel):
 
                 @tf.function(jit_compile=self.xla, **tf_kwargs)
                 def grid_train_step(x, theta, i_sobol, i_signal):
-                    LOGGER.warning(f"Tracing grid_train_step (with VICReg invariance)")
+                    LOGGER.warning("Tracing grid_train_step (with VICReg invariance)")
                     # pair_ids is forwarded as a tuple — stacking happens inside base_train_step where
                     # the tensors are no longer wrapped in PerReplica (cf. distributed grid_train_step).
                     loss = self.base_train_step(
@@ -437,7 +437,7 @@ class GridLossModel(BaseModel):
 
                 @tf.function
                 def grid_train_step(x, theta):
-                    LOGGER.warning(f"Tracing distributed grid_train_step")
+                    LOGGER.warning("Tracing distributed grid_train_step")
                     global_loss = self.distributed_train_step(
                         input_tensor=x,
                         input_labels=theta,
@@ -458,7 +458,7 @@ class GridLossModel(BaseModel):
 
                 @tf.function
                 def grid_train_step(x, theta, i_sobol, i_signal):
-                    LOGGER.warning(f"Tracing distributed grid_train_step (with VICReg invariance)")
+                    LOGGER.warning("Tracing distributed grid_train_step (with VICReg invariance)")
                     # pair_ids is forwarded as a tuple of PerReplica tensors — strategy.run distributes each
                     # leaf independently, and the stack into a (B, 2) tensor happens inside base_train_step
                     # where the per-replica unwrapping has already taken place.
