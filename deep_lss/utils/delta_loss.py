@@ -6,7 +6,7 @@ Author: Arne Thomsen, Janis Fluri
 
 Adapted from
 https://cosmo-gitlab.phys.ethz.ch/jafluri/cosmogrid_kids1000/-/blob/master/kids1000_analysis/losses.py
-by Janis Fluri, 
+by Janis Fluri,
 the main difference is that here, the distribution happens via tf.distribute.Strategy instead of horovod.
 """
 

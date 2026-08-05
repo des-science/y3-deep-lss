@@ -304,7 +304,9 @@ def training(args=None):
         if args.loss_function is None:
             args.loss_function = loss_conf.get("loss_function")
         if args.loss_function is None:
-            raise ValueError("loss_function not set; either pass --loss_function or use a --loss_config with a loss_function key")
+            raise ValueError(
+                "loss_function not set; either pass --loss_function or use a --loss_config with a loss_function key"
+            )
         LOGGER.info(f"Loaded configs from the provided paths")
 
         if args.dir_model is None:
@@ -460,7 +462,17 @@ def training(args=None):
         wandb_run.config.setdefaults({"msfm": msfm_conf, "dlss": dlss_conf, "net": net_conf})
 
         wandb.define_metric("train_step")
-        for prefix in ("loss/*", "schedule/*", "learning_rate", "global_grad_norm*", "step_time", "data_time", "compute_time", "z_bank/*", "z_invariance/*"):
+        for prefix in (
+            "loss/*",
+            "schedule/*",
+            "learning_rate",
+            "global_grad_norm*",
+            "step_time",
+            "data_time",
+            "compute_time",
+            "z_bank/*",
+            "z_invariance/*",
+        ):
             wandb.define_metric(prefix, step_metric="train_step")
 
         LOGGER.info(f"Initialized weights & biases to {dir_model}")
@@ -626,8 +638,11 @@ def training(args=None):
 
     # dataset
     LOGGER.info(f"Training set")
-    pipe_kwargs = {k: v for k, v in {**dlss_conf["dset"]["common"], **dlss_conf["dset"]["training"], **noise_kwargs}.items()
-                   if k not in _CLS_ONLY_KEYS}
+    pipe_kwargs = {
+        k: v
+        for k, v in {**dlss_conf["dset"]["common"], **dlss_conf["dset"]["training"], **noise_kwargs}.items()
+        if k not in _CLS_ONLY_KEYS
+    }
     pipe_kwargs["return_maps"] = True
     pipe_kwargs["return_cls"] = return_cls
     train_pipeline = Pipeline(conf=msfm_conf, **pipe_kwargs)
@@ -744,6 +759,7 @@ def training(args=None):
                     masked_attention=masked_attention,
                     spmm_backend=spmm_backend,
                 )
+
                 # trace so network.built=True before BaseModel.summary(). Under
                 # MultiWorkerMirroredStrategy the eager call runs in the /job:localhost context
                 # while the in-scope variables live on /job:worker/.../GPU:0, which the
@@ -751,8 +767,7 @@ def training(args=None):
                 # trace through strategy.run there.
                 def _build_trace():
                     return network(
-                        (tf.zeros((2, len(smooth_indices), n_z_bins)),
-                         tf.zeros((2, 3 * n_side, len(l_min_per_pair)))),
+                        (tf.zeros((2, len(smooth_indices), n_z_bins)), tf.zeros((2, 3 * n_side, len(l_min_per_pair)))),
                         training=False,
                     )
 
@@ -884,8 +899,7 @@ def training(args=None):
             # Trace the full ResNetMapsPlusCLSNetwork so that network.built=True and BaseModel
             # can call network.summary(). gcnn.build() only builds the map branch.
             network(
-                (tf.zeros((2, len(smooth_indices), n_z_bins)),
-                 tf.zeros((2, 3 * n_side, len(l_min_per_pair)))),
+                (tf.zeros((2, len(smooth_indices), n_z_bins)), tf.zeros((2, 3 * n_side, len(l_min_per_pair)))),
                 training=False,
             )
             model = Model(
@@ -974,7 +988,9 @@ def training(args=None):
             asinh_data_dir = args.data_dir
             if asinh_data_dir is None:
                 asinh_data_dir = args.train_tfr_pattern.split("/tfrecords/")[0]
-                LOGGER.warning(f"--data_dir not set; deriving Cls-cache dir from --train_tfr_pattern: {asinh_data_dir}")
+                LOGGER.warning(
+                    f"--data_dir not set; deriving Cls-cache dir from --train_tfr_pattern: {asinh_data_dir}"
+                )
             scales_name = os.path.splitext(os.path.basename(args.scales_config))[0]
             dset_common = dlss_conf["dset"]["common"]
             scale = cls_preprocessing.compute_asinh_scale_from_cache(
@@ -1118,7 +1134,9 @@ def training(args=None):
                 metrics = [tf.keras.metrics.Mean(), tf.keras.metrics.Mean()]
                 n_batches = 0
                 n_loss_nan = 0
-                for batch_tuple in LOGGER.progressbar(dist_dset, at_level="debug", desc="validation", total=n_expected):
+                for batch_tuple in LOGGER.progressbar(
+                    dist_dset, at_level="debug", desc="validation", total=n_expected
+                ):
                     vals = step_fn(batch_tuple)
                     n_batches += 1
                     for i, v in enumerate(vals):
@@ -1142,6 +1160,7 @@ def training(args=None):
                     model.write_summary(key, metrics[idx].result())
                 for m in metrics:
                     m.reset_states()
+
             return validation_loop
 
         if args.fidu_vali_tfr_pattern is not None:
@@ -1229,7 +1248,9 @@ def training(args=None):
                 )
 
             validation_loop = make_validation_loop(
-                dist_vali_dset, vali_step_fn, n_vali_batches,
+                dist_vali_dset,
+                vali_step_fn,
+                n_vali_batches,
                 [("loss/vali_total", 0), ("loss/vali_main", 1)],
             )
 
@@ -1239,7 +1260,9 @@ def training(args=None):
             vali_dset_kwargs.update(net_conf["dset"]["validation"]["grid"])
 
             LOGGER.info(f"Grid validation set")
-            n_vali_examples_per_replica = n_vali_batches * vali_dset_kwargs["local_batch_size"] if n_vali_batches is not None else None
+            n_vali_examples_per_replica = (
+                n_vali_batches * vali_dset_kwargs["local_batch_size"] if n_vali_batches is not None else None
+            )
             LOGGER.info(
                 f"Grid validation: {n_vali_batches} batches × local_batch_size "
                 f"{vali_dset_kwargs['local_batch_size']} = "
@@ -1300,7 +1323,9 @@ def training(args=None):
             # vali_loss_fn has no z-regularization, so total == main; log both keys for
             # consistency with the fiducial validation path
             validation_loop = make_validation_loop(
-                dist_vali_dset, vali_step_fn, n_vali_batches,
+                dist_vali_dset,
+                vali_step_fn,
+                n_vali_batches,
                 [("loss/vali_total", 0), ("loss/vali_nrmse_cosmo", 1)],
             )
 

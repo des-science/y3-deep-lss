@@ -202,11 +202,7 @@ class GridLossModel(BaseModel):
 
         # the VICReg invariance term needs per-sample (i_sobol, i_signal) ids; derived once here so the
         # downstream closure builders, the early-error check, and the startup log all stay consistent.
-        uses_invariance = (
-            z_type == "vicreg"
-            and isinstance(z_weight, dict)
-            and z_weight.get("invariance") is not None
-        )
+        uses_invariance = z_type == "vicreg" and isinstance(z_weight, dict) and z_weight.get("invariance") is not None
 
         if uses_invariance and self.z_bank_size is not None:
             raise NotImplementedError(
@@ -256,9 +252,9 @@ class GridLossModel(BaseModel):
             else:
                 if distributed:
                     # to be compatible with the delta loss, the loss is averaged per replica
-                    loss_fn = lambda preds, theta, training=True: (1.0 / batch_size) * tf.keras.losses.MeanSquaredError(
-                        reduction=tf.keras.losses.Reduction.SUM
-                    )(preds, theta)
+                    loss_fn = lambda preds, theta, training=True: (
+                        1.0 / batch_size
+                    ) * tf.keras.losses.MeanSquaredError(reduction=tf.keras.losses.Reduction.SUM)(preds, theta)
                 else:
                     loss_fn = lambda preds, theta, training=True: tf.keras.losses.MeanSquaredError(
                         reduction=tf.keras.losses.Reduction.AUTO
@@ -379,9 +375,7 @@ class GridLossModel(BaseModel):
             if uses_invariance:
                 # extra (i_sobol, i_signal) inputs forwarded by the training loop, used as positive-pair ids
                 index_shape = (batch_size,)
-                input_signature.extend(
-                    [tf.TensorSpec(shape=index_shape, dtype=tf.int64)] * 2
-                )
+                input_signature.extend([tf.TensorSpec(shape=index_shape, dtype=tf.int64)] * 2)
             tf_kwargs = {"input_signature": input_signature}
         else:
             tf_kwargs = {}

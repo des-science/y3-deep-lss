@@ -36,13 +36,11 @@ def window_mean_squared_distances(
     for level in range(num_nested_levels):
         nside_stage = nside >> level
         levels_used = min(window_levels, num_nested_levels - level)
-        sequence_length = 4 ** levels_used
+        sequence_length = 4**levels_used
 
         npix = hp.nside2npix(nside_stage)
         n_windows = npix // sequence_length
-        anchors = rng.choice(
-            n_windows, size=min(ref_windows, n_windows), replace=False
-        )
+        anchors = rng.choice(n_windows, size=min(ref_windows, n_windows), replace=False)
 
         acc = np.zeros((sequence_length, sequence_length), dtype=np.float64)
         for anchor in anchors:
@@ -108,17 +106,13 @@ def window_binned_distances(
         used, bin_idx = np.unique(bin_idx, return_inverse=True)
         bin_idx = bin_idx.reshape(S, S)
 
-        bin_centers = np.array(
-            [d2[bin_idx == k].mean() for k in range(len(used))], dtype=np.float32
-        )
+        bin_centers = np.array([d2[bin_idx == k].mean() for k in range(len(used))], dtype=np.float32)
         bin_centers[0] = 0.0
         out.append((bin_idx.astype(np.int32), bin_centers))
     return out
 
 
-class HealpixNestedHierarchicalLocalWindowTransformer(
-    NestedHierarchicalLocalWindowTransformer
-):
+class HealpixNestedHierarchicalLocalWindowTransformer(NestedHierarchicalLocalWindowTransformer):
     def __init__(
         self,
         num_pixels,
@@ -175,34 +169,22 @@ class HealpixNestedHierarchicalLocalWindowTransformer(
             )
             kwargs["pos_coeff_init"] = float(pe_kwargs.pop("coeff_init", -1.0))
         elif pos_encoding is not None:
-            raise ValueError(
-                f"pos_encoding must be None, 'geodesic' or 'geodesic_binned', "
-                f"got {pos_encoding!r}."
-            )
+            raise ValueError(f"pos_encoding must be None, 'geodesic' or 'geodesic_binned', " f"got {pos_encoding!r}.")
         if pe_kwargs:
-            raise ValueError(
-                f"Unknown pos_encoding_kwargs for pos_encoding={pos_encoding!r}: "
-                f"{sorted(pe_kwargs)}"
-            )
+            raise ValueError(f"Unknown pos_encoding_kwargs for pos_encoding={pos_encoding!r}: " f"{sorted(pe_kwargs)}")
 
         # Number of fine nside pixels inside each nside_down top-level token.
-        num_pixels_per_top_level_token = hp.nside2npix(nside) // hp.nside2npix(
-            nside_down
-        )
+        num_pixels_per_top_level_token = hp.nside2npix(nside) // hp.nside2npix(nside_down)
         if num_pixels % num_pixels_per_top_level_token != 0:
             raise ValueError(
-                f"Cannot split {num_pixels} pixels into "
-                f"{num_pixels_per_top_level_token} top-level tokens"
+                f"Cannot split {num_pixels} pixels into " f"{num_pixels_per_top_level_token} top-level tokens"
             )
 
         # token_valid (masked attention) flows through to the base class; here we can
         # additionally pin its length to the known pixel count.
         token_valid = kwargs.get("token_valid")
         if token_valid is not None and len(token_valid) != num_pixels:
-            raise ValueError(
-                f"token_valid has {len(token_valid)} entries, expected num_pixels = "
-                f"{num_pixels}."
-            )
+            raise ValueError(f"token_valid has {len(token_valid)} entries, expected num_pixels = " f"{num_pixels}.")
 
         num_top_level_tokens = num_pixels // num_pixels_per_top_level_token
         nested_shape = (4,) * num_nested_levels
@@ -363,6 +345,4 @@ class HealpixNestedHierarchicalLocalWindowTransformer(
             for nside_inj, flat in injections.items():
                 body_level, nested_shape = self._injection_nested[nside_inj]
                 nested_injections[body_level] = self._flat_to_nested(flat, nested_shape)
-        return super().call(
-            self.batch_flat_to_nested(x), training=training, injections=nested_injections
-        )
+        return super().call(self.batch_flat_to_nested(x), training=training, injections=nested_injections)

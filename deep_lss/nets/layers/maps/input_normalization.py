@@ -59,7 +59,9 @@ class EmpiricalInputNormalization(tf.keras.layers.Layer):
         # fixed float32: runs on the fp32-smoothed maps, before the cast to the body dtype
         super().__init__(dtype="float32", **kwargs)
         self.mean = tf.Variable(tf.zeros((n_channels,), dtype=tf.float32), trainable=False, name="input_norm_mean")
-        self.inv_std = tf.Variable(tf.ones((n_channels,), dtype=tf.float32), trainable=False, name="input_norm_inv_std")
+        self.inv_std = tf.Variable(
+            tf.ones((n_channels,), dtype=tf.float32), trainable=False, name="input_norm_inv_std"
+        )
         # constant (not a checkpointed variable): shared config geometry, like HealpySmoothing.mask
         self.mask = None if mask is None else tf.constant(np.asarray(mask) > 0, dtype=tf.float32)
 

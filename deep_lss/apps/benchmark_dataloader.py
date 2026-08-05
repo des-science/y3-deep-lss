@@ -157,7 +157,9 @@ def main():
     # measurement
     p.add_argument("--measure_batches", type=int, default=50)
     p.add_argument("--min_warmup_batches", type=int, default=30)
-    p.add_argument("--label", type=str, default="", help="free-form tag echoed into the result (e.g. probe/sweep name)")
+    p.add_argument(
+        "--label", type=str, default="", help="free-form tag echoed into the result (e.g. probe/sweep name)"
+    )
     p.add_argument("--results_file", type=str, default=None, help="append the JSON result line here")
     args = p.parse_args()
 

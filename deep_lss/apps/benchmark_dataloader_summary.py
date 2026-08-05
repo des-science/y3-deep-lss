@@ -45,8 +45,10 @@ def main():
     for probe in sorted(by_probe):
         rs = by_probe[probe]
         geo = rs[0]
-        print(f"\n===== {probe}  (n_dv_pix={geo['n_dv_pix']}, n_channels={geo['n_channels']}, "
-              f"{geo['mb_per_example']} MB/example, downsample_nside={geo['downsample_nside']}) =====")
+        print(
+            f"\n===== {probe}  (n_dv_pix={geo['n_dv_pix']}, n_channels={geo['n_channels']}, "
+            f"{geo['mb_per_example']} MB/example, downsample_nside={geo['downsample_nside']}) ====="
+        )
         header = "  ".join(f"{short:>{w}}" for _, short, w in COLS)
         print(header)
         print("-" * len(header))

@@ -69,8 +69,10 @@ class PCAWhiteningLayer(tf.keras.layers.Layer):
             components = eigvecs[:, idx]
 
         explained = eigvals[np.argsort(eigvals)[::-1]][: self.n_components].sum() / eigvals.sum()
-        LOGGER.info(f"PCAWhiteningLayer: kept {self.n_components}/{x.shape[1]} components, "
-                    f"explained variance = {explained:.3f}")
+        LOGGER.info(
+            f"PCAWhiteningLayer: kept {self.n_components}/{x.shape[1]} components, "
+            f"explained variance = {explained:.3f}"
+        )
 
         self.mean_.assign(mean.astype(np.float32))
         self.components_.assign(components.astype(np.float32))

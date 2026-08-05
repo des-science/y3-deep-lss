@@ -182,22 +182,22 @@ class ResNetMapsPlusCLSNetwork(tf.keras.Model):
 
         # Map branch: GCNN (or multi-res encoder) → pool/flatten → (project) → normalise
         map_branch = self.map_encoder if self.map_encoder is not None else self.gcnn
-        x = map_branch(maps, training=training)                 # (batch, n_pix_reduced, n_ch)
+        x = map_branch(maps, training=training)  # (batch, n_pix_reduced, n_ch)
         if self.map_pool == "mean":
             # permutation-invariant readout mirroring the transformer's masked-mean token pool:
             # average over the (footprint-only) pixel axis instead of flattening + linear-crushing.
-            x_flat = tf.reduce_mean(x, axis=1)                  # (B, n_ch)
+            x_flat = tf.reduce_mean(x, axis=1)  # (B, n_ch)
         else:
-            x_flat = tf.reshape(x, (tf.shape(x)[0], -1))       # (B, n_map_flat)
+            x_flat = tf.reshape(x, (tf.shape(x)[0], -1))  # (B, n_map_flat)
         if self.map_projection is not None:
-            x_flat = self.map_projection(x_flat)                # (B, map_feature_dim); small n_ch->dim Dense when pooled
+            x_flat = self.map_projection(x_flat)  # (B, map_feature_dim); small n_ch->dim Dense when pooled
         x_flat = self.map_norm(x_flat, training=training)
 
         # Cls branch: per-pair bin + log transform → normalise → embed
-        cls_flat = self.cls_layer(cls, training=training)       # (B, n_bins * n_z_cross)
+        cls_flat = self.cls_layer(cls, training=training)  # (B, n_bins * n_z_cross)
         cls_flat = self.cls_norm(cls_flat, training=training)
         for layer in self.cls_embedding_layers:
-            cls_flat = layer(cls_flat, training=training)       # (B, emb_width) after last Dense+LN
+            cls_flat = layer(cls_flat, training=training)  # (B, emb_width) after last Dense+LN
 
         # Concatenate and pass through the regression head
         x = tf.concat([x_flat, cls_flat], axis=-1)

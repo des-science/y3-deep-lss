@@ -4,7 +4,7 @@
 Created August 2024
 Author: Arne Thomsen
 
-This file contains different lower bounds of the mutual information between summary vectors and parameters to be 
+This file contains different lower bounds of the mutual information between summary vectors and parameters to be
 inferred, following
 Chen et al. 2021 https://arxiv.org/pdf/2010.10079
 Jeffrey et al. 2021 https://arxiv.org/pdf/2009.08459

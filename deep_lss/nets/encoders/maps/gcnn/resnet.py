@@ -237,9 +237,7 @@ class ResNetLayers:
             # same config geometry as the smoothing front-end (cf. _input_norm_footprint for the
             # transformer encoders); the layer binarizes it to a 0/1 indicator itself
             self._input_norm_mask = smoothing_kwargs.get("mask")
-            self.input_norm_layer = EmpiricalInputNormalization(
-                len(smoothing_kwargs["fwhm"]), self._input_norm_mask
-            )
+            self.input_norm_layer = EmpiricalInputNormalization(len(smoothing_kwargs["fwhm"]), self._input_norm_mask)
             self.layers.append(self.input_norm_layer)
 
         # pure pooling stages: strided HealpyPseudoConv, downsampling (nside halved) without a graph conv.
@@ -344,7 +342,7 @@ class ResNetLayers:
 
     def load_input_norm_stats(self, stats):
         """Load the single ``(mean, inv_std)`` group into the input-norm layer."""
-        (mean, inv_std), = stats
+        ((mean, inv_std),) = stats
         self.input_norm_layer.load_stats(mean, inv_std)
 
     def get_conv_layers(self):

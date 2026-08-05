@@ -947,10 +947,7 @@ class BaseModel(object):
         # Safety net: replace NaN/Inf gradients with zeros so a single bad batch cannot corrupt the
         # weights. This makes a NaN step a no-op (zero gradient update) instead of a catastrophic
         # weight corruption. Works inside tf.function via element-wise tf.where.
-        gradients = [
-            tf.where(tf.math.is_finite(g), g, tf.zeros_like(g)) if g is not None else g
-            for g in gradients
-        ]
+        gradients = [tf.where(tf.math.is_finite(g), g, tf.zeros_like(g)) if g is not None else g for g in gradients]
 
         # clip the gradients
         if clip_by_value is not None:

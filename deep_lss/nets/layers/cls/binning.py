@@ -80,9 +80,7 @@ class ClsBinningAndTransformLayer(tf.keras.layers.Layer):
         # selected so the checkpoint always has a matching variable to save/restore; the fitted
         # values are loaded later via set_scale() (fresh training) or restored from the checkpoint.
         if self.cls_transform == "asinh_per_feature":
-            self.cls_scale = tf.Variable(
-                np.ones(self.n_cls_flat, dtype=np.float32), trainable=False, name="cls_scale"
-            )
+            self.cls_scale = tf.Variable(np.ones(self.n_cls_flat, dtype=np.float32), trainable=False, name="cls_scale")
         else:
             self.cls_scale = None
 

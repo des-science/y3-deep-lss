@@ -303,8 +303,7 @@ if __name__ == "__main__":
                     masked_attention=masked_attention,
                 )
                 network(
-                    (tf.zeros((2, len(smooth_indices), n_z_bins)),
-                     tf.zeros((2, 3 * n_side, len(l_min_per_pair)))),
+                    (tf.zeros((2, len(smooth_indices), n_z_bins)), tf.zeros((2, 3 * n_side, len(l_min_per_pair)))),
                     training=False,
                 )
             else:

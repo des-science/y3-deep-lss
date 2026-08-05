@@ -95,7 +95,16 @@ def _remove_example_axis(array):
 
 
 def evaluate_grid(
-    model, tfr_pattern, msfm_conf, dlss_conf, net_conf, data_conf, dir_out, file_label=None, wandb_run=None, debug=False
+    model,
+    tfr_pattern,
+    msfm_conf,
+    dlss_conf,
+    net_conf,
+    data_conf,
+    dir_out,
+    file_label=None,
+    wandb_run=None,
+    debug=False,
 ):
     """Evaluate the model on the grid part of the CosmoGrid.
 
@@ -131,8 +140,11 @@ def evaluate_grid(
 
     grid_pipeline = GridPipeline(
         conf=msfm_conf,
-        **{k: v for k, v in {**dlss_conf["dset"]["common"], **dlss_conf["dset"]["eval"]["grid"]}.items()
-           if k not in _CLS_ONLY_KEYS | _EXPLICIT_PIPELINE_KEYS},
+        **{
+            k: v
+            for k, v in {**dlss_conf["dset"]["common"], **dlss_conf["dset"]["eval"]["grid"]}.items()
+            if k not in _CLS_ONLY_KEYS | _EXPLICIT_PIPELINE_KEYS
+        },
         return_maps=True,
         return_cls=return_cls,
     )
@@ -273,7 +285,16 @@ def evaluate_grid(
 
 
 def evaluate_fiducial(
-    model, tfr_pattern, msfm_conf, dlss_conf, net_conf, data_conf, dir_out, training_set=True, file_label=None, wandb_run=None
+    model,
+    tfr_pattern,
+    msfm_conf,
+    dlss_conf,
+    net_conf,
+    data_conf,
+    dir_out,
+    training_set=True,
+    file_label=None,
+    wandb_run=None,
 ):
     """Evaluate the model on the fiducial part of the CosmoGrid.
 
@@ -331,8 +352,11 @@ def evaluate_fiducial(
 
     fiducial_pipeline = FiducialPipeline(
         conf=msfm_conf,
-        **{k: v for k, v in {**dlss_conf["dset"]["common"], **dlss_conf["dset"]["eval"]["fiducial"]}.items()
-           if k not in _CLS_ONLY_KEYS | _EXPLICIT_PIPELINE_KEYS},
+        **{
+            k: v
+            for k, v in {**dlss_conf["dset"]["common"], **dlss_conf["dset"]["eval"]["fiducial"]}.items()
+            if k not in _CLS_ONLY_KEYS | _EXPLICIT_PIPELINE_KEYS
+        },
         return_maps=True,
         return_cls="cls" in net_conf["network"],
     )

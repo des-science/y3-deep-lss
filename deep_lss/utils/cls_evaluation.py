@@ -21,17 +21,18 @@ from msi.utils import preprocessing
 LOGGER = logger.get_logger(__file__)
 
 _OBS_PREPROC_FNS = {
-    "hard":             preprocessing.get_preprocessed_cl_observation_hard_cut,
+    "hard": preprocessing.get_preprocessed_cl_observation_hard_cut,
     "hard_conservative": partial(preprocessing.get_preprocessed_cl_observation_hard_cut, n_extra_bins=1),
-    "none":             preprocessing.get_preprocessed_cl_observation_hard_cut,
-    "soft_pruned":      partial(preprocessing.get_preprocessed_cl_observation, scale_cut="soft_pruned"),
-    "soft":             preprocessing.get_preprocessed_cl_observation,
+    "none": preprocessing.get_preprocessed_cl_observation_hard_cut,
+    "soft_pruned": partial(preprocessing.get_preprocessed_cl_observation, scale_cut="soft_pruned"),
+    "soft": preprocessing.get_preprocessed_cl_observation,
 }
 
 
 def _obs_preprocessing_fn(scale_cut, cls_n_bins=None):
     if scale_cut == "hard_rebinned":
         from deep_lss.utils.cls_preprocessing import preprocess_obs_hard_rebinned
+
         return partial(preprocess_obs_hard_rebinned, cls_n_bins=cls_n_bins)
     return _OBS_PREPROC_FNS[scale_cut]
 

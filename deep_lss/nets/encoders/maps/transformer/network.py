@@ -172,7 +172,7 @@ class HealpixNestedTokenizer(tf.keras.layers.Layer):
 
         smooth_indices = np.asarray(smooth_indices).astype(np.int64)
         n_levels = int(hp.nside2order(nside) - hp.nside2order(token_nside))
-        block = 4 ** n_levels
+        block = 4**n_levels
         n_pix_in = int(smooth_indices.shape[0])
 
         # NEST parent superpixel at token_nside, and the child offset within it.
@@ -218,8 +218,7 @@ class HealpixNestedTokenizer(tf.keras.layers.Layer):
         pixel_valid = np.asarray(pixel_valid).astype(bool).reshape(-1)
         if len(pixel_valid) != self._n_pix_in:
             raise ValueError(
-                f"pixel_valid has {len(pixel_valid)} entries, expected {self._n_pix_in} "
-                f"footprint pixels."
+                f"pixel_valid has {len(pixel_valid)} entries, expected {self._n_pix_in} " f"footprint pixels."
             )
         return np.concatenate([pixel_valid, [False]])[self._gather_idx_np]
 
@@ -285,9 +284,7 @@ class HealpixSingleResMapEncoder(HealpixMapEncoder):
         # variables) — adds variables, so toggling changes the checkpoint lineage. The footprint
         # mask is the same config geometry handed to the smoothing front-end (see the layer).
         self._input_norm_mask = _input_norm_footprint(smoothing_kwargs)
-        self.input_norm = (
-            EmpiricalInputNormalization(in_channels, self._input_norm_mask) if input_norm else None
-        )
+        self.input_norm = EmpiricalInputNormalization(in_channels, self._input_norm_mask) if input_norm else None
 
         self.tokenizer = HealpixNestedTokenizer(smooth_indices, nside, token_nside, in_channels)
         # masked_attention: exclude masked pixels from the transformer's attention/merges/pooling
@@ -321,7 +318,7 @@ class HealpixSingleResMapEncoder(HealpixMapEncoder):
 
     def load_input_norm_stats(self, stats):
         """Load the single ``(mean, inv_std)`` group into the input-norm layer."""
-        (mean, inv_std), = stats
+        ((mean, inv_std),) = stats
         self.input_norm.load_stats(mean, inv_std)
 
     def call(self, maps, training=False):
@@ -421,13 +418,9 @@ class HealpixMultiResMapEncoder(MultiResEncoderMixin, HealpixMapEncoder):
         def body(group_tensors, training):
             tokens = [tok(t) for tok, t in zip(self.tokenizers, group_tensors)]
             injections = {
-                self._groups[gi]["nside"]: tokens[gi]
-                for gi in range(len(self._groups))
-                if gi != self._fine_group_idx
+                self._groups[gi]["nside"]: tokens[gi] for gi in range(len(self._groups)) if gi != self._fine_group_idx
             }
-            return self.transformer(
-                tokens[self._fine_group_idx], injections=injections, training=training
-            )
+            return self.transformer(tokens[self._fine_group_idx], injections=injections, training=training)
 
         if jit_compile_body:
             LOGGER.warning("Compiling the multi-res tokenizer->transformer body with jit_compile=True (XLA)")
@@ -469,9 +462,7 @@ def build_map_encoder(
     """
     if "split_probes" in (smoothing_kwargs or {}):
         if masked_attention:
-            raise ValueError(
-                "masked_attention is not supported with multi-resolution (split_probes) smoothing."
-            )
+            raise ValueError("masked_attention is not supported with multi-resolution (split_probes) smoothing.")
         return HealpixMultiResMapEncoder(
             smoothing_kwargs=smoothing_kwargs,
             nside=nside,

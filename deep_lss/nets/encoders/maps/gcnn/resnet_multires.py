@@ -178,9 +178,7 @@ class ResNetMultiResEncoder(MultiResEncoderMixin, tf.keras.Model):
                 "group must be at the nside the network and pipeline run at."
             )
 
-        pre_layers, post_layers, split_Fin = split_layers_at_nside(
-            layers, nside, fine["n_channels"], coarse["nside"]
-        )
+        pre_layers, post_layers, split_Fin = split_layers_at_nside(layers, nside, fine["n_channels"], coarse["nside"])
 
         # row alignment at the seam: gcnn_pre pools its pixel axis with HealpyGCNN._transform_indices
         # (ascending ud_grade parent set of the fine footprint), which must equal the coarse spec's

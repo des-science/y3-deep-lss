@@ -33,9 +33,7 @@ def make_channel_dims(base_embed_dim, num_nested_levels, growth):
     elif growth == "128":
         factor, increase = 1, 128
     else:
-        raise ValueError(
-            "growth must be one of: 'constant', 'double', 'full', '128'"
-        )
+        raise ValueError("growth must be one of: 'constant', 'double', 'full', '128'")
 
     dims = [base_embed_dim]
 
@@ -72,9 +70,7 @@ def _maybe_assert_dim(
 
     if actual_static is not None:
         if actual_static != expected:
-            raise ValueError(
-                f"Expected {description} to be {expected}, got {actual_static}."
-            )
+            raise ValueError(f"Expected {description} to be {expected}, got {actual_static}.")
         return None
 
     shape = tf.shape(x)
@@ -178,9 +174,7 @@ class GeodesicKernelAttention(Fp32SoftmaxMultiHeadAttention):
         # in the compute dtype; force fp32 to match the fp32 dist_sq constant.
         coeff = tf.cast(self.kernel_coeff, tf.float32)
         bias = coeff[:, tf.newaxis, tf.newaxis] * self.dist_sq  # (H, S, S)
-        attention_scores = attention_scores + tf.cast(
-            bias[tf.newaxis], attention_scores.dtype
-        )
+        attention_scores = attention_scores + tf.cast(bias[tf.newaxis], attention_scores.dtype)
         return super()._masked_softmax(attention_scores, attention_mask)
 
 
@@ -208,9 +202,7 @@ class GeodesicBinnedBiasAttention(Fp32SoftmaxMultiHeadAttention):
         self.coeff_init = float(coeff_init)
 
     def build(self, input_shape):
-        init_table = self.coeff_init * np.tile(
-            self._bin_centers[np.newaxis, :], (self._bias_num_heads, 1)
-        )  # (H, B)
+        init_table = self.coeff_init * np.tile(self._bin_centers[np.newaxis, :], (self._bias_num_heads, 1))  # (H, B)
 
         # callable initializer: Keras Constant only reliably supports scalars
         def _rbf_table_init(shape, dtype=None):
@@ -231,9 +223,7 @@ class GeodesicBinnedBiasAttention(Fp32SoftmaxMultiHeadAttention):
         # in the compute dtype; force fp32 for the gather, mirroring kernel_coeff.
         table = tf.cast(self.bias_table, tf.float32)  # (H, B)
         bias = tf.gather(table, self.bin_idx, axis=1)  # (H, S, S)
-        attention_scores = attention_scores + tf.cast(
-            bias[tf.newaxis], attention_scores.dtype
-        )
+        attention_scores = attention_scores + tf.cast(bias[tf.newaxis], attention_scores.dtype)
         return super()._masked_softmax(attention_scores, attention_mask)
 
 
@@ -368,9 +358,7 @@ class TransformerBlock(tf.keras.layers.Layer):
         super().__init__(**kwargs)
 
         if dim % num_heads != 0:
-            raise ValueError(
-                f"dim={dim} must be divisible by num_heads={num_heads}."
-            )
+            raise ValueError(f"dim={dim} must be divisible by num_heads={num_heads}.")
 
         self.norm1 = _fp32_layer_norm(axis=-1, epsilon=1e-5)
         # fp32_softmax: upcast the attention softmax to float32 (see Fp32SoftmaxMultiHeadAttention).
@@ -383,8 +371,7 @@ class TransformerBlock(tf.keras.layers.Layer):
         # exclusive with attn_dist_sq. attn_coeff_init sets the RBF init of either bias.
         if attn_dist_sq is not None and attn_dist_bins is not None:
             raise ValueError(
-                "attn_dist_sq and attn_dist_bins are mutually exclusive — pass one "
-                "positional bias table, not both."
+                "attn_dist_sq and attn_dist_bins are mutually exclusive — pass one " "positional bias table, not both."
             )
         if attn_dist_bins is not None:
             bin_idx, bin_centers = attn_dist_bins
@@ -511,9 +498,7 @@ class NestedLocalWindowBlock(tf.keras.layers.Layer):
         else:
             window_mask = tf.constant(window_mask, dtype=tf.bool)
             if window_mask.shape.rank != 3 or window_mask.shape[1] != window_mask.shape[2]:
-                raise ValueError(
-                    f"window_mask must have shape (n_windows, S, S), got {window_mask.shape}."
-                )
+                raise ValueError(f"window_mask must have shape (n_windows, S, S), got {window_mask.shape}.")
             self.window_mask = window_mask
         self.block = TransformerBlock(
             dim=dim,
@@ -535,19 +520,16 @@ class NestedLocalWindowBlock(tf.keras.layers.Layer):
         num_nested_levels = rank - 3
 
         if num_nested_levels <= 0:
-            raise ValueError(
-                "NestedLocalWindowBlock needs at least one nested resolution dimension."
-            )
+            raise ValueError("NestedLocalWindowBlock needs at least one nested resolution dimension.")
 
         assertions = [_maybe_assert_dim(x, -1, self.dim, "feature dimension")]
 
         levels_used = min(self.window_levels, num_nested_levels)
-        sequence_length = 4 ** levels_used
+        sequence_length = 4**levels_used
 
         if self._dist_sq_len is not None and self._dist_sq_len != sequence_length:
             raise ValueError(
-                f"dist_sq table has {self._dist_sq_len} tokens but the local window "
-                f"has {sequence_length}."
+                f"dist_sq table has {self._dist_sq_len} tokens but the local window " f"has {sequence_length}."
             )
 
         if self.window_mask is not None and self.window_mask.shape[1] != sequence_length:
@@ -560,9 +542,7 @@ class NestedLocalWindowBlock(tf.keras.layers.Layer):
         # dimensions immediately before the channel dimension must all be 4.
         first_window_axis = rank - levels_used - 1
         for axis in range(first_window_axis, rank - 1):
-            assertions.append(
-                _maybe_assert_dim(x, axis, 4, "nested resolution dimension")
-            )
+            assertions.append(_maybe_assert_dim(x, axis, 4, "nested resolution dimension"))
 
         x = _apply_assertions(x, assertions)
 
@@ -636,9 +616,7 @@ class NestedPatchMerge4(tf.keras.layers.Layer):
         """
         rank = _require_static_rank(x, self.__class__.__name__)
         if rank < 4:
-            raise ValueError(
-                "NestedPatchMerge4 needs at least one nested resolution dimension."
-            )
+            raise ValueError("NestedPatchMerge4 needs at least one nested resolution dimension.")
 
         assertions = [
             _maybe_assert_dim(x, -2, 4, "last nested dimension"),
@@ -703,9 +681,7 @@ class NestedPatchMerge4DeepSets(tf.keras.layers.Layer):
         """
         rank = _require_static_rank(x, self.__class__.__name__)
         if rank < 4:
-            raise ValueError(
-                "NestedPatchMerge4DeepSets needs at least one nested resolution dimension."
-            )
+            raise ValueError("NestedPatchMerge4DeepSets needs at least one nested resolution dimension.")
 
         assertions = [
             _maybe_assert_dim(x, -2, 4, "last nested dimension"),
@@ -720,7 +696,7 @@ class NestedPatchMerge4DeepSets(tf.keras.layers.Layer):
 
         x = self.norm(x)
         x = self.activation(self.child(x))  # (..., 4, out_dim)
-        x = tf.reduce_mean(x, axis=-2)      # symmetric pool over the children
+        x = tf.reduce_mean(x, axis=-2)  # symmetric pool over the children
         return self.combine(x)
 
 
@@ -827,9 +803,7 @@ class NestedHierarchicalLocalWindowTransformer(tf.keras.Model):
             "deepsets": NestedPatchMerge4DeepSets,
         }
         if merge_op not in merge_classes:
-            raise ValueError(
-                f"merge_op must be one of {sorted(merge_classes)}, got {merge_op!r}."
-            )
+            raise ValueError(f"merge_op must be one of {sorted(merge_classes)}, got {merge_op!r}.")
         if merge_op == "deepsets" and local_dist_sq is None and local_dist_bins is None:
             raise ValueError(
                 "merge_op='deepsets' requires a positional encoding in the local "
@@ -839,8 +813,7 @@ class NestedHierarchicalLocalWindowTransformer(tf.keras.Model):
             )
         if local_dist_sq is not None and local_dist_bins is not None:
             raise ValueError(
-                "local_dist_sq and local_dist_bins are mutually exclusive — pass one "
-                "positional encoding, not both."
+                "local_dist_sq and local_dist_bins are mutually exclusive — pass one " "positional encoding, not both."
             )
 
         # local_dist_sq: optional per-stage (S, S) normalized squared geodesic distances
@@ -851,16 +824,12 @@ class NestedHierarchicalLocalWindowTransformer(tf.keras.Model):
         if local_dist_sq is not None:
             if len(local_dist_sq) != body_levels:
                 raise ValueError(
-                    f"local_dist_sq must have one table per local stage "
-                    f"({body_levels}), got {len(local_dist_sq)}."
+                    f"local_dist_sq must have one table per local stage " f"({body_levels}), got {len(local_dist_sq)}."
                 )
             for level, table in enumerate(local_dist_sq):
                 expected = 4 ** min(window_levels, body_levels - level)
                 if len(table) != expected:
-                    raise ValueError(
-                        f"local_dist_sq[{level}] has {len(table)} tokens, "
-                        f"expected {expected}."
-                    )
+                    raise ValueError(f"local_dist_sq[{level}] has {len(table)} tokens, " f"expected {expected}.")
 
         # local_dist_bins: optional per-stage (bin_idx (S, S) int, bin_centers (B,))
         # tuples with the same per-stage S; selects the distance-binned learnable bias
@@ -898,7 +867,7 @@ class NestedHierarchicalLocalWindowTransformer(tf.keras.Model):
         pool_key_mask = None
         if token_valid is not None:
             token_valid = np.asarray(token_valid).astype(bool).reshape(-1)
-            block_size = 4 ** num_nested_levels
+            block_size = 4**num_nested_levels
             if len(token_valid) % block_size != 0 or len(token_valid) == 0:
                 raise ValueError(
                     f"token_valid length {len(token_valid)} is not a nonzero multiple "
@@ -919,9 +888,7 @@ class NestedHierarchicalLocalWindowTransformer(tf.keras.Model):
             # values. (Without a stem the level-0 multiplier below plays this role.)
             self._stem_valid = (
                 tf.constant(
-                    valid_levels[0].reshape(
-                        1, num_top_tokens, *([4] * num_nested_levels), 1
-                    ),
+                    valid_levels[0].reshape(1, num_top_tokens, *([4] * num_nested_levels), 1),
                     dtype=tf.float32,
                 )
                 if stem_levels > 0
@@ -936,35 +903,24 @@ class NestedHierarchicalLocalWindowTransformer(tf.keras.Model):
             for level in range(body_levels):
                 seq_len = 4 ** min(window_levels, body_levels - level)
                 windows = valid_levels[stem_levels + level].reshape(-1, seq_len)
-                stage_window_masks.append(
-                    np.broadcast_to(windows[:, None, :], (len(windows), seq_len, seq_len))
-                )
+                stage_window_masks.append(np.broadcast_to(windows[:, None, :], (len(windows), seq_len, seq_len)))
 
             # per-stage zeroing multipliers (1, N, 4, ..., 4, 1), applied before merges
             self._stage_valid = [
                 tf.constant(
-                    valid_levels[stem_levels + level].reshape(
-                        1, num_top_tokens, *([4] * (body_levels - level)), 1
-                    ),
+                    valid_levels[stem_levels + level].reshape(1, num_top_tokens, *([4] * (body_levels - level)), 1),
                     dtype=tf.float32,
                 )
                 for level in range(body_levels)
             ]
             # per-stage valid-token counts for the masked multi-scale readout means
-            self._stage_pool_count = [
-                float(valid_levels[stem_levels + level].sum())
-                for level in range(body_levels)
-            ]
+            self._stage_pool_count = [float(valid_levels[stem_levels + level].sum()) for level in range(body_levels)]
             # global-stage key-side mask (1, N, N) and masked mean-pool weights
             top_valid = valid_levels[-1]
             self._global_mask = tf.constant(
-                np.broadcast_to(
-                    top_valid[None, None, :], (1, num_top_tokens, num_top_tokens)
-                )
+                np.broadcast_to(top_valid[None, None, :], (1, num_top_tokens, num_top_tokens))
             )
-            self._pool_weights = tf.constant(
-                top_valid[None, :, None], dtype=tf.float32
-            )
+            self._pool_weights = tf.constant(top_valid[None, :, None], dtype=tf.float32)
             self._pool_count = float(top_valid.sum())
             # key-side mask (1, 1, N) for the attention pool's learned queries
             pool_key_mask = top_valid[None, None, :]
@@ -1011,9 +967,7 @@ class NestedHierarchicalLocalWindowTransformer(tf.keras.Model):
 
         for dim in self.channel_dims:
             if dim % num_heads != 0:
-                raise ValueError(
-                    f"Channel dimension {dim} must be divisible by num_heads={num_heads}."
-                )
+                raise ValueError(f"Channel dimension {dim} must be divisible by num_heads={num_heads}.")
 
         # Project the input features -> base_embed_dim, applied independently to every
         # entry token of the hierarchy. Without a stem the input features are the C map
@@ -1037,13 +991,9 @@ class NestedHierarchicalLocalWindowTransformer(tf.keras.Model):
                         layerscale_init=layerscale_init,
                         fp32_softmax=fp32_softmax,
                         dist_sq=None if local_dist_sq is None else local_dist_sq[level],
-                        dist_bins=(
-                            None if local_dist_bins is None else local_dist_bins[level]
-                        ),
+                        dist_bins=(None if local_dist_bins is None else local_dist_bins[level]),
                         pos_coeff_init=pos_coeff_init,
-                        window_mask=(
-                            None if stage_window_masks is None else stage_window_masks[level]
-                        ),
+                        window_mask=(None if stage_window_masks is None else stage_window_masks[level]),
                         block_dropout_rate=block_dropout_rate,
                         name=f"local_stage_{level}_block_{block_index}",
                     )
@@ -1075,9 +1025,7 @@ class NestedHierarchicalLocalWindowTransformer(tf.keras.Model):
         # Masked attention (token_valid) is not supported alongside injections.
         self.injections_spec = list(injections or [])
         if self.injections_spec and token_valid is not None:
-            raise ValueError(
-                "injections are not supported together with masked attention (token_valid)."
-            )
+            raise ValueError("injections are not supported together with masked attention (token_valid).")
         self.injection_proj = {}
         self.injection_fuse = {}
         self._injection_channels = {}
@@ -1091,12 +1039,8 @@ class NestedHierarchicalLocalWindowTransformer(tf.keras.Model):
             if str(level) in self.injection_proj:
                 raise ValueError(f"duplicate injection at level {level}.")
             dim = self.channel_dims[level]
-            self.injection_proj[str(level)] = tf.keras.layers.Dense(
-                dim, name=f"injection_proj_{level}"
-            )
-            self.injection_fuse[str(level)] = tf.keras.layers.Dense(
-                dim, name=f"injection_fuse_{level}"
-            )
+            self.injection_proj[str(level)] = tf.keras.layers.Dense(dim, name=f"injection_proj_{level}")
+            self.injection_fuse[str(level)] = tf.keras.layers.Dense(dim, name=f"injection_fuse_{level}")
             self._injection_channels[level] = int(inj["in_channels"])
 
         # Final global attention over the N basic-patch tokens.
@@ -1135,24 +1079,17 @@ class NestedHierarchicalLocalWindowTransformer(tf.keras.Model):
         # feature. Without it, small-scale information must survive every merge to reach
         # the head at all.
         self.readout_norms = (
-            [
-                _fp32_layer_norm(axis=-1, epsilon=1e-5, name=f"readout_norm_{level}")
-                for level in range(body_levels)
-            ]
+            [_fp32_layer_norm(axis=-1, epsilon=1e-5, name=f"readout_norm_{level}") for level in range(body_levels)]
             if multiscale_readout
             else None
         )
         # Dropout on the pooled feature vector, right before the final linear layer — the same
         # position as the post-fusion head dropout in the maps+cls networks. Variable-free, so
         # toggling it keeps checkpoints compatible.
-        self.head_dropout = (
-            tf.keras.layers.Dropout(head_dropout_rate) if head_dropout_rate is not None else None
-        )
+        self.head_dropout = tf.keras.layers.Dropout(head_dropout_rate) if head_dropout_rate is not None else None
         self.head = tf.keras.layers.Dense(num_outputs)
 
-        window_sizes = [
-            4 ** min(window_levels, body_levels - level) for level in range(body_levels)
-        ]
+        window_sizes = [4 ** min(window_levels, body_levels - level) for level in range(body_levels)]
         head_input_dim = self.channel_dims[-1] * (pool_queries if pool == "attention" else 1)
         if multiscale_readout:
             head_input_dim += sum(self.channel_dims[:-1])
@@ -1207,8 +1144,7 @@ class NestedHierarchicalLocalWindowTransformer(tf.keras.Model):
 
         if rank is not None and rank != expected_ndim:
             raise ValueError(
-                f"Expected input with {expected_ndim} dims: "
-                f"(B, C, N, 4, ..., 4), got shape {tuple(x.shape)}."
+                f"Expected input with {expected_ndim} dims: " f"(B, C, N, 4, ..., 4), got shape {tuple(x.shape)}."
             )
 
         assertions = []
@@ -1217,24 +1153,13 @@ class NestedHierarchicalLocalWindowTransformer(tf.keras.Model):
                 tf.debugging.assert_equal(
                     tf.rank(x),
                     expected_ndim,
-                    message=(
-                        f"Expected input with {expected_ndim} dims: "
-                        "(B, C, N, 4, ..., 4)."
-                    ),
+                    message=(f"Expected input with {expected_ndim} dims: " "(B, C, N, 4, ..., 4)."),
                 )
             )
 
-        assertions.append(
-            _maybe_assert_dim(
-                x, 1, self.in_channels, "input channel dimension", rank=expected_ndim
-            )
-        )
+        assertions.append(_maybe_assert_dim(x, 1, self.in_channels, "input channel dimension", rank=expected_ndim))
         for axis in range(3, expected_ndim):
-            assertions.append(
-                _maybe_assert_dim(
-                    x, axis, 4, "nested resolution dimension", rank=expected_ndim
-                )
-            )
+            assertions.append(_maybe_assert_dim(x, axis, 4, "nested resolution dimension", rank=expected_ndim))
         x = _apply_assertions(x, assertions)
 
         input_static_shape = x.shape.as_list() if x.shape.rank is not None else None
@@ -1245,9 +1170,7 @@ class NestedHierarchicalLocalWindowTransformer(tf.keras.Model):
         x = tf.transpose(x, perm=perm)
         batch_dim = input_static_shape[0] if input_static_shape is not None else None
         token_dim = input_static_shape[2] if input_static_shape is not None else None
-        x.set_shape(
-            [batch_dim, token_dim, *([4] * self.num_nested_levels), self.in_channels]
-        )
+        x.set_shape([batch_dim, token_dim, *([4] * self.num_nested_levels), self.in_channels])
 
         # Move each injection's channels to the end as well, mirroring the main input:
         #   (B, C_inj, N, 4, ..., 4) -> (B, N, 4, ..., 4, C_inj)
@@ -1262,9 +1185,7 @@ class NestedHierarchicalLocalWindowTransformer(tf.keras.Model):
             inj_ndim = 3 + (self.body_levels - level)
             inj_perm = [0] + list(range(2, inj_ndim)) + [1]
             inj = tf.transpose(inj, perm=inj_perm)
-            inj.set_shape(
-                [batch_dim, token_dim, *([4] * (self.body_levels - level)), self._injection_channels[level]]
-            )
+            inj.set_shape([batch_dim, token_dim, *([4] * (self.body_levels - level)), self._injection_channels[level]])
             injections_cl[level] = inj
 
         if self.stem_levels > 0:
@@ -1274,7 +1195,7 @@ class NestedHierarchicalLocalWindowTransformer(tf.keras.Model):
             # Patchified stem: fold the finest stem_levels nested axes into the feature
             # dimension (child-major, channel-minor — trailing axes, so a pure reshape):
             #   (B, N, 4 x M, C) -> (B, N, 4 x (M - s), 4^s * C)
-            stem_features = (4 ** self.stem_levels) * self.in_channels
+            stem_features = (4**self.stem_levels) * self.in_channels
             prefix_shape = tf.shape(x)[: 2 + self.body_levels]
             x = tf.reshape(
                 x,
@@ -1283,9 +1204,7 @@ class NestedHierarchicalLocalWindowTransformer(tf.keras.Model):
                     axis=0,
                 ),
             )
-            x.set_shape(
-                [batch_dim, token_dim, *([4] * self.body_levels), stem_features]
-            )
+            x.set_shape([batch_dim, token_dim, *([4] * self.body_levels), stem_features])
 
         # Project the entry features -> base_embed_dim:
         #   (B, N, 4, 4, ..., 4, C or 4^s * C) -> (B, N, 4, 4, ..., 4, D0)
@@ -1314,9 +1233,7 @@ class NestedHierarchicalLocalWindowTransformer(tf.keras.Model):
                 # tokens are exactly zero here, so sum / valid-count is the masked mean.
                 token_axes = list(range(1, x.shape.rank - 1))
                 if self._stage_valid is not None:
-                    stage_feature = tf.reduce_sum(x, axis=token_axes) / tf.cast(
-                        self._stage_pool_count[level], x.dtype
-                    )
+                    stage_feature = tf.reduce_sum(x, axis=token_axes) / tf.cast(self._stage_pool_count[level], x.dtype)
                 else:
                     stage_feature = tf.reduce_mean(x, axis=token_axes)
                 readout_features.append(self.readout_norms[level](stage_feature))
@@ -1345,9 +1262,7 @@ class NestedHierarchicalLocalWindowTransformer(tf.keras.Model):
         if self.readout_norms is not None:
             # concatenate the per-stage readout features (fp32 LayerNorm outputs) with
             # the pooled top-level feature; only the head input widens
-            x = tf.concat(
-                [tf.cast(f, x.dtype) for f in readout_features] + [x], axis=-1
-            )
+            x = tf.concat([tf.cast(f, x.dtype) for f in readout_features] + [x], axis=-1)
 
         if self.head_dropout is not None:
             x = self.head_dropout(x, training=training)

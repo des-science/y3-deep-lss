@@ -84,9 +84,9 @@ def run_single(args):
     loss_conf = input_output.read_yaml(args.loss_config)
     msfm_conf = files.load_config(args.msfm_config)
 
-    assert net_conf["network"]["name"] == "resnet", (
-        f"benchmark_resnet only supports network.name=resnet, got {net_conf['network']['name']}"
-    )
+    assert (
+        net_conf["network"]["name"] == "resnet"
+    ), f"benchmark_resnet only supports network.name=resnet, got {net_conf['network']['name']}"
 
     # numerical precision override, same knob as benchmark_transformer.py (resnet configs default
     # to float32 -- DeepSphere's sparse Chebyshev matmuls have no XLA/mixed-precision path).
@@ -189,8 +189,7 @@ def run_single(args):
             if network.gcnn is not None:
                 network.gcnn.build((batch_size, len(smooth_indices), n_z_bins))
             network(
-                (tf.zeros((2, len(smooth_indices), n_z_bins)),
-                 tf.zeros((2, 3 * n_side, len(l_min_per_pair)))),
+                (tf.zeros((2, len(smooth_indices), n_z_bins)), tf.zeros((2, 3 * n_side, len(l_min_per_pair)))),
                 training=False,
             )
             dynamic_input = True
@@ -313,8 +312,10 @@ def run_driver(args):
         sys.exit(f"No configs found in {args.configs_dir}")
     batch_sizes = [int(b) for b in args.batch_sizes.split(",")]
 
-    print(f"Benchmarking {len(configs)} configs × {len(batch_sizes)} batch sizes "
-          f"{batch_sizes} on a single GPU\n", flush=True)
+    print(
+        f"Benchmarking {len(configs)} configs × {len(batch_sizes)} batch sizes " f"{batch_sizes} on a single GPU\n",
+        flush=True,
+    )
 
     rows = []
     for cfg in configs:
@@ -323,13 +324,23 @@ def run_driver(args):
             print(f">>> {name}  batch={bs} ...", flush=True)
             env = dict(os.environ, CUDA_VISIBLE_DEVICES="0")
             cmd = [
-                sys.executable, os.path.abspath(__file__), "--single",
-                "--net_config", cfg, "--batch_size", str(bs),
-                "--msfm_config", args.msfm_config,
-                "--probes_config", args.probes_config,
-                "--scales_config", args.scales_config,
-                "--loss_config", args.loss_config,
-                "--data_config", args.data_config,
+                sys.executable,
+                os.path.abspath(__file__),
+                "--single",
+                "--net_config",
+                cfg,
+                "--batch_size",
+                str(bs),
+                "--msfm_config",
+                args.msfm_config,
+                "--probes_config",
+                args.probes_config,
+                "--scales_config",
+                args.scales_config,
+                "--loss_config",
+                args.loss_config,
+                "--data_config",
+                args.data_config,
             ]
             if args.precision:
                 cmd += ["--precision", args.precision]
@@ -337,7 +348,7 @@ def run_driver(args):
             row = None
             for line in proc.stdout.splitlines():
                 if line.startswith("BENCH_JSON "):
-                    row = json.loads(line[len("BENCH_JSON "):])
+                    row = json.loads(line[len("BENCH_JSON ") :])
                     break
             if row is None:
                 blob = (proc.stderr + proc.stdout).lower()
@@ -348,16 +359,22 @@ def run_driver(args):
                 else:
                     status = "ERROR"
                 row = {
-                    "config": name, "batch_size": bs,
-                    "precision": args.precision or "config", "multires": "-", "return_cls": "-",
-                    "n_pix": "-", "graph_build_s": "-",
-                    "params_M": "-", "peak_gb": "-", "step_ms": "-", "throughput": "-",
+                    "config": name,
+                    "batch_size": bs,
+                    "precision": args.precision or "config",
+                    "multires": "-",
+                    "return_cls": "-",
+                    "n_pix": "-",
+                    "graph_build_s": "-",
+                    "params_M": "-",
+                    "peak_gb": "-",
+                    "step_ms": "-",
+                    "throughput": "-",
                     "status": status,
                 }
                 if status == "ERROR":
                     noise = ("+ptx85", "gpu_timer.cc")
-                    clean = [ln for ln in proc.stderr.strip().splitlines()
-                             if not any(n in ln for n in noise)]
+                    clean = [ln for ln in proc.stderr.strip().splitlines() if not any(n in ln for n in noise)]
                     print("    ERROR (stderr tail):\n" + "\n".join(clean[-15:]) + "\n", flush=True)
             print(f"    {row['status']}  peak={row['peak_gb']} GB  step={row['step_ms']} ms\n", flush=True)
             rows.append(row)
@@ -367,8 +384,20 @@ def run_driver(args):
 
 def _write_outputs(rows, out_dir):
     os.makedirs(out_dir, exist_ok=True)
-    cols = ["config", "batch_size", "precision", "multires", "return_cls", "n_pix", "graph_build_s",
-            "params_M", "peak_gb", "step_ms", "throughput", "status"]
+    cols = [
+        "config",
+        "batch_size",
+        "precision",
+        "multires",
+        "return_cls",
+        "n_pix",
+        "graph_build_s",
+        "params_M",
+        "peak_gb",
+        "step_ms",
+        "throughput",
+        "status",
+    ]
 
     csv_path = os.path.join(out_dir, "benchmark_results.csv")
     with open(csv_path, "w", newline="") as f:
@@ -376,8 +405,20 @@ def _write_outputs(rows, out_dir):
         w.writeheader()
         w.writerows(rows)
 
-    headers = ["config", "batch", "prec", "multires", "cls", "n_pix", "graph(s)",
-               "params(M)", "peak(GB)", "step(ms)", "ex/s", "status"]
+    headers = [
+        "config",
+        "batch",
+        "prec",
+        "multires",
+        "cls",
+        "n_pix",
+        "graph(s)",
+        "params(M)",
+        "peak(GB)",
+        "step(ms)",
+        "ex/s",
+        "status",
+    ]
     keys = cols
     widths = [max(len(h), max(len(str(r.get(k, "-"))) for r in rows)) for h, k in zip(headers, keys)]
 
@@ -421,12 +462,21 @@ def main():
     p.add_argument("--jsonl", type=str, help="path to the JSONL of results (aggregate mode)")
     p.add_argument("--net_config", type=str, help="path to a single net config (child mode)")
     p.add_argument("--batch_size", type=int, default=16, help="per-GPU (local) batch size (child mode)")
-    p.add_argument("--precision", type=str, default=None, choices=("float32", "float16", "bfloat16"),
-                   help="override the config's network.precision (child mode); default uses the config")
+    p.add_argument(
+        "--precision",
+        type=str,
+        default=None,
+        choices=("float32", "float16", "bfloat16"),
+        help="override the config's network.precision (child mode); default uses the config",
+    )
     p.add_argument("--configs_dir", type=str, default=DEFAULTS["configs_dir"], help="dir of net configs (driver)")
     p.add_argument("--batch_sizes", type=str, default="16,32,64", help="comma-separated batch sizes (driver)")
-    p.add_argument("--out_dir", type=str, default=os.path.dirname(os.path.abspath(__file__)),
-                   help="where to write the CSV/markdown overview")
+    p.add_argument(
+        "--out_dir",
+        type=str,
+        default=os.path.dirname(os.path.abspath(__file__)),
+        help="where to write the CSV/markdown overview",
+    )
     p.add_argument("--msfm_config", type=str, default=DEFAULTS["msfm_config"])
     p.add_argument("--probes_config", type=str, default=DEFAULTS["probes_config"])
     p.add_argument("--scales_config", type=str, default=DEFAULTS["scales_config"])

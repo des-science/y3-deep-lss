@@ -63,8 +63,7 @@ def get_regression_head(
                 layers.append(tf.keras.layers.LayerNormalization(axis=-1))
 
         if dropout_rate is not None:
-            assert not dense_layers, \
-                "Dropout and hidden dense layers should not be used together"
+            assert not dense_layers, "Dropout and hidden dense layers should not be used together"
             LOGGER.warning(f"Using dropout with probability {dropout_rate} in the regression head")
             layers.append(tf.keras.layers.Dropout(dropout_rate))
 

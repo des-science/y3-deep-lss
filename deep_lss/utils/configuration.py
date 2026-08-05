@@ -115,7 +115,7 @@ def get_smooth_nside_indices(indices_nside_in, nside_in, smooth_nside):
     assert nside_in % smooth_nside == 0, f"nside_in {nside_in} must be divisible by smooth_nside {smooth_nside}"
     ratio = nside_in // smooth_nside
     assert ratio & (ratio - 1) == 0, f"nside_in / smooth_nside = {ratio} must be a power of 2"
-    downscale = ratio ** 2
+    downscale = ratio**2
     parent_pix = indices_nside_in // downscale
     smooth_indices = np.unique(parent_pix)
     parent_output_idx = np.searchsorted(smooth_indices, parent_pix).astype(np.int32)
@@ -142,9 +142,7 @@ def resolve_probe_smooth_nsides(net_conf, dlss_conf, n_side):
     """
     dset_common = dlss_conf["dset"]["common"]
     probes = [
-        probe
-        for probe, flag in [("lensing", "with_lensing"), ("clustering", "with_clustering")]
-        if dset_common[flag]
+        probe for probe, flag in [("lensing", "with_lensing"), ("clustering", "with_clustering")] if dset_common[flag]
     ]
     smooth_nside = net_conf["network"].get("smooth_nside", None)
     if not probes:
@@ -268,9 +266,7 @@ def _get_split_probe_specs(
             # maps the output footprint (what the network and pipeline run at) to this probe's
             # coarse footprint, for the in-network downsampling before the smoothing (the coarse
             # probe is injected into the transformer hierarchy at its own scale, never upsampled)
-            probe_indices_out, parent_output_idx = get_smooth_nside_indices(
-                output_indices, output_nside, probe_nside
-            )
+            probe_indices_out, parent_output_idx = get_smooth_nside_indices(output_indices, output_nside, probe_nside)
             assert np.array_equal(probe_indices_out, probe_indices)
         else:
             parent_output_idx = None
@@ -336,8 +332,16 @@ def get_smoothing_kwargs(loss_function, msfm_conf, dlss_conf, net_conf, dir_base
     probe_nsides = resolve_probe_smooth_nsides(net_conf, dlss_conf, n_side)
     if len(set(probe_nsides.values())) > 1:
         return _get_split_probe_specs(
-            loss_function, msfm_conf, dlss_conf, net_conf, probe_nsides, n_side, data_vec_pix, mask_dict,
-            dir_base, mode,
+            loss_function,
+            msfm_conf,
+            dlss_conf,
+            net_conf,
+            probe_nsides,
+            n_side,
+            data_vec_pix,
+            mask_dict,
+            dir_base,
+            mode,
         )
 
     if with_cross:
@@ -360,8 +364,10 @@ def get_smoothing_kwargs(loss_function, msfm_conf, dlss_conf, net_conf, dir_base
         smooth_indices, parent_output_idx = get_smooth_nside_indices(data_vec_pix, n_side, smooth_nside)
         # downsample the per-channel mask to smooth_nside using per-parent averaging
         mask_smooth = _downsample_mask(mask, parent_output_idx, len(smooth_indices))
-        LOGGER.info(f"Downsampling smoothing from nside={n_side} to smooth_nside={smooth_nside}: "
-                    f"{len(data_vec_pix)} → {len(smooth_indices)} pixels")
+        LOGGER.info(
+            f"Downsampling smoothing from nside={n_side} to smooth_nside={smooth_nside}: "
+            f"{len(data_vec_pix)} → {len(smooth_indices)} pixels"
+        )
     else:
         smooth_indices = data_vec_pix
         mask_smooth = mask

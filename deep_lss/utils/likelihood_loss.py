@@ -4,7 +4,7 @@
 Created January 2024
 Author: Arne Thomsen
 
-Fully supervised loss functions that take a label. The likelihood loss is based off 
+Fully supervised loss functions that take a label. The likelihood loss is based off
 https://github.com/tomaszkacprzak/deep_lss/blob/main/deep_lss/networks/losses.py
 by Tomasz Kacprzak (itself based off Janis Fluri's implementation).
 """

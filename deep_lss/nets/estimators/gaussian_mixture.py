@@ -85,7 +85,9 @@ class GaussianMixtureModel:
             scale_tril = tf.linalg.set_diag(
                 scale_tril, tf.nn.softplus(tf.linalg.diag_part(scale_tril)) + self.diagonal_eps
             )
-            scale_tril = tf.cast(tf.reshape(scale_tril, [-1, self.num_components, self.dim_theta, self.dim_theta]), tf.float32)
+            scale_tril = tf.cast(
+                tf.reshape(scale_tril, [-1, self.num_components, self.dim_theta, self.dim_theta]), tf.float32
+            )
             component_distribution = tfd.MultivariateNormalTriL(loc=loc, scale_tril=scale_tril)
         else:
             scale = self.scale_net(summary)  # (batch_size, num_components * dim_theta)

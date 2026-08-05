@@ -73,8 +73,7 @@ def run_single(args):
     msfm_conf = files.load_config(args.msfm_config)
 
     assert net_conf["network"]["name"] == "nested_transformer", (
-        f"benchmark_transformer only supports the nested_transformer net, got "
-        f"{net_conf['network']['name']}"
+        f"benchmark_transformer only supports the nested_transformer net, got " f"{net_conf['network']['name']}"
     )
 
     # optional XLA override: fuse the tokenizer->transformer body (smoothing stays eager).
@@ -85,7 +84,7 @@ def run_single(args):
     # optional fp32-softmax override: toggle the float32 attention-softmax upcast without a
     # throwaway config copy. None -> use the config (default True inside the net).
     if args.fp32_softmax is not None:
-        net_conf["network"].setdefault("kwargs", {})["fp32_softmax"] = (args.fp32_softmax == "true")
+        net_conf["network"].setdefault("kwargs", {})["fp32_softmax"] = args.fp32_softmax == "true"
 
     # numerical precision: --precision overrides the config's network.precision (default float32).
     # Set the global policy before building the network so the HealpySmoothing sparse kernel and
@@ -244,8 +243,10 @@ def run_driver(args):
         sys.exit(f"No configs found in {args.configs_dir}")
     batch_sizes = [int(b) for b in args.batch_sizes.split(",")]
 
-    print(f"Benchmarking {len(configs)} configs × {len(batch_sizes)} batch sizes "
-          f"{batch_sizes} on a single GPU\n", flush=True)
+    print(
+        f"Benchmarking {len(configs)} configs × {len(batch_sizes)} batch sizes " f"{batch_sizes} on a single GPU\n",
+        flush=True,
+    )
 
     rows = []
     for cfg in configs:
@@ -254,13 +255,23 @@ def run_driver(args):
             print(f">>> {name}  batch={bs} ...", flush=True)
             env = dict(os.environ, CUDA_VISIBLE_DEVICES="0")
             cmd = [
-                sys.executable, os.path.abspath(__file__), "--single",
-                "--net_config", cfg, "--batch_size", str(bs),
-                "--msfm_config", args.msfm_config,
-                "--probes_config", args.probes_config,
-                "--scales_config", args.scales_config,
-                "--loss_config", args.loss_config,
-                "--data_config", args.data_config,
+                sys.executable,
+                os.path.abspath(__file__),
+                "--single",
+                "--net_config",
+                cfg,
+                "--batch_size",
+                str(bs),
+                "--msfm_config",
+                args.msfm_config,
+                "--probes_config",
+                args.probes_config,
+                "--scales_config",
+                args.scales_config,
+                "--loss_config",
+                args.loss_config,
+                "--data_config",
+                args.data_config,
             ]
             if args.jit_compile_body:
                 cmd.append("--jit_compile_body")
@@ -270,7 +281,7 @@ def run_driver(args):
             row = None
             for line in proc.stdout.splitlines():
                 if line.startswith("BENCH_JSON "):
-                    row = json.loads(line[len("BENCH_JSON "):])
+                    row = json.loads(line[len("BENCH_JSON ") :])
                     break
             if row is None:
                 blob = (proc.stderr + proc.stdout).lower()
@@ -284,17 +295,22 @@ def run_driver(args):
                 else:
                     status = "ERROR"
                 row = {
-                    "config": name, "batch_size": bs,
-                    "precision": args.precision or "config", "n_tokens": "-", "pix_per_token": "-",
-                    "params_M": "-", "peak_gb": "-", "step_ms": "-", "throughput": "-",
+                    "config": name,
+                    "batch_size": bs,
+                    "precision": args.precision or "config",
+                    "n_tokens": "-",
+                    "pix_per_token": "-",
+                    "params_M": "-",
+                    "peak_gb": "-",
+                    "step_ms": "-",
+                    "throughput": "-",
                     "status": status,
                 }
                 # surface the tail of stderr for unexpected ERROR rows to aid debugging,
                 # filtering the harmless '+ptx85' / gpu_timer spam that floods stderr
                 if status == "ERROR":
                     noise = ("+ptx85", "gpu_timer.cc")
-                    clean = [ln for ln in proc.stderr.strip().splitlines()
-                             if not any(n in ln for n in noise)]
+                    clean = [ln for ln in proc.stderr.strip().splitlines() if not any(n in ln for n in noise)]
                     print("    ERROR (stderr tail):\n" + "\n".join(clean[-15:]) + "\n", flush=True)
             print(f"    {row['status']}  peak={row['peak_gb']} GB  step={row['step_ms']} ms\n", flush=True)
             rows.append(row)
@@ -304,8 +320,18 @@ def run_driver(args):
 
 def _write_outputs(rows, out_dir):
     os.makedirs(out_dir, exist_ok=True)
-    cols = ["config", "batch_size", "precision", "n_tokens", "pix_per_token",
-            "params_M", "peak_gb", "step_ms", "throughput", "status"]
+    cols = [
+        "config",
+        "batch_size",
+        "precision",
+        "n_tokens",
+        "pix_per_token",
+        "params_M",
+        "peak_gb",
+        "step_ms",
+        "throughput",
+        "status",
+    ]
 
     csv_path = os.path.join(out_dir, "benchmark_results.csv")
     with open(csv_path, "w", newline="") as f:
@@ -314,8 +340,18 @@ def _write_outputs(rows, out_dir):
         w.writerows(rows)
 
     headers = ["config", "batch", "prec", "N", "pix/tok", "params(M)", "peak(GB)", "step(ms)", "ex/s", "status"]
-    keys = ["config", "batch_size", "precision", "n_tokens", "pix_per_token",
-            "params_M", "peak_gb", "step_ms", "throughput", "status"]
+    keys = [
+        "config",
+        "batch_size",
+        "precision",
+        "n_tokens",
+        "pix_per_token",
+        "params_M",
+        "peak_gb",
+        "step_ms",
+        "throughput",
+        "status",
+    ]
     # tolerate rows from older JSONL that predate the precision column
     widths = [max(len(h), max(len(str(r.get(k, "-"))) for r in rows)) for h, k in zip(headers, keys)]
 
@@ -359,16 +395,33 @@ def main():
     p.add_argument("--jsonl", type=str, help="path to the JSONL of results (aggregate mode)")
     p.add_argument("--net_config", type=str, help="path to a single net config (child mode)")
     p.add_argument("--batch_size", type=int, default=16, help="per-GPU (local) batch size (child mode)")
-    p.add_argument("--jit_compile_body", action="store_true",
-                   help="force XLA on the tokenizer->transformer body, overriding the config (child mode)")
-    p.add_argument("--precision", type=str, default=None, choices=("float32", "float16", "bfloat16"),
-                   help="override the config's network.precision (child mode); default uses the config")
-    p.add_argument("--fp32_softmax", type=str, default=None, choices=("true", "false"),
-                   help="override network.kwargs.fp32_softmax (child mode); default uses the config (True)")
+    p.add_argument(
+        "--jit_compile_body",
+        action="store_true",
+        help="force XLA on the tokenizer->transformer body, overriding the config (child mode)",
+    )
+    p.add_argument(
+        "--precision",
+        type=str,
+        default=None,
+        choices=("float32", "float16", "bfloat16"),
+        help="override the config's network.precision (child mode); default uses the config",
+    )
+    p.add_argument(
+        "--fp32_softmax",
+        type=str,
+        default=None,
+        choices=("true", "false"),
+        help="override network.kwargs.fp32_softmax (child mode); default uses the config (True)",
+    )
     p.add_argument("--configs_dir", type=str, default=DEFAULTS["configs_dir"], help="dir of net configs (driver)")
     p.add_argument("--batch_sizes", type=str, default="16,32,64", help="comma-separated batch sizes (driver)")
-    p.add_argument("--out_dir", type=str, default=os.path.dirname(os.path.abspath(__file__)),
-                   help="where to write the CSV/markdown overview")
+    p.add_argument(
+        "--out_dir",
+        type=str,
+        default=os.path.dirname(os.path.abspath(__file__)),
+        help="where to write the CSV/markdown overview",
+    )
     p.add_argument("--msfm_config", type=str, default=DEFAULTS["msfm_config"])
     p.add_argument("--probes_config", type=str, default=DEFAULTS["probes_config"])
     p.add_argument("--scales_config", type=str, default=DEFAULTS["scales_config"])
