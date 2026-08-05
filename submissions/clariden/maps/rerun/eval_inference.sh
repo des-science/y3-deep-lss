@@ -10,9 +10,9 @@
 #SBATCH --job-name=eval_inference
 #SBATCH --output=/users/athomsen/dlss/repos/y3-deep-lss/submissions/clariden/slurm/slurm-%j.out
 
-# Runs ONLY the evaluation + inference stages of training.sh against an already-trained model
-# (restores the latest checkpoint) -- use when training finished but eval/inference didn't run.
-# See EVAL_SCOPE/LOAD_FLOW below for a mocks-only, no-flow-retrain quick check.
+# Runs ONLY the evaluation + inference stages of ../training.sh against an already-trained
+# model (restores the latest checkpoint) -- use when training finished but eval/inference
+# didn't run. See EVAL_SCOPE/LOAD_FLOW below for a mocks-only, no-flow-retrain quick check.
 
 export WANDB_API_KEY=$(awk '/password/ {print $2}' ~/.netrc)
 
@@ -59,8 +59,8 @@ if [ "$EVAL_SCOPE" = "mocks" ]; then
     EVAL_SCOPE_FLAGS="--include_mocks"
 fi
 
-# --dir_model passed explicitly: unlike training.sh's chained eval step, there's no
-# ./.env_var/id_<JOB_ID>.txt to read it from in a standalone job.
+# --dir_model passed explicitly: unlike ../training.sh's chained eval step, there's no
+# ../../.env_var/id_<JOB_ID>.txt to read it from in a standalone job.
 srun --environment=tensorflow --gpu-bind=none --output=""$LOG"_evaluation.log" \
     python $REPOS/y3-deep-lss/deep_lss/apps/run_evaluation.py \
         --dir_model="$OUTPUT/$MODEL" \

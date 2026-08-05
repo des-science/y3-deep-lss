@@ -1,7 +1,7 @@
 #!/bin/bash
-# Superseded 2026-08-04 by training.sh (RUN_NUM>1 already implies --restore_checkpoint) +
-# training_chainer.sh. Also carried a stale VERSION=v16/SUBVERSION=rot_in_place hardcode,
-# never migrated to v17/baseline — do not resurrect without fixing that first.
+# Superseded 2026-08-04 by maps/training.sh (RUN_NUM>1 already implies --restore_checkpoint)
+# + maps/training_chainer.sh. Also carried a stale VERSION=v16/SUBVERSION=rot_in_place
+# hardcode, never migrated to v17/baseline — do not resurrect without fixing that first.
 #SBATCH --account=a0158
 #SBATCH --partition=normal
 #SBATCH --time=12:00:00

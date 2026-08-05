@@ -10,6 +10,10 @@
 #SBATCH --job-name=training
 #SBATCH --output=/users/athomsen/dlss/repos/y3-deep-lss/submissions/clariden/slurm/slurm-%j.out
 
+# Maps-domain full train+eval+infer, one 12h job. Chained across multiple jobs via
+# training_chainer.sh; eval/inference-only recovery for an existing run lives in rerun/;
+# maps-specific benchmarks/ and experiments/ live alongside this script.
+
 # avoid a crashing task filling the /users quota with a core dump
 ulimit -c 0
 

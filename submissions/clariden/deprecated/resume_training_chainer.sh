@@ -1,7 +1,7 @@
 #!/bin/bash
-# Superseded 2026-08-04 by training_chainer.sh, which now covers both fresh-start and resume
-# via START_RUN and uses --dependency=afterany (this used afterok, wrong for a job that's
-# designed to TIMEOUT — see training_chainer.sh's header).
+# Superseded 2026-08-04 by maps/training_chainer.sh, which now covers both fresh-start and
+# resume via START_RUN and uses --dependency=afterany (this used afterok, wrong for a job
+# that's designed to TIMEOUT — see maps/training_chainer.sh's header).
 MAX_RUNS=3
 SCRIPT=resume_training.sh
 

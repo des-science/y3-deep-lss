@@ -66,7 +66,7 @@ TRAIN_TFR="$INPUT/tfrecords/grid/DESy3_grid_dmb_????.tfrecord"
 # from the production clustering runs — fail fast instead of building it here.
 CLS_CACHE="$INPUT/cls/rebinned_nb16_${SCALES}.h5"
 if [ ! -f "$CLS_CACHE" ]; then
-    echo "ERROR: Cls cache $CLS_CACHE missing — build it via training.sh / cls_training.sh first."
+    echo "ERROR: Cls cache $CLS_CACHE missing — build it via submissions/clariden/maps/training.sh / submissions/clariden/cls/cls_training.sh first."
     exit 1
 fi
 

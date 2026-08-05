@@ -1,8 +1,8 @@
 #!/bin/bash
-# Moved to deprecated/ 2026-08-04: superseded by eval_inference.sh, which absorbed this
-# script's mocks-only + --load_flow behavior as EVAL_SCOPE=mocks / LOAD_FLOW=1. Equivalent:
+# Moved to deprecated/ 2026-08-04: superseded by maps/rerun/eval_inference.sh, which absorbed
+# this script's mocks-only + --load_flow behavior as EVAL_SCOPE=mocks / LOAD_FLOW=1. Equivalent:
 #   EVAL_SCOPE=mocks LOAD_FLOW=1 PROBE=combined MODEL=v8_cls VERSION=v16 \
-#       SUBVERSION=rot_in_place sbatch eval_inference.sh
+#       SUBVERSION=rot_in_place sbatch maps/rerun/eval_inference.sh
 #SBATCH --account=a0158
 #SBATCH --partition=normal
 #SBATCH --time=01:00:00

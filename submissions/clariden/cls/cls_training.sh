@@ -8,6 +8,11 @@
 #SBATCH --job-name=cls_training
 #SBATCH --output=/users/athomsen/dlss/repos/y3-deep-lss/submissions/clariden/slurm/slurm-%j.out
 
+# Cls-summary train+eval+infer, multi-probe parallel. Unlike maps/ (which has standalone
+# eval-only/infer-only recovery scripts in maps/rerun/), there's no such counterpart here yet --
+# a failed eval/inference step means rerunning this whole script. Cls ablations/experiments
+# live in cls/experiments/.
+
 export SLURM_CPUS_PER_TASK=72
 export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK}
 export TF_NUM_INTRAOP_THREADS=${SLURM_CPUS_PER_TASK}

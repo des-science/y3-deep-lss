@@ -1,5 +1,5 @@
 #!/bin/bash
-# Moved to deprecated/ 2026-08-04: superseded by submissions/clariden/cls_experiment.sh, the
+# Moved to deprecated/ 2026-08-04: superseded by submissions/clariden/cls/experiments/cls_experiment.sh, the
 # generalized form of this launcher (MODEL_NAME/PROBE/LOSS/NET/CLS_CONFIG env vars).
 #SBATCH --account=a0158
 #SBATCH --partition=normal

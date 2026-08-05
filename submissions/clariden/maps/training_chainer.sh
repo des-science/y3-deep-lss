@@ -15,7 +15,7 @@
 # All training.sh env vars are forwarded via --export=ALL.
 
 MAX_RUNS=${MAX_RUNS:-2}
-SCRIPT=training.sh
+SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/training.sh"
 
 START_RUN=${1:-1}
 AFTER=${2:-}   # optional job id the first submitted run waits on via afterany

@@ -107,10 +107,10 @@ cd /users/athomsen/dlss/repos/y3-deep-lss
 for f in configs/deepsphere/combined/bench_v6/*.yaml; do
   name=$(basename "${f%.yaml}")
   J1=$(ARCH=deepsphere PROBE=combined NET_CONFIG="$PWD/$f" MODEL_DIR="bench_v6_${name}" \
-       sbatch --parsable --job-name="bv6_${name}" --export=ALL,RUN_NUM=1 submissions/clariden/training.sh)
+       sbatch --parsable --job-name="bv6_${name}" --export=ALL,RUN_NUM=1 submissions/clariden/maps/training.sh)
   ARCH=deepsphere PROBE=combined NET_CONFIG="$PWD/$f" MODEL_DIR="bench_v6_${name}" \
        sbatch --dependency=afterany:$J1 --job-name="bv6_${name}" --export=ALL,RUN_NUM=2 \
-       submissions/clariden/training.sh
+       submissions/clariden/maps/training.sh
 done
 ```
 

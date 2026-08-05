@@ -1,8 +1,8 @@
 #!/bin/bash
 # Submit one training.sh job (or, with CHAIN=1, an N-job training_chainer.sh chain) per config
 # file in a directory -- generic form of the "for f in configs/.../*.yaml; do sbatch ...; done"
-# loop that's been hand-retyped into bench_v4/v5/v6's docs each round. Run from
-# submissions/clariden/ (like training_chainer.sh, which this calls).
+# loop that's been hand-retyped into bench_v4/v5/v6's docs each round. Maps-specific (hardcodes
+# ../training.sh / ../training_chainer.sh) -- lives under maps/experiments/ for that reason.
 #
 # Usage:
 #   ARCH=deepsphere PROBE=combined CONFIGS_GLOB="configs/deepsphere/combined/bench_v7/*.yaml" \
@@ -12,6 +12,7 @@
 # All training.sh env vars (VERSION, SUBVERSION, PROBE, LOSS, ARCH, SCALES, ...) are forwarded.
 
 REPOS="/users/athomsen/dlss/repos"
+MAPS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/.."
 
 : "${CONFIGS_GLOB:?set CONFIGS_GLOB, e.g. configs/deepsphere/combined/bench_v7/*.yaml}"
 : "${MODEL_PREFIX:?set MODEL_PREFIX, e.g. bench_v7}"
@@ -33,9 +34,9 @@ for f in "${CONFIGS[@]}"; do
     model_dir="${MODEL_PREFIX}_${name}"
     echo "=== $model_dir  ($f) ==="
     if [ "$CHAIN" = "1" ]; then
-        NET_CONFIG="$f" MODEL_DIR="$model_dir" ./training_chainer.sh
+        NET_CONFIG="$f" MODEL_DIR="$model_dir" "$MAPS_DIR/training_chainer.sh"
     else
         NET_CONFIG="$f" MODEL_DIR="$model_dir" \
-            sbatch --job-name="$model_dir" --export=ALL training.sh
+            sbatch --job-name="$model_dir" --export=ALL "$MAPS_DIR/training.sh"
     fi
 done

@@ -1,8 +1,8 @@
 #!/bin/bash
 # Moved to deprecated/ 2026-08-04: hardcoded to dead v16 model names (v8_cls) and a fixed
 # step list, never parameterized. For a one-off multi-step inference sweep today, loop
-# inference.sh by hand with N_STEPS_2/--n_steps overrides (see its header) or add a new
-# script under dev/.
+# maps/rerun/inference.sh by hand with N_STEPS_2/--n_steps overrides (see its header) or add
+# a new script under maps/experiments/.
 #SBATCH --account=a0158
 #SBATCH --partition=normal
 #SBATCH --time=01:00:00

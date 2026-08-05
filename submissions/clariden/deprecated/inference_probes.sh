@@ -1,7 +1,7 @@
 #!/bin/bash
 # Moved to deprecated/ 2026-08-04: hardcoded to dead v16 model names (v33), never
-# parameterized. For a one-off multi-probe inference sweep today, loop inference.sh by hand
-# (see its header) or add a new script under dev/.
+# parameterized. For a one-off multi-probe inference sweep today, loop maps/rerun/inference.sh
+# by hand (see its header) or add a new script under maps/experiments/.
 #SBATCH --account=a0158
 #SBATCH --partition=normal
 #SBATCH --time=01:00:00

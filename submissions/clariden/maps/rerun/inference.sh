@@ -10,7 +10,7 @@
 #SBATCH --job-name=inference
 #SBATCH --output=/users/athomsen/dlss/repos/y3-deep-lss/submissions/clariden/slurm/slurm-%j.out
 
-# Standalone re-run of the inference tail of training.sh against an existing preds_*.h5 (no
+# Standalone re-run of the inference tail of ../training.sh against an existing preds_*.h5 (no
 # retrain) -- use to recover a run whose inference step failed to launch. Override OUTPUT/
 # MODEL_DIR to target a specific run directory. Submit with --uenv-passthrough=ignore from
 # inside a uenv session.
@@ -33,7 +33,7 @@ mkdir -p "$(dirname "$LOG")"
 
 FLOW_CONFIG="$REPOS/multiprobe-simulation-inference/configs/flow/maf.yaml"
 
-# --cpu-bind=none: otherwise the 1-GPU/72-CPU sub-allocation fails to launch (see training.sh)
+# --cpu-bind=none: otherwise the 1-GPU/72-CPU sub-allocation fails to launch (see ../training.sh)
 srun -N1 --ntasks-per-node=1 --gpus-per-task=1 --cpus-per-task=72 --mem=110G --cpu-bind=none \
     --uenv=pytorch/v2.9.1:v2 --view=default \
     --output=""$LOG"_inference.log" \
