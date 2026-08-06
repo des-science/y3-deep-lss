@@ -32,16 +32,21 @@ MSI="$REPOS/multiprobe-simulation-inference"
 
 # --- Overridable defaults (set from the environment, e.g. by training_chainer.sh) -------------
 
-# Dataset; on v16 also set PROBE=lensing and CLS_PROBES_CONFIG=.../combined.yaml (no _nla configs).
-VERSION="${VERSION:-v17}"
-SUBVERSION="${SUBVERSION:-baseline}"
+# Dataset. The probes config has to match the dataset's IA model: v18/default and v16 are
+# extended-NLA (bta in msfm's params list) and take the plain configs/probes/*.yaml, while v17 is
+# standard-NLA and takes the bta-free *_nla ones -- on v17 set PROBE=lensing_nla and
+# CLS_PROBES_CONFIG=.../combined_nla.yaml. Getting this wrong does NOT raise: an _nla config on
+# extended-NLA data silently marginalizes ds, and it is only the reverse (bta on v17) that fails at
+# the param-column gather. See the header of configs/probes/lensing_nla.yaml.
+VERSION="${VERSION:-v18}"
+SUBVERSION="${SUBVERSION:-default}"
 
 SCALES="${SCALES:-8wl,32gc}"   # configs/scales/<SCALES>.yaml, e.g. unsmoothed, lmax_1024
 LOSS="${LOSS:-vmim}"           # configs/loss/<LOSS>.yaml: vmim = flow head, vmim_gmm = mixture head
-PROBE="${PROBE:-lensing_nla}"  # configs/probes/<PROBE>.yaml; also the run dir and the wandb tag
+PROBE="${PROBE:-lensing}"      # configs/probes/<PROBE>.yaml; also the run dir and the wandb tag
 
 # Cls precache only: it spans ALL probe pairs, so it uses the combined config rather than PROBE's.
-CLS_PROBES_CONFIG="${CLS_PROBES_CONFIG:-$DEEP_LSS/configs/probes/combined_nla.yaml}"
+CLS_PROBES_CONFIG="${CLS_PROBES_CONFIG:-$DEEP_LSS/configs/probes/combined.yaml}"
 
 # The per-probe net configs differ in n_steps, smooth_nside and local_batch_size, so set NET_CONFIG
 # together with PROBE. ARCH only tags the run in wandb -- keep it in step with NET_CONFIG.

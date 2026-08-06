@@ -31,12 +31,13 @@ MSI="$REPOS/multiprobe-simulation-inference"
 
 # --- Overridable defaults ----------------------------------------------------------------------
 
-VERSION="${VERSION:-v17}"
-SUBVERSION="${SUBVERSION:-baseline}"
+VERSION="${VERSION:-v18}"
+SUBVERSION="${SUBVERSION:-default}"
 
 # Space-separated; the 4 defaults fill the node's 4 GPUs. Each entry is "probe" or
 # "probe:probes_config" -- the probe keys the run dir, the config selects configs/probes/*.yaml
-# (defaulting to the probe name). v17 is standard-NLA data, so it wants the _nla configs:
+# (defaulting to the probe name). The defaults are the plain (bta-carrying) configs, which is what
+# extended-NLA data wants: v18/default and v16. v17 is standard-NLA, so there it is
 #   PROBES="lensing:lensing_nla 2x2pt:2x2pt_nla combined:combined_nla clustering"
 read -r -a PROBES <<< "${PROBES:-lensing clustering 2x2pt combined}"
 
@@ -49,6 +50,14 @@ LOSS="${LOSS:-vmim}"              # configs/loss/: also vmim_vicreg, vmim_vicreg
 SCALES="${SCALES:-8wl,32gc}"      # configs/scales/: also 8wl,40gc, unsmoothed, lmax_1024
 DATA="${DATA:-default}"           # configs/data/<DATA>.yaml
 MODEL_NAME="${MODEL_NAME:-v1}"    # run dir under cls/<probe>/
+
+# 1 builds the rebinned-Cls cache for (cls_n_bins, SCALES) and exits before any training. Use this
+# on a dataset whose cache does not exist yet: the build reads the full raw grid Cls into memory
+# (~410 GiB for 2500x400x1536x36 float32, twice over -- see build_rebinned_cls_cache) and takes
+# tens of minutes, which does not fit inside this script's 1 h budget alongside four trainings.
+# Every later job then no-ops on the cache in ~40 s. Give it more wall clock than the default:
+#   VERSION=v18 SUBVERSION=default PRECACHE_ONLY=1 sbatch --time=02:00:00 cls/cls_training.sh
+PRECACHE_ONLY="${PRECACHE_ONLY:-0}"
 
 # --- Derived paths, configs and flags ----------------------------------------------------------
 
@@ -85,7 +94,13 @@ with open('$NET_CONFIG') as f:
 if [ "$SCALE_CUT" = "hard_rebinned" ]; then
     # combined.yaml, not combined_nla.yaml: the two differ only in their `params` list, which does
     # not reach the cache -- the probe/channel structure that does is identical.
-    LOG_PRECACHE="$RUNS/lensing/$MODEL_NAME/logs/${SLURM_JOB_ID}_precache"
+    # A PRECACHE_ONLY job has no run to speak of, so its log goes next to the cache instead of
+    # creating an empty run dir under cls/lensing/.
+    if [ "$PRECACHE_ONLY" = "1" ]; then
+        LOG_PRECACHE="$INPUT/precache/logs/${SLURM_JOB_ID}_precache"
+    else
+        LOG_PRECACHE="$RUNS/lensing/$MODEL_NAME/logs/${SLURM_JOB_ID}_precache"
+    fi
     mkdir -p "$(dirname "$LOG_PRECACHE")"
     srun -N1 --ntasks-per-node=1 --exclusive --cpus-per-task=288 --mem=450G \
         --environment=tensorflow \
@@ -101,6 +116,16 @@ if [ "$SCALE_CUT" = "hard_rebinned" ]; then
             --out_dir="$INPUT" \
             --model_name="precache" \
             --precache_only
+    check_stage $? "Precache" "${LOG_PRECACHE}.log"
+elif [ "$PRECACHE_ONLY" = "1" ]; then
+    echo "PRECACHE_ONLY=1 but $NET_CONFIG has scale_cut=$SCALE_CUT, not hard_rebinned — no cache to"\
+         "build. Nothing was done." >&2
+    exit 1
+fi
+
+if [ "$PRECACHE_ONLY" = "1" ]; then
+    echo "PRECACHE_ONLY=1: cache for (nb$(grep -E '^\s*cls_n_bins:' "$NET_CONFIG" | grep -oE '[0-9]+'), $SCALES) is in place — skipping training."
+    exit 0
 fi
 
 # --- Stage 1: Per-probe train+eval, then inference (one probe per GPU, in parallel) ------------
