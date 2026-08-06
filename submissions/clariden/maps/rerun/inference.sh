@@ -13,6 +13,8 @@
 # Standalone re-run of the inference tail of ../training.sh against an existing preds_*.h5 (no
 # retrain) -- use to recover a run whose inference step failed to launch. Override OUTPUT/MODEL_DIR
 # to target a specific run directory. Needs eval too? Use eval_inference.sh instead.
+# EXTEND_PARAMS / LOAD_FLOW (below) also make this the entry point for extended-conditioning-vector
+# inference and for re-sampling an already-trained flow.
 # Submit with --uenv-passthrough=ignore from inside a uenv session.
 
 # --- Runtime environment ---------------------------------------------------------------------
@@ -34,6 +36,19 @@ SUBVERSION="${SUBVERSION:-baseline}"
 PROBE="${PROBE:-lensing}"         # run dir under maps/<probe>/; ignored if OUTPUT is set directly
 MODEL_DIR="${MODEL_DIR:-t1_cls}"  # the run to re-infer
 RUN_NUM="${RUN_NUM:-1}"           # names the log only; there is no chain here
+
+# Extended conditioning vector: retrain the flow on the EXISTING network summaries with the
+# implicitly marginalized grid parameters appended (looked up per grid row via i_sobol -- no summary
+# recomputation), and additionally sample the reference-prior DES chains. Everything saves under
+# ext_<flow>_<steps>/, so the baseline flow is untouched. Set to the flag alone for the default set
+# (ns Ob H0 bary_Mc bary_nu), or pass an explicit list:
+#   EXTEND_PARAMS="--extend_params" sbatch inference.sh
+#   EXTEND_PARAMS="--extend_params ns Ob H0" sbatch inference.sh
+EXTEND_PARAMS="${EXTEND_PARAMS:-}"
+
+# Rerun only the sampling stages against an already-trained flow (e.g. after a plotting fix):
+#   LOAD_FLOW=--load_flow sbatch inference.sh
+LOAD_FLOW="${LOAD_FLOW:-}"
 
 # --- Fixed settings ----------------------------------------------------------------------------
 
@@ -58,6 +73,8 @@ srun -N1 --ntasks-per-node=1 --gpus-per-task=1 --cpus-per-task=72 --mem=110G --c
         --model_name=\"$MODEL_DIR\" \
         --flow_config=\"$FLOW_CONFIG\" \
         --n_flows=4 \
+        $EXTEND_PARAMS \
+        $LOAD_FLOW \
         --sample_posterior \
         --include_grid \
         --include_des \

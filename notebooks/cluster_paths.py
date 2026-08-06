@@ -1,5 +1,6 @@
 import os
 
+
 def get_cluster_paths():
     env = os.environ
 
