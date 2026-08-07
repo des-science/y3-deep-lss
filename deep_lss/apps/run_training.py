@@ -58,7 +58,15 @@ from msfm.fiducial_pipeline import FiducialPipeline
 from msfm.grid_pipeline import GridPipeline
 from msfm.utils import logger, input_output, files, parameters
 
-from deep_lss.utils import distribute, configuration, evaluation, optimization, delta_loss, training_helpers
+from deep_lss.utils import (
+    distribute,
+    configuration,
+    evaluation,
+    optimization,
+    delta_loss,
+    throughput,
+    training_helpers,
+)
 from deep_lss.models.delta_model import DeltaLossModel
 from deep_lss.models.grid_model import GridLossModel
 from deep_lss.utils.distribute import HorovodStrategy
@@ -189,6 +197,29 @@ def setup():
     )
     parser.add_argument("--evaluate_training_set", action="store_true", help="evaluate the training set")
     parser.add_argument("--slurm_output", type=str, default=None, help="path to the slurm output file")
+    parser.add_argument(
+        "--n_steps",
+        type=int,
+        default=None,
+        help="override training.n_steps from the config. Intended for throughput probes, which run the real "
+        "geometry for a few thousand steps; without it a probe has to rewrite the yaml. On a RESTORED run this "
+        "overrides the value saved in the run directory, which is the only way to resize a chain between jobs.",
+    )
+    parser.add_argument(
+        "--wall_budget_seconds",
+        type=float,
+        default=None,
+        help="override training.wall_budget_seconds: train for this many seconds instead of for a fixed number of "
+        "steps, annealing the cosine to zero exactly when the budget runs out. See "
+        "deep_lss.utils.throughput.WallClockBudget for why a fixed step count is hard to size correctly.",
+    )
+    parser.add_argument(
+        "--job_budget_seconds",
+        type=float,
+        default=None,
+        help="override training.job_budget_seconds: this job's share of the wall-clock budget. Job 1 of a chain "
+        "stops here and checkpoints cleanly instead of being killed at the wall. Defaults to the whole budget.",
+    )
 
     parser.add_argument("--debug", action="store_true", help="activate debug mode")
     parser.add_argument("--profile", action="store_true", help="run the profiler")
@@ -369,6 +400,19 @@ def training(args=None):
 
     else:
         raise ValueError("Can't restore the model from an unspecified dir_model")
+
+    # CLI overrides of the step budget, applied to BOTH paths above. On a restored run this is the
+    # only way to change the budget: the run reads configs.yaml from its own directory, so editing
+    # the repo yaml between chained jobs silently does nothing.
+    if args.n_steps is not None:
+        LOGGER.warning(f"Overriding training.n_steps {net_conf['training']['n_steps']} -> {args.n_steps} from the CLI")
+        net_conf["training"]["n_steps"] = args.n_steps
+    if args.wall_budget_seconds is not None:
+        LOGGER.warning(f"Overriding training.wall_budget_seconds -> {args.wall_budget_seconds} s from the CLI")
+        net_conf["training"]["wall_budget_seconds"] = args.wall_budget_seconds
+    if args.job_budget_seconds is not None:
+        LOGGER.warning(f"Overriding training.job_budget_seconds -> {args.job_budget_seconds} s from the CLI")
+        net_conf["training"]["job_budget_seconds"] = args.job_budget_seconds
 
     # numerical precision: net_conf["network"]["precision"] is the default (float32 = full
     # precision); the --mixed_precision CLI flag overrides it. Set the global Keras policy here,
@@ -584,6 +628,26 @@ def training(args=None):
     nan_check_every = net_conf["training"].get("nan_check_every", 100)
     nan_abort_after = net_conf["training"].get("nan_abort_after", 1)
 
+    # Optional wall-clock training budget. When set, `n_steps` stops being the length of the run and
+    # becomes only a safety cap: the loop trains until `wall_budget_seconds` of training time have
+    # been spent (summed over a chain) and the cosine anneals to zero at exactly that point, so the
+    # eval/inference tail is guaranteed whatever rate the run happens to achieve. Absent, everything
+    # below behaves exactly as before. See deep_lss.utils.throughput.WallClockBudget.
+    wall_budget_seconds = net_conf["training"].get("wall_budget_seconds", None)
+    # per-job share of the budget; job 1 of a chain stops here and checkpoints instead of being
+    # killed at the wall, so the handover costs nothing
+    job_budget_seconds = net_conf["training"].get("job_budget_seconds", None)
+
+    if n_steps == "auto":
+        # `auto` means "however many steps the budget buys" — there is then no meaningful cap, so use
+        # one large enough never to bind while still bounding the loop.
+        if wall_budget_seconds is None:
+            raise ValueError("training.n_steps: auto requires training.wall_budget_seconds to be set")
+        n_steps = 100_000_000
+        LOGGER.info("n_steps: auto — the run is bounded by its wall-clock budget alone")
+    elif wall_budget_seconds is not None and n_steps <= 0:
+        raise ValueError(f"training.n_steps must be a positive cap or 'auto', got {n_steps}")
+
     # constants: miscellaneous
     if args.loss_function == "delta":
         assert "fiducial" in args.train_tfr_pattern, "The delta loss can only be used for the fiducial dataset"
@@ -660,9 +724,26 @@ def training(args=None):
     dist_dset = strategy.distribute_datasets_from_function(train_dataset_fn)
     dist_iter = iter(dist_dset)
 
+    # A chain shares ONE budget: pick up whatever earlier jobs already spent, so the cosine continues
+    # along a single global curve instead of restarting at full learning rate in job 2.
+    budget = None
+    if wall_budget_seconds is not None:
+        prior = throughput.read_budget_state(dir_model) if args.restore_checkpoint else None
+        budget = throughput.WallClockBudget(
+            total_seconds=float(wall_budget_seconds),
+            job_seconds=job_budget_seconds,
+            consumed_seconds=(prior or {}).get("consumed_seconds", 0.0),
+        )
+        budget.warmup_end_seconds = (prior or {}).get("warmup_end_seconds", None)
+        LOGGER.info(
+            f"Wall-clock training budget: {budget.total_seconds:.0f} s total, "
+            f"{budget.consumed_seconds:.0f} s already spent by earlier jobs, "
+            f"{budget.job_seconds:.0f} s allowed in this job (n_steps={n_steps} is now only a cap)"
+        )
+
     # network, create all of the variables within the strategy's scope, such that they are mirrored
     with strategy.scope():
-        optimizer = optimization.get_optimizer(net_conf, args.loss_function, args.restore_checkpoint)
+        optimizer = optimization.get_optimizer(net_conf, args.loss_function, args.restore_checkpoint, budget=budget)
 
         # Validate the network name up front with a friendly error (mirrors the Cls app); the
         # bare NETWORKS[...] lookups below would otherwise raise an opaque KeyError.
@@ -1349,6 +1430,14 @@ def training(args=None):
 
     LOGGER.info("Starting training")
     LOGGER.timer.start("training")
+
+    # measure the sustained rate of this job, so the next one can be sized from a real number rather
+    # than from tqdm's cumulative figure (which includes compilation and understates it badly)
+    tracker = throughput.ThroughputTracker(start_step=start_step, dir_model=dir_model)
+    wall_clock_schedule = getattr(optimizer, "wall_clock_schedule", None)
+    if budget is not None:
+        budget.start()
+
     t_prev = time()
     t_accum = 0.0
     t_data_accum = 0.0
@@ -1362,6 +1451,11 @@ def training(args=None):
         # context for profiling like https://www.tensorflow.org/guide/profiler#profiling_custom_training_loops
         # optional context like https://stackoverflow.com/a/34798330
         with tf.profiler.experimental.Trace("step", step_num=step, _r=1) if args.profile else nullcontext():
+            # wall-clock cosine: the learning rate is a variable this loop drives, because the point
+            # at which the allocation runs out is not a step index known in advance
+            if wall_clock_schedule is not None:
+                wall_clock_schedule.update(step)
+
             # train step
             t_data_start = time()
             if args.loss_function == "delta":
@@ -1420,6 +1514,9 @@ def training(args=None):
             # checkpoint
             if (checkpoint_every is not None) and (step % checkpoint_every == 0):
                 model.save_model()
+                # persist the consumed budget alongside it, so a chained job resumes the same cosine
+                if budget is not None:
+                    throughput.write_budget_state(dir_model, budget)
 
             # validate
             if (vali_every is not None) and (step % vali_every == 0):
@@ -1537,8 +1634,8 @@ def training(args=None):
                     LOGGER.info(f"{step_delta} steps took {LOGGER.timer.elapsed('pasc_throughput')}")
                     delta_t_pasc = time() - t_pasc
                     global_batch_size = local_batch_size * strategy.num_replicas_in_sync
-                    throughput = step_delta * global_batch_size / delta_t_pasc
-                    LOGGER.info(f"throughput: {throughput:.2f} examples/s")
+                    examples_per_s = step_delta * global_batch_size / delta_t_pasc
+                    LOGGER.info(f"throughput: {examples_per_s:.2f} examples/s")
 
             # additional logs
             t_now = time()
@@ -1546,19 +1643,53 @@ def training(args=None):
             t_data_accum += t_data_end - t_data_start
             t_compute_accum += t_compute_end - t_data_end
             t_prev = t_now
+            tracker.update(step)
             if step % args.summary_every == 0:
                 model.write_summary("step_time", t_accum / args.summary_every)
                 model.write_summary("data_time", t_data_accum / args.summary_every)
                 model.write_summary("compute_time", t_compute_accum / args.summary_every)
                 model.write_summary("global_step", model.get_step())
+                if wall_clock_schedule is not None:
+                    model.write_summary("schedule/budget_fraction", budget.fraction)
                 t_accum = 0.0
                 t_data_accum = 0.0
                 t_compute_accum = 0.0
 
+        # wall-clock budget: stop on time rather than on a step count. Checked outside the profiler
+        # context so the final step is complete, and only every `summary_every` steps because
+        # `budget.elapsed` is a host-side clock read.
+        if budget is not None and step % args.summary_every == 0:
+            if budget.exhausted:
+                LOGGER.info(
+                    f"Wall-clock budget of {budget.total_seconds:.0f} s is spent at step {step}; "
+                    "the cosine has annealed to its floor and training is complete"
+                )
+                break
+            if budget.job_exhausted:
+                LOGGER.info(
+                    f"This job's share of {budget.job_seconds:.0f} s is spent at step {step} with "
+                    f"{budget.total_seconds - budget.elapsed:.0f} s of the run's budget left; "
+                    "checkpointing for the next job in the chain"
+                )
+                break
+
+    if budget is not None:
+        # A budget-driven run that stops because it hit `n_steps` never finished annealing, which is
+        # the failure this whole mechanism exists to prevent — say so loudly rather than silently
+        # producing a half-decayed model.
+        if step >= n_steps and not budget.exhausted and not budget.job_exhausted:
+            LOGGER.warning(
+                f"Training stopped at the n_steps cap of {n_steps} with {budget.total_seconds - budget.elapsed:.0f} s "
+                f"of budget unspent, so the cosine only reached {budget.fraction:.0%} of its decay. Raise n_steps: it "
+                "is meant to be a loose safety cap, not the length of the run."
+            )
+        # the final-checkpoint logic below saves the model; only the budget needs persisting here
+        throughput.write_budget_state(dir_model, budget)
+
     LOGGER.info(
-        f"Finished training after {n_steps - start_step} steps (total {n_steps}) "
-        f"and {LOGGER.timer.elapsed('training')}"
+        f"Finished training after {step - start_step} steps (total {step}) and {LOGGER.timer.elapsed('training')}"
     )
+    tracker.write()
 
     # finalize EMA weight averaging, if enabled
     inner_optimizer = getattr(optimizer, "inner_optimizer", optimizer)

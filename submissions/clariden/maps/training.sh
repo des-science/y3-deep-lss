@@ -61,6 +61,14 @@ RUN_NUM="${RUN_NUM:-1}"      # position in a training_chainer.sh chain; >1 resto
 PROFILE="${PROFILE:-0}"      # 1 traces steps 800->805 (run_training.py --profile); diagnostics only
 SKIP_EVAL="${SKIP_EVAL:-0}"  # 1 stops after training -- for benchmarks whose model is throwaway
 
+# Extra flags spliced into run_training.py, unquoted on purpose so several can be passed at once.
+# The ones worth knowing: --n_steps overrides the config's step budget (also on a RESTORED run, where
+# editing the repo yaml does nothing because the run reads its own configs.yaml); and
+# --wall_budget_seconds trains for a fixed number of SECONDS instead, annealing the cosine to zero
+# exactly when the allocation runs out. Example:
+#   TRAIN_EXTRA="--wall_budget_seconds=41000"
+TRAIN_EXTRA="${TRAIN_EXTRA:-}"
+
 # --- Fixed settings --------------------------------------------------------------------------
 
 STRATEGY="mirrored"  # TF distribution strategy; also tags the run and names the logs
@@ -69,7 +77,9 @@ DATA="default"       # configs/data/<DATA>.yaml
 # --- Derived paths, configs and flags --------------------------------------------------------
 
 INPUT="$MYSCRATCH/deep_lss/data/$VERSION/$SUBVERSION"
-OUTPUT="$MYSCRATCH/deep_lss/runs/$VERSION/$SUBVERSION/maps/$PROBE"
+# Overridable so throwaway runs (SKIP_EVAL=1 sizing probes, smoke tests) can write under
+# deep_lss/claude/ instead of polluting runs/. Unset => the production path, unchanged.
+OUTPUT="${OUTPUT:-$MYSCRATCH/deep_lss/runs/$VERSION/$SUBVERSION/maps/$PROBE}"
 LOG="$OUTPUT/$MODEL_DIR/logs/${SLURM_JOB_ID}_${RUN_NUM}_${STRATEGY}"
 mkdir -p "$(dirname "$LOG")"
 
@@ -135,7 +145,7 @@ srun --environment=tensorflow --gpu-bind=none --output="${LOG}_training.log" \
         --dist_strategy="$STRATEGY" \
         --wandb \
         --wandb_tags "$VERSION" "$SUBVERSION" "$PROBE" "$LOSS" "$STRATEGY" "$ARCH" "$NET_NAME" "$SCALES" \
-        $RESTORE_FLAG $PROFILE_FLAG
+        $RESTORE_FLAG $PROFILE_FLAG $TRAIN_EXTRA
 check_stage $? "Training" "${LOG}_training.log"
 
 if [ "$SKIP_EVAL" = "1" ]; then
