@@ -1,0 +1,165 @@
+# ============================================================================
+# bench_v7 — CLUSTERING, transformer reference arm (`transformer`).
+#
+# !! THE ONLY TRANSFORMER CONFIG IN THIS ROUND THAT IS NOT THE VALIDATED v17 RECIPE. !!
+# base_embed_dim 32 -> 64. Everything else is the unified recipe unchanged.
+#
+# WHY. Trunk width = base_embed_dim * 2^num_nested_levels (growth "double"), and
+# num_nested_levels = log2(nside / token_nside). Clustering runs at nside 256 (smooth_nside), not 512,
+# so it gets FOUR levels where lensing and combined get five:
+#
+#     lensing     nside 512, levels 5 -> channel_dims [32, 64, 128, 256, 512, 1024]   trunk 1024
+#     combined    nside 512, levels 5 -> channel_dims [32, 64, 128, 256, 512, 1024]   trunk 1024
+#     clustering  nside 256, levels 4 -> channel_dims [32, 64, 128, 256, 512]         trunk  512   <-- HALF
+#
+# All three read off the runs' own training logs, not derived. base_embed_dim 64 gives
+# [64, 128, 256, 512, 1024] -> trunk 1024, matching. This is the same defect and the same 2x factor as
+# the GCNN had on this probe, and the same fix (widen the base so the shorter hierarchy still ends at
+# the common trunk).
+#
+# !! BUT THE ARGUMENT IS WEAKER HERE THAN ON THE GCNN -- READ BEFORE KEEPING THIS. !!
+# On the GCNN the mismatch was MECHANICAL: with map_pool: mean the trunk width IS the pooled map
+# vector, so a 256-wide trunk would silently unbalance the concat against a 512-d Cls branch. The
+# transformer has `map_feature_dim: 512`, which projects whatever the trunk is down to 512 before the
+# concat -- so the fusion is ALREADY balanced at 512 either way, and nothing is silently broken today.
+# What this change buys is comparable BODY CAPACITY across probes, which is what was asked for. It is
+# a real argument, but it is a comparability argument, not a bug fix.
+#
+# COSTS, all of which land on this one config:
+#   * It is no longer the architecture that `t2_gmm` / the v17 clustering reference validated, so this
+#     arm is not directly comparable to those runs.
+#   * Doubling base_embed_dim doubles the width at EVERY level, so body FLOPs go ~4x (dims enter the
+#     attention/MLP projections ~C^2). The measured 7.34 it/s will drop substantially -- how far
+#     depends on what fraction of the step is body versus smoothing and input, which is not known.
+#   * The 250k step optimum measured for this probe was measured at base_embed_dim 32 and does NOT
+#     carry over.
+#   * Watch the ~85 GB NCCL band. Batch 20 was safe at trunk 512; it has not been checked at 1024.
+#
+# BATCH 16 (not the recipe's 20), to match the GCNN arms.
+#
+# SIZING: 7.00 it/s, MEASURED on 4 GPUs for this exact geometry on v18/default (job 3021038,
+# 2026-08-06, batch 16, base_embed_dim 64, via maps/benchmarks/rate_probe.sh). ONE 12 h job --
+# ~10.5 h training + the eval+inference tail inside the same job = 37.8 ks.
+#   7.00 x 37.8 ks = 264.6 k, floored to the nearest 10 k -> 260 k.
+#
+# !! THE PRE-MEASUREMENT GUESS WAS WRONG BY ~3x, AND THE REASON IS WORTH KEEPING. !!
+# It assumed base_embed_dim 32 -> 64 would slow the STEP by ~4x, giving ~2.5 it/s and 90 k steps. The
+# 4x is real but it applies ONLY to the body, and on this probe the body is a minority of the step.
+# From the lensing xplane profile the split is body ~73%, eager fp32 sparse smoothing ~13%, NCCL ~7%,
+# plus ~27% GPU-idle gaps -- and clustering's body is ~5x cheaper than lensing's (nside 256 not 512, so
+# 4x fewer tokens AND 4 nested levels not 5) while its SMOOTHING IS NOT CHEAPER AT ALL. Clustering's
+# kernels are 57-130' against lensing's 12.6-29.5', i.e. reps = ceil((fwhm/40.4)^2) = [11,5,3,2] = 21
+# kernel applications at nside 256 versus ~4 at nside 512. So quadrupling the body moved only about a
+# fifth of the step. Launching at 90 k would have wasted ~65% of the slot's training.
+# GENERALLY: never scale a whole-step rate by a factor that applies to one component.
+#
+# The ~85 GB NCCL band worry at trunk 1024 is also retired -- the probe ran to 3000 steps at batch 16
+# without approaching it.
+#
+# READ THE RATE FROM A WINDOW, NOT FROM TQDM'S CUMULATIVE FIGURE: cumulative is 4.87 here against a
+# sustained 7.00, a 44% startup drag (jit_compile_body: true makes XLA compilation a large one-time
+# cost). Sizing on 4.87 would have set 180 k and still thrown away ~30% of the slot.
+#
+# !! A 1 x 12 h SINGLE JOB HAS NO SECOND JOB TO CORRECT THE SIZING IN. !!
+# On a chain a bad rate is fixable by editing <dir_model>/configs.yaml between jobs; here it is not.
+# That is why this was measured before launch. The 10 k floor is the remaining safety margin.
+#
+# Launch: SINGLE job (MAX_RUNS=1), MODEL_DIR=bench_v7_transformer -- STILL set it explicitly. Every arm
+# in this round needs that: the fallback is the config basename, so it would be `transformer` here and
+# `full`/`simple` on the GCNN side, none of which are the round-prefixed run dirs. This file was renamed
+# from default.yaml on 2026-08-11 so the fallback is at least self-evidently a config name rather than
+# a plausible promoted-probe default -- see ./README.md for what that mistake cost.
+# ============================================================================
+name: nested_transformer
+
+training:
+  n_steps: 260000  # 7.00 it/s MEASURED (v18, job 3021038) x 37.8 ks = 264.6 k, floored to 10 k
+  output_every: Null
+  checkpoint_every: 10000  # single job, no chain handoff
+  vali_every: 1000
+  eval_every: Null
+
+optimization:
+  optimizer: adam
+  gradient_clipping:
+    clip_by_value: null
+    clip_by_norm: null
+    clip_by_global_norm: 1.0
+  mutual_info_loss:
+    learning_rate: 1.0e-4
+    optimizer_kwargs:
+      beta_1: 0.9
+      beta_2: 0.999
+    scheduler: cosine
+    warmup_steps: 5000
+    warmup_init_learning_rate: 1.0e-5
+    decay_alpha: 0.0
+    ema_momentum: null
+
+network:
+  name: nested_transformer
+  spmm_backend: csr
+  # clustering-only, so smooth_nside 256 is the finest smoothing resolution -- no upsample back, and
+  # the hierarchy is one level shorter than lensing's. That is what base_embed_dim 64 compensates for.
+  smooth_nside:
+    clustering: 256
+  token_nside: 16
+  z_bank_size: Null
+  max_checkpoints: 50
+  jit_compile_body: true
+  precision: bfloat16
+  input_norm: true
+  masked_attention: false  # available on this single-resolution path (unlike combined)
+  map_feature_dim: 512  # projects the 1024-d pooled map to 512, balancing the 512-d Cls embedding
+  head:
+    dropout_rate: 0.1
+  cls:
+    n_bins: 16
+    transform: asinh_per_feature
+    asinh_default_scale: null
+    embedding_layers: [512, 512, 512, 512]
+    embedding_dropout_rate: 0.1
+  kwargs:  # -> HealpixNestedHierarchicalLocalWindowTransformer
+    # 64 (NOT the unified recipe's 32): only 4 nested levels here, so 64 * 2^4 = 1024 is what matches
+    # lensing's and combined's 32 * 2^5. THE ONLY KNOB vs the v17 recipe. See header.
+    base_embed_dim: 64
+    growth: double
+    num_heads: 4
+    window_levels: 3
+    local_blocks_per_level: 1
+    global_blocks: 1
+    mlp_ratio: 4
+    layerscale_init: null
+    fp32_softmax: true
+    block_dropout_rate: null
+    pos_encoding: null
+    merge_op: concat
+
+dset:
+  training:
+    common:
+      is_eval: False
+      n_readers: 16
+      n_prefetch: 4
+      n_workers: 128
+    grid:
+      local_batch_size: 16  # 16 (not the recipe's 20) to match the GCNN arms; NOT re-checked against the ~85 GB NCCL band at trunk 1024
+      file_name_shuffle_buffer: 64
+      examples_shuffle_buffer: 1024
+  validation:
+    n_batches: 100
+    common:
+      is_eval: True
+      n_readers: 8
+      n_prefetch: 2
+      n_workers: 16
+    grid:
+      local_batch_size: 16
+  eval:
+    common:
+      is_eval: True
+      n_readers: 16
+      n_prefetch: 2
+      n_workers: 128
+    grid:
+      local_batch_size: 16

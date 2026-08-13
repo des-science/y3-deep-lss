@@ -1,0 +1,134 @@
+# ============================================================================
+# bench_v7 — COMBINED, transformer reference arm (`transformer`).
+#
+# The transformer comparison point for the bench_v7 GCNN round. Architecturally this is the v17
+# unified recipe UNCHANGED -- a parsed-YAML diff against runs/v17/baseline/maps/combined/t2_cls's own
+# configs.yaml shows only `spmm_backend: csr` (numerically equivalent to coo up to fp32 tolerance, a
+# pure speedup, no lineage change), `checkpoint_every` and `n_steps`. Nothing about the architecture
+# is stale, so nothing here changes it.
+#
+# TRUNK: channel_dims = [32, 64, 128, 256, 512, 1024] -> 1024. Confirmed from this run's own training
+# log, not just arithmetic. num_nested_levels = log2(nside / token_nside) = log2(512/16) = 5, and
+# growth "double" gives base_embed_dim * 2^levels = 32 * 32 = 1024. Lensing matches at 1024;
+# CLUSTERING DOES NOT at the default settings -- see clustering/bench_v7/transformer.yaml.
+#
+# The clustering stream enters as an INJECTION at the body level already running at nside 256 (levels=4
+# for that stream), one merge below the nside-512 lensing input; it is not a separate trunk.
+#
+# BATCH 16 (not the recipe's 20), to match the GCNN arms.
+#
+# SIZING: 4.42 it/s, MEASURED on 4 GPUs for this exact geometry on v18/default (job 3021039,
+# 2026-08-06, batch 16, via maps/benchmarks/rate_probe.sh). 2 x 12 h afterany chain -- ~11 h of
+# training in each job, 79.2 ks total. Combined is the only probe that gets a chain; the single probes
+# are one 12 h job each.
+#   4.42 x 79.2 ks = 350.1 k, floored to the nearest 10 k -> 340 k.
+#
+# READ THE RATE FROM A WINDOW, NOT FROM TQDM'S CUMULATIVE FIGURE: cumulative is 3.28 here against a
+# sustained 4.42, a 35% startup drag (jit_compile_body: true makes XLA compilation a large one-time
+# cost, which dominates a 3000-step probe and is nothing over 340 k).
+#
+# Against the v17 reference budget of 250 k at batch 20 (5.0 M samples), 340 k x 16 = 5.44 M samples --
+# a wall-fill at a slightly larger effective budget, not a change of recipe.
+#
+# Unlike the single probes, this one IS rescuable: verify the sustained rate on job 1 and, if it is
+# off, correct by editing <dir_model>/configs.yaml before job 2 starts. Editing THIS file does nothing
+# for a restored job (run_training.py:359) and the failure is silent -- the only symptom is job 2's
+# progress-bar total, which must equal n_steps - start_step.
+#
+# Launch: 2-job afterany chain, MODEL_DIR=bench_v7_transformer -- STILL set it explicitly. Every arm in
+# this round needs that: the fallback is the config basename, so it would be `transformer` here and
+# `full`/`simple` on the GCNN side, none of which are the round-prefixed run dirs. This file was renamed
+# from default.yaml on 2026-08-11 so the fallback is at least self-evidently a config name rather than
+# a plausible promoted-probe default -- THIS arm is the one that got it wrong; see ./README.md.
+# ============================================================================
+name: nested_transformer
+
+training:
+  n_steps: 340000  # 4.42 it/s MEASURED (v18, job 3021039) x 79.2 ks = 350.1 k, floored to 10 k; TOTAL across the chain
+  output_every: Null
+  checkpoint_every: 5000  # 10000 in the default; halved for the chain handoff, as in the GCNN arms
+  vali_every: 1000
+  eval_every: Null
+
+optimization:
+  optimizer: adam
+  gradient_clipping:
+    clip_by_value: null
+    clip_by_norm: null
+    clip_by_global_norm: 1.0
+  mutual_info_loss:
+    learning_rate: 1.0e-4
+    optimizer_kwargs:
+      beta_1: 0.9
+      beta_2: 0.999
+    scheduler: cosine
+    warmup_steps: 5000
+    warmup_init_learning_rate: 1.0e-5
+    decay_alpha: 0.0
+    ema_momentum: null
+
+network:
+  name: nested_transformer
+  spmm_backend: csr
+  # clustering (fwhm >= 57') is smoothed at nside 256 and INJECTED into the hierarchy at its native
+  # scale; lensing stays at the native n_side. masked_attention is unavailable on this path (probe
+  # injection and the token_valid mask are mutually exclusive) -- build_map_encoder raises if set.
+  smooth_nside:
+    clustering: 256
+  token_nside: 16
+  z_bank_size: Null
+  max_checkpoints: 50
+  jit_compile_body: true
+  precision: bfloat16
+  input_norm: true
+  map_feature_dim: 512  # projects the 1024-d pooled map to 512, balancing the 512-d Cls embedding
+  head:
+    dropout_rate: 0.1
+  cls:
+    n_bins: 16
+    transform: asinh_per_feature
+    asinh_default_scale: null
+    embedding_layers: [512, 512, 512, 512]
+    embedding_dropout_rate: 0.1
+  kwargs:  # -> HealpixNestedHierarchicalLocalWindowTransformer
+    base_embed_dim: 32  # * 2^5 levels -> trunk 1024
+    growth: double
+    num_heads: 4
+    window_levels: 3
+    local_blocks_per_level: 1
+    global_blocks: 1
+    mlp_ratio: 4
+    layerscale_init: null
+    fp32_softmax: true
+    block_dropout_rate: null
+    pos_encoding: null
+    merge_op: concat
+
+dset:
+  training:
+    common:
+      is_eval: False
+      n_readers: 16
+      n_prefetch: 4
+      n_workers: 128
+    grid:
+      local_batch_size: 16  # 16 (not the recipe's 20) to match the GCNN arms; well inside the ~85 GB NCCL band
+      file_name_shuffle_buffer: 64
+      examples_shuffle_buffer: 1024
+  validation:
+    n_batches: 100
+    common:
+      is_eval: True
+      n_readers: 8
+      n_prefetch: 2
+      n_workers: 16
+    grid:
+      local_batch_size: 16
+  eval:
+    common:
+      is_eval: True
+      n_readers: 16
+      n_prefetch: 2
+      n_workers: 128
+    grid:
+      local_batch_size: 16

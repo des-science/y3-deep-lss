@@ -1,0 +1,151 @@
+# ============================================================================
+# bench_v7 — CLUSTERING, "full stack": ConvNeXt body + DropPath 0.1 + interleaved global attention.
+#
+# Same architecture as combined/bench_v7/full.yaml, minus the lensing probe. See that file for the
+# round's rationale and for why the full-vs-simple contrast is deliberately THREE knobs, not one, and
+# see lensing/bench_v7/full.yaml for why attention is the weakest-justified knob on a single probe.
+#
+# !! THE ONE GENUINELY NEW SETTING IN THIS ROUND: base_channels 128, NOT 64. !!
+# Trunk width = base_channels * 2^pool_layers. Clustering enters at nside 256 and therefore uses
+# pool_layers 2 (not 3), so base 64 would give a 256-wide trunk against lensing's and combined's 512.
+# The old clustering/maps+cls.yaml deliberately used base 64 to match a base-32 / 512-input lensing
+# config (64*2^2 == 32*2^3 == 256); that pairing is obsolete now that lensing moves to a 512 trunk.
+# base 128 * 2^2 = 512 restores the match.
+#
+# This matters MECHANICALLY, not just for tidiness: with map_pool: mean the pooled map vector IS the
+# trunk width. At base 64 clustering would emit a 256-d map vector into a concat whose Cls branch
+# contributes 512-d -- silently unbalancing the fusion that `embedding_layers: [..., 512]` exists to
+# balance, and breaking comparability with the other two probes.
+#
+# base 128 had NEVER been run before this round. MEASURED 2026-08-06: it costs nothing -- 3.59 it/s,
+# the FASTEST arm in the sizing sweep and marginally quicker than lensing's identical-architecture
+# 3.50. The pre-measurement worry that this untested width might come in expensive is resolved, in
+# the good direction (stage 1 is nside-256 x 128 ch against combined's nside-512 x 64 ch, i.e. ~half
+# the pixel-channel product).
+#
+# BODY RESOLUTION: pool_layers 2 + conv_layers 2 = 4 stages, each halving nside, from 256 -> nside 16
+# (~448 footprint tokens) -- the same body resolution as lensing and combined, so the attention blocks
+# cost the same. smooth_nside: clustering 256 keeps the per-probe smoothing kernel at nside 256 (5.9x
+# faster than smoothing at native); it needs scale_cuts.clustering.theta_fwhm_base, which 8wl,32gc has.
+#
+# SIZING: 3.59 it/s, MEASURED on 4 GPUs for this exact geometry on v18/default (job 3020974,
+# 2026-08-06, batch 16). Single probes run as ONE 12 h job -- ~10.5 h training + the eval+inference
+# tail inside the same job = 37.8 ks -- NOT the 2 x 12 h chain the combined arms use. That is the
+# established convention: the old clustering default is 140 k / 3.73 it/s = 10.4 h in one job.
+#   3.59 x 37.8 ks = 135.7 k, floored to the nearest 10 k -> 130 k.
+#
+# CONFIRMED BY THE PRODUCTION RUN (job 3021202, 2026-08-07): sustained 3.57 it/s over the full 130 k
+# steps -- 10.16 h training, 10.69 h wall including the eval+inference tail, COMPLETED. 3.57 x 37.8 ks
+# = 135.0 k, which floors to the same 130 k, so this file still describes the run on disk exactly.
+# base 128 is confirmed cheap at full length, not just over a 25-minute window.
+#
+# Conservative in two independent ways: the windowed rate was still climbing when read (the earlier
+# from-step-500 window gave 3.34, only the second-half window reached 3.59), and the 10 k floor rounds
+# down again. Sizing errors are asymmetric -- oversizing forfeits the anneal tail AND the eval tail
+# (nothing scorable at all), undersizing only wastes wall -- so both roundings run the safe way.
+#
+# Do NOT read the rate off tqdm's cumulative figure: 3.26 here against a sustained 3.59, a ~9%
+# startup drag that would undersize the arm.
+#
+# If this ever needs resizing MID-RUN, edit <dir_model>/configs.yaml -- editing THIS file does nothing
+# for a restored job (run_training.py:359), and the failure is silent.
+#
+# Launch: ONE 12 h job, MODEL_DIR=bench_v7_full. Not a chain. See README.md.
+# ============================================================================
+name: deepsphere_default
+
+training:
+  n_steps: 130000  # 3.59 it/s MEASURED (v18, job 3020974) x 37.8 ks = 135.7 k, floored to 10 k
+  output_every: Null
+  checkpoint_every: 5000  # job 2 restores the last checkpoint -- smaller = less lost handoff work
+  vali_every: 1000
+  eval_every: Null
+
+optimization:
+  optimizer: adam
+  gradient_clipping:
+    clip_by_value: null
+    clip_by_norm: null
+    clip_by_global_norm: 1.0
+  mutual_info_loss:
+    learning_rate: 1.0e-4
+    optimizer_kwargs:
+      beta_1: 0.9
+      beta_2: 0.999
+    scheduler: cosine
+    warmup_steps: 5000
+    warmup_init_learning_rate: 1.0e-5
+    decay_alpha: 0.0
+    ema_momentum: null
+
+network:
+  name: resnet
+  spmm_backend: csr
+  n_neighbors: 60
+  max_checkpoints: 50
+  save_second_to_last_layer: False
+  z_bank_size: Null
+  input_norm: true
+  # Clustering (fwhm >= 57') gets its own smoothing kernel at nside 256 rather than at native nside.
+  smooth_nside:
+    clustering: 256
+  map_pool: mean  # the winning readout: +32.1% paired over flatten at base 64, on 95% of mocks
+  map_feature_dim: null  # no projection: the 512-d pooled map goes straight to map_norm + concat
+  cls:
+    n_bins: 16
+    transform: asinh_per_feature
+    asinh_default_scale: null
+    embedding_layers: [512, 512, 512, 512]  # last entry 512 balances the 512-d pooled map; fused = 1024
+    embedding_dropout_rate: 0.1
+  kwargs:
+    # base 128 (NOT 64) because pool_layers is 2 here: 128 * 2^2 = 512, the trunk width pinned across
+    # all three probes. See the header -- this is the one setting bench_v7 changes on its own authority.
+    base_channels: 128
+    pool_layers: 2
+    conv_layers: 2
+    residual_layers: 5
+    residual_block_type: convnext  # knob 1 of 3 vs simple.yaml
+    mlp_ratio: 4
+    layer_scale_init: 1.0e-6
+    drop_path_rate: 0.1  # knob 2 of 3 vs simple.yaml
+    poly_degree: 5
+    head_type: "dense"
+    dense_layers: []
+    dropout_rate: 0.1
+    residual_attention_every: 2  # knob 3 of 3 vs simple.yaml; body is nside 16 (~448 tokens)
+    residual_attention:
+      num_heads: 8          # body is 512 ch -> key_dim = 512/8 = 64, matching the transformer
+      n_layers: 1
+      mlp_ratio: 2.0        # attention-block MLP ratio (distinct from the ConvNeXt mlp_ratio above)
+      dropout_rate: 0.1
+      positional_embedding: true   # learnable per-token pos-emb over the fixed nside-16 footprint
+      layer_scale_init: 1.0e-4     # near-identity init
+
+dset:
+  training:
+    common:
+      is_eval: False
+      n_readers: 64
+      n_prefetch: 8
+      n_workers: Null
+    grid:
+      local_batch_size: 16
+      file_name_shuffle_buffer: 64
+      examples_shuffle_buffer: 256
+  validation:
+    n_batches: 50
+    common:
+      is_eval: True
+      n_readers: 8
+      n_prefetch: 2
+      n_workers: 16
+    grid:
+      local_batch_size: 16
+  eval:
+    common:
+      is_eval: True
+      n_readers: 64
+      n_prefetch: 2
+      n_workers: Null
+    grid:
+      local_batch_size: 16

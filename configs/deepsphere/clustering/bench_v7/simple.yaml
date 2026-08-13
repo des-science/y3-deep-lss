@@ -1,0 +1,119 @@
+# ============================================================================
+# bench_v7 — CLUSTERING, "simple": plain classic residual body, mean-pool readout, base 128. Nothing else.
+#
+# Same architecture as combined/bench_v7/simple.yaml, minus the lensing probe. See that file for what
+# this recipe keeps (mean-pool readout, wide trunk) and what it drops (ConvNeXt, DropPath, attention).
+#
+# base_channels 128 (NOT 64) for the same reason as clustering/bench_v7/full.yaml: pool_layers is 2
+# here, so 128 * 2^2 = 512 is what pins the trunk to the same width as lensing and combined -- and with
+# map_pool: mean the trunk width IS the pooled map vector that the 512-d Cls embedding must balance.
+# Read that file's header before changing this number.
+#
+# drop_path_rate is EXPLICITLY 0.0 -- DropPath measured 0.946 on the classic block (it HURTS) and
+# +5.0% only on the ConvNeXt block. Never quote a "DropPath lever" without naming the block type.
+#
+# SIZING: 3.07 it/s, MEASURED on 4 GPUs for this exact geometry on v18/default (job 3020975,
+# 2026-08-06, batch 16). ONE 12 h job = ~10.5 h training + the eval+inference tail = 37.8 ks, NOT the
+# 2 x 12 h chain the combined arms use. 3.07 x 37.8 ks = 116.0 k, floored to 10 k -> 110 k.
+#
+# CONFIRMED BY THE PRODUCTION RUN (job 3021203, 2026-08-07): sustained 3.16 it/s over the full 110 k
+# steps -- 9.68 h training, 10.26 h wall including the eval+inference tail, COMPLETED. 3.16 x 37.8 ks
+# = 119.4 k, which floors to the same 110 k, so this file still describes the run on disk exactly.
+#
+# NOTE THE DIRECTION OF THE WALL-MATCHING BIAS, now confirmed by measurement: the classic block is
+# SLOWER than ConvNeXt (3.07 vs full.yaml's 3.59, i.e. ConvNeXt x1.17 -- reproducing bench_v6's x1.17
+# at base 64 exactly). So under the same 12 h wall this arm gets FEWER steps than full.yaml (110 k vs
+# 130 k, ~15% fewer), worth roughly ~1.5% of FoM against it. If simple.yaml still lands within the
+# 1.5% seed floor of full.yaml, that conclusion is CONSERVATIVE -- the bias runs the other way.
+#
+# See clustering/bench_v7/full.yaml for the asymmetry rule, why the cumulative tqdm rate must not be
+# used, and the in-flight-resize trap.
+#
+# Launch: ONE 12 h job, MODEL_DIR=bench_v7_simple. Not a chain. See README.md.
+# ============================================================================
+name: deepsphere_default
+
+training:
+  n_steps: 110000  # 3.07 it/s MEASURED (v18, job 3020975) x 37.8 ks = 116.0 k, floored to 10 k
+  output_every: Null
+  checkpoint_every: 5000  # job 2 restores the last checkpoint -- smaller = less lost handoff work
+  vali_every: 1000
+  eval_every: Null
+
+optimization:
+  optimizer: adam
+  gradient_clipping:
+    clip_by_value: null
+    clip_by_norm: null
+    clip_by_global_norm: 1.0
+  mutual_info_loss:
+    learning_rate: 1.0e-4
+    optimizer_kwargs:
+      beta_1: 0.9
+      beta_2: 0.999
+    scheduler: cosine
+    warmup_steps: 5000
+    warmup_init_learning_rate: 1.0e-5
+    decay_alpha: 0.0
+    ema_momentum: null
+
+network:
+  name: resnet
+  spmm_backend: csr
+  n_neighbors: 60
+  max_checkpoints: 50
+  save_second_to_last_layer: False
+  z_bank_size: Null
+  input_norm: true
+  # Clustering (fwhm >= 57') gets its own smoothing kernel at nside 256 rather than at native nside.
+  smooth_nside:
+    clustering: 256
+  map_pool: mean  # KEEP: the winning readout, +32.1% paired over flatten
+  map_feature_dim: null  # no projection: the 512-d pooled map goes straight to map_norm + concat
+  cls:
+    n_bins: 16
+    transform: asinh_per_feature
+    asinh_default_scale: null
+    embedding_layers: [512, 512, 512, 512]  # last entry 512 balances the 512-d pooled map; fused = 1024
+    embedding_dropout_rate: 0.1
+  kwargs:
+    # CLASSIC residual body -- no residual_block_type key at all (default "residual"), no attention.
+    # base 128 * 2^2 pool stages = 512 trunk, matching lensing and combined. See header.
+    base_channels: 128
+    pool_layers: 2
+    conv_layers: 2
+    residual_layers: 5
+    drop_path_rate: 0.0  # EXPLICITLY OFF: DropPath measured 0.946 on the classic block -- it hurts here
+    poly_degree: 5
+    head_type: "dense"
+    dense_layers: []
+    dropout_rate: 0.1
+
+dset:
+  training:
+    common:
+      is_eval: False
+      n_readers: 64
+      n_prefetch: 8
+      n_workers: Null
+    grid:
+      local_batch_size: 16
+      file_name_shuffle_buffer: 64
+      examples_shuffle_buffer: 256
+  validation:
+    n_batches: 50
+    common:
+      is_eval: True
+      n_readers: 8
+      n_prefetch: 2
+      n_workers: 16
+    grid:
+      local_batch_size: 16
+  eval:
+    common:
+      is_eval: True
+      n_readers: 64
+      n_prefetch: 2
+      n_workers: Null
+    grid:
+      local_batch_size: 16

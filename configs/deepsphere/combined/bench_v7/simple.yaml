@@ -1,0 +1,137 @@
+# ============================================================================
+# bench_v7 — COMBINED, "simple": plain classic residual body, mean-pool readout, base 64. Nothing else.
+#
+# This is the bench_v6 ANCHOR recipe (`bench_v5_pool_head_w64`, paired 0.918 vs t2_cls on v17) ported
+# unchanged to v18/default. It is not an arbitrary "small" config -- it is the exact configuration the
+# full stack was built on top of, so full.yaml vs simple.yaml on v18 reproduces the 0.967-vs-0.918
+# contrast on the new dataset.
+#
+# WHAT IT KEEPS -- only the two levers that are unambiguously above the 1.5% seed floor:
+#   * map_pool: mean            +32.1% paired over flatten at base 64 (95% of mocks). THE lever of the
+#                               whole programme. Never drop this: the flatten-readout run `v3_cls`
+#                               scores 0.399 against the two-point baseline, i.e. it LOSES to 2pt by
+#                               2.5x. Any config without it is broken, not merely simpler.
+#   * base_channels: 64         +8.4% paired -- but ONLY with the pooled readout (0.890 without it).
+#
+# WHAT IT DROPS -- the three levers that sit at or near the seed floor, which is the point of the round:
+#   * ConvNeXt block            1.024 alone (block + budget together bought 0.998, a wash)
+#   * DropPath                  1.050 on ConvNeXt but 0.946 on THIS classic block -- it HURTS here.
+#                               drop_path_rate is set to 0.0 explicitly below so nobody "improves" it.
+#   * interleaved attention     1.005-1.056, a wash at base 64
+#
+# TRUNK 512, same as every other bench_v7 config (64 * 2^3). See full.yaml.
+#
+# SIZING: 2.90 it/s. Combined is the 2 x 12 h chain case: ~11 h of training per job = 79.2 ks total.
+#   2.90 x 79.2 ks = 229.7 k, floored to the nearest 10 k -> 220 k.
+#
+# !! PROVENANCE -- THIS FILE DOES NOT DESCRIBE THE RUN ON DISK. !!
+# `bench_v7_simple` (jobs 3021207/3021208, + rescue 3028404) trained to the ORIGINAL **230000** steps,
+# not the 220 k here. 230 k came from the v17 bench_v6 rate of 3.02 it/s; the v18 measurement is 2.90
+# in job 1 and 3.03 in job 2. This arm was NOT the one at risk -- it had ~40 min of margin after its
+# eval tail -- but a rescue job was queued anyway as insurance against the node variation described
+# below. n_steps here is for a FRESH 2 x 12 h chain.
+#
+# WHY 2.90 (THE MINIMUM), NOT THE MEAN: see full.yaml's header. Node variation on combined is the
+# dominant term -- full.yaml swung 24% between its two jobs -- and a chain must complete on the worst
+# node it draws. This arm was steadier (2.90 / 3.03, a 4% spread), so the penalty for the conservative
+# rule is small here.
+#
+# !! THE WALL-MATCHING BIAS HAS REVERSED ON COMBINED -- READ full.yaml's HEADER. !!
+# This arm sizes to 220 k against full.yaml's 200 k, so on combined the SIMPLE arm gets ~10% MORE
+# budget, worth roughly ~1% of FoM in its favour. That is the OPPOSITE of the single probes, where
+# full gets 130 k against simple's 110 k. Do not read a combined `simple` win of <~2% as
+# architectural without accounting for it.
+#
+# NOTE THE DIRECTION OF THE WALL-MATCHING BIAS: the classic block is SLOWER than ConvNeXt at base 64,
+# so this arm gets FEWER steps than full.yaml under the same 2 x 12 h wall (239k vs 258k, ~8% fewer),
+# worth roughly ~0.8% of FoM against it. If simple.yaml still lands within the seed floor of full.yaml,
+# that conclusion is conservative -- the bias runs the other way.
+#
+# Launch: 2-job afterany chain, MODEL_DIR=bench_v7_simple. See README.md.
+# ============================================================================
+name: deepsphere_default
+
+training:
+  n_steps: 220000  # 2.90 it/s (MIN sustained, v18 job 3021207) x 79.2 ks = 229.7 k, floored to 10 k.
+                   # TOTAL across the 2-job chain; the cosine spans it.
+                   # The run on disk used 230000 -- see PROVENANCE in the header.
+  output_every: Null
+  checkpoint_every: 5000  # job 2 restores the last checkpoint -- smaller = less lost handoff work
+  vali_every: 1000
+  eval_every: Null
+
+optimization:
+  optimizer: adam
+  gradient_clipping:
+    clip_by_value: null
+    clip_by_norm: null
+    clip_by_global_norm: 1.0
+  mutual_info_loss:
+    learning_rate: 1.0e-4
+    optimizer_kwargs:
+      beta_1: 0.9
+      beta_2: 0.999
+    scheduler: cosine
+    warmup_steps: 5000
+    warmup_init_learning_rate: 1.0e-5
+    decay_alpha: 0.0
+    ema_momentum: null
+
+network:
+  name: resnet
+  spmm_backend: csr
+  n_neighbors: 60
+  max_checkpoints: 50
+  save_second_to_last_layer: False
+  z_bank_size: Null
+  input_norm: true
+  smooth_nside:
+    clustering: 256
+  map_pool: mean  # KEEP: the winning readout, +32.1% paired over flatten
+  map_feature_dim: null  # no projection: the 512-d pooled map goes straight to map_norm + concat
+  cls:
+    n_bins: 16
+    transform: asinh_per_feature
+    asinh_default_scale: null
+    embedding_layers: [512, 512, 512, 512]  # last entry 512 balances the 512-d pooled map; fused = 1024
+    embedding_dropout_rate: 0.1
+  kwargs:
+    # CLASSIC residual body -- no residual_block_type key at all (default "residual"), no attention.
+    base_channels: 64  # pool_widen doubles per pool stage -> trunk 64 * 2^3 = 512 (pinned across probes)
+    pool_layers: 3
+    conv_layers: 2
+    residual_layers: 5
+    drop_path_rate: 0.0  # EXPLICITLY OFF: DropPath measured 0.946 on the classic block -- it hurts here
+    poly_degree: 5
+    head_type: "dense"
+    dense_layers: []
+    dropout_rate: 0.1
+
+dset:
+  training:
+    common:
+      is_eval: False
+      n_readers: 32
+      n_prefetch: 4
+      n_workers: Null
+    grid:
+      local_batch_size: 16
+      file_name_shuffle_buffer: 64
+      examples_shuffle_buffer: 256
+  validation:
+    n_batches: 50
+    common:
+      is_eval: True
+      n_readers: 8
+      n_prefetch: 2
+      n_workers: 16
+    grid:
+      local_batch_size: 16
+  eval:
+    common:
+      is_eval: True
+      n_readers: 64
+      n_prefetch: 2
+      n_workers: Null
+    grid:
+      local_batch_size: 16

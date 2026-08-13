@@ -1,0 +1,127 @@
+# ============================================================================
+# bench_v7 — LENSING, transformer reference arm (`transformer`).
+#
+# The v17 unified recipe UNCHANGED. See combined/bench_v7/transformer.yaml for the up-to-date check against
+# the reference run's own configs.yaml (only spmm_backend / checkpoint_every / n_steps differ).
+#
+# TRUNK: channel_dims = [32, 64, 128, 256, 512, 1024] -> 1024, confirmed from the run log.
+# levels = log2(512/16) = 5, growth "double" -> 32 * 2^5 = 1024. Matches combined. No change needed.
+#
+# BATCH 16 (not the recipe's 20), to match the GCNN arms.
+#
+# SIZING: 4.78 it/s, MEASURED on 4 GPUs for this exact geometry on v18/default (job 3021037,
+# 2026-08-06, batch 16, via maps/benchmarks/rate_probe.sh). ONE 12 h job -- ~10.5 h training + the
+# eval+inference tail inside the same job = 37.8 ks -- NOT the 2 x 12 h chain the combined arm uses.
+#   4.78 x 37.8 ks = 180.7 k, floored to the nearest 10 k -> 180 k.
+#
+# READ THE RATE FROM A WINDOW, NOT FROM TQDM'S CUMULATIVE FIGURE. Cumulative here is 3.70 against a
+# sustained 4.78 -- a 29% startup drag, far worse than the GCNN's ~9%, because jit_compile_body: true
+# makes XLA compilation a large ONE-TIME cost. Over 3000 probe steps that dominates; over 180 k real
+# steps it is nothing. Sizing on 3.70 would have set 130 k and thrown away ~28% of the slot.
+#
+# Cross-check against the measured optimum, which now AGREES with the wall-fill: 150 k x 20 = 3.0 M
+# samples was this probe's best and 250 k x 20 REGRESSED on all FoM variants. 180 k x 16 = 2.88 M
+# samples = 96% of the optimum. So this budget is simultaneously the wall-fill and essentially
+# sample-matched to the known optimum -- the two criteria that were in tension at batch 20 no longer are.
+#
+# !! A 1 x 12 h SINGLE JOB HAS NO SECOND JOB TO CORRECT THE SIZING IN. !!
+# On a 2 x 12 h chain a bad rate can be fixed by editing <dir_model>/configs.yaml between jobs. Here
+# there is no such opportunity: if the real rate came in lower, the cosine would never anneal to zero
+# and run_evaluation.py / run_inference.py would never run, so the job would produce nothing scorable.
+# That is why this was measured before launch rather than corrected in flight. The 10 k floor is the
+# remaining safety margin.
+#
+# Launch: SINGLE job (MAX_RUNS=1), MODEL_DIR=bench_v7_transformer -- STILL set it explicitly. Every arm
+# in this round needs that: the fallback is the config basename, so it would be `transformer` here and
+# `full`/`simple` on the GCNN side, none of which are the round-prefixed run dirs. This file was renamed
+# from default.yaml on 2026-08-11 so the fallback is at least self-evidently a config name rather than
+# a plausible promoted-probe default -- see ./README.md for what that mistake cost.
+# ============================================================================
+name: nested_transformer
+
+training:
+  n_steps: 180000  # 4.78 it/s MEASURED (v18, job 3021037) x 37.8 ks = 180.7 k, floored to 10 k
+  output_every: Null
+  checkpoint_every: 10000
+  vali_every: 1000
+  eval_every: Null
+
+optimization:
+  optimizer: adam
+  gradient_clipping:
+    clip_by_value: null
+    clip_by_norm: null
+    clip_by_global_norm: 1.0
+  mutual_info_loss:
+    learning_rate: 1.0e-4
+    optimizer_kwargs:
+      beta_1: 0.9
+      beta_2: 0.999
+    scheduler: cosine
+    warmup_steps: 5000
+    warmup_init_learning_rate: 1.0e-5
+    decay_alpha: 0.0
+    ema_momentum: null
+
+network:
+  name: nested_transformer
+  spmm_backend: csr
+  # No smooth_nside: lensing is the only active probe and stays at the native n_side.
+  token_nside: 16
+  z_bank_size: Null
+  max_checkpoints: 50
+  jit_compile_body: true
+  precision: bfloat16
+  input_norm: true
+  masked_attention: false  # available on this single-resolution path (unlike combined)
+  map_feature_dim: 512  # projects the 1024-d pooled map to 512, balancing the 512-d Cls embedding
+  head:
+    dropout_rate: 0.1
+  cls:
+    n_bins: 16
+    transform: asinh_per_feature
+    asinh_default_scale: null
+    embedding_layers: [512, 512, 512, 512]
+    embedding_dropout_rate: 0.1
+  kwargs:  # -> HealpixNestedHierarchicalLocalWindowTransformer
+    base_embed_dim: 32  # * 2^5 levels -> trunk 1024
+    growth: double
+    num_heads: 4
+    window_levels: 3
+    local_blocks_per_level: 1
+    global_blocks: 1
+    mlp_ratio: 4
+    layerscale_init: null
+    fp32_softmax: true
+    block_dropout_rate: null
+    pos_encoding: null
+    merge_op: concat
+
+dset:
+  training:
+    common:
+      is_eval: False
+      n_readers: 16
+      n_prefetch: 4
+      n_workers: 128
+    grid:
+      local_batch_size: 16  # 16 (not the recipe's 20) to match the GCNN arms; well inside the ~85 GB NCCL band
+      file_name_shuffle_buffer: 64
+      examples_shuffle_buffer: 1024
+  validation:
+    n_batches: 100
+    common:
+      is_eval: True
+      n_readers: 8
+      n_prefetch: 2
+      n_workers: 16
+    grid:
+      local_batch_size: 16
+  eval:
+    common:
+      is_eval: True
+      n_readers: 16
+      n_prefetch: 2
+      n_workers: 128
+    grid:
+      local_batch_size: 16

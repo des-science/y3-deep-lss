@@ -1,0 +1,156 @@
+# ============================================================================
+# bench_v7 — COMBINED, "full stack": ConvNeXt body + DropPath 0.1 + interleaved global attention.
+#
+# Faithful port of the bench_v6 champion `bench_v6_convnext_droppath_attn` (paired 0.967 vs the
+# transformer t2_cls on v17) onto the v18/default dataset. Nothing about the architecture changed;
+# see configs/deepsphere/combined/bench_v6/convnext_droppath_attn.yaml for the per-lever rationale.
+#
+# THE ROUND'S CONTRAST IS full.yaml vs simple.yaml, AND IT IS THREE KNOBS, NOT ONE:
+#   (1) residual_block_type  convnext  vs  residual (classic)
+#   (2) drop_path_rate       0.1       vs  0.0
+#   (3) residual_attention_every  2    vs  absent
+# That is deliberate and it is NOT a lever-attribution experiment -- bench_v6 already attributed the
+# levers individually on v17 (block 1.024, DropPath-on-convnext 1.050, attention 1.005-1.056, against
+# a 1.5% seed floor). This round asks the DIFFERENT question the attribution cannot answer: does the
+# stacked 0.967-vs-0.918 margin survive a dataset change, or is it inside the noise? Do NOT quote this
+# pair as evidence about any single lever.
+#
+# TRUNK WIDTH IS PINNED TO 512 ACROSS ALL THREE PROBES so the probes are mutually comparable and the
+# never-yet-checked sanity gate (combined FoM >= each single-probe FoM) is meaningful. Trunk =
+# base_channels * 2^pool_layers; here 64 * 2^3 = 512. Clustering reaches the same 512 with base 128
+# and pool_layers 2 -- see clustering/bench_v7/.
+#
+# SIZING: 2.62 it/s. Combined is the 2 x 12 h chain case: ~11 h of training per job = 79.2 ks total.
+#   2.62 x 79.2 ks = 207.5 k, floored to the nearest 10 k -> 200 k.
+#
+# !! PROVENANCE -- THIS FILE DOES NOT DESCRIBE THE RUN ON DISK. !!
+# `bench_v7_full` (jobs 3021205/3021206, + rescue 3028402) trained to the ORIGINAL **250000** steps,
+# not the 200 k here. 250 k was sized off the v17 bench_v6 rate of 3.25 it/s -- the one number in the
+# round that was never re-measured on v18 -- and it was 17% optimistic. Job 2 was on track to finish
+# training with ~4 minutes of wall to spare, which would have left run_evaluation.py and
+# run_inference.py unrun and the whole chain unscorable. It was rescued with a 3rd afterany job, the
+# same fix bench_v6 needed. n_steps here is for a FRESH 2 x 12 h chain.
+#
+# WHY 2.62 AND NOT THE MEAN -- NODE VARIATION IS THE DOMINANT TERM ON THIS PROBE.
+# The same config measured 3.24 it/s in job 1 (135 k steps over 11.97 h) and 2.62 in job 2 (nid006679)
+# -- a 24% swing between nodes, on identical work. That is far larger than the block-type effect it is
+# meant to resolve (~7%) and larger than the 1.5% seed floor by an order of magnitude. A chain must
+# complete on the WORST node it draws, and the error is asymmetric -- oversizing forfeits the anneal
+# tail AND the eval tail (nothing scorable at all), undersizing only wastes wall -- so n_steps is
+# sized on the MINIMUM sustained rate observed, not the mean. Sizing on job 1's 3.24 is exactly the
+# mistake that produced the rescue above.
+#
+# !! CONSEQUENCE FOR THE ROUND -- THE WALL-MATCHING BIAS HAS REVERSED ON COMBINED. !!
+# simple.yaml sizes to 220 k against this arm's 200 k, so on combined the SIMPLE arm now gets ~10%
+# MORE budget. On the single probes the bias runs the other way (full 130 k vs simple 110 k). Budget
+# is worth ~+7% per 2x with the pooled readout, so this is roughly ~1% in simple's favour here.
+# Do not read a combined `simple` win of <~2% as architectural without accounting for it.
+# The underlying cause is that full's job 2 drew a slow node; on job-1 rates ConvNeXt was faster
+# (3.24 vs simple's 2.90), consistent with bench_v6 and with both single probes. The inversion is
+# node noise, but the BUDGET it produces is real and lands in the config.
+#
+# WALL-MATCHED, NOT STEP-MATCHED. The classic block is SLOWER than ConvNeXt at base 64 (3.02 vs 3.25
+# it/s), so under a fixed 2 x 12 h wall this arm buys ~8% more steps than simple.yaml (258k vs 239k).
+# Budget is worth ~+7% per 2x with the pooled readout, so that is ~+0.8% of unearned advantage to
+# full.yaml. Inherent to wall-matching; stated, not corrected.
+#
+# Launch: 2-job afterany chain, MODEL_DIR=bench_v7_full. See README.md.
+# ============================================================================
+name: deepsphere_default
+
+training:
+  n_steps: 200000  # 2.62 it/s (MIN sustained, v18 job 3021206) x 79.2 ks = 207.5 k, floored to 10 k.
+                   # TOTAL across the 2-job chain; the cosine spans it.
+                   # The run on disk used 250000 -- see PROVENANCE in the header.
+  output_every: Null
+  checkpoint_every: 5000  # job 2 restores the last checkpoint -- smaller = less lost handoff work
+  vali_every: 1000
+  eval_every: Null
+
+optimization:
+  optimizer: adam
+  gradient_clipping:
+    clip_by_value: null
+    clip_by_norm: null
+    clip_by_global_norm: 1.0
+  mutual_info_loss:
+    learning_rate: 1.0e-4
+    optimizer_kwargs:
+      beta_1: 0.9
+      beta_2: 0.999
+    scheduler: cosine
+    warmup_steps: 5000
+    warmup_init_learning_rate: 1.0e-5
+    decay_alpha: 0.0
+    ema_momentum: null
+
+network:
+  name: resnet
+  spmm_backend: csr
+  n_neighbors: 60
+  max_checkpoints: 50
+  save_second_to_last_layer: False
+  z_bank_size: Null
+  input_norm: true
+  # Multi-resolution: clustering (fwhm >= 57') is smoothed and injected at nside 256; lensing stays
+  # native. Needs scale_cuts.clustering.theta_fwhm_base in the scales config (8wl,32gc has it).
+  smooth_nside:
+    clustering: 256
+  map_pool: mean  # the winning readout: +32.1% paired over flatten at base 64, on 95% of mocks
+  map_feature_dim: null  # no projection: the 512-d pooled map goes straight to map_norm + concat
+  cls:
+    n_bins: 16
+    transform: asinh_per_feature
+    asinh_default_scale: null
+    embedding_layers: [512, 512, 512, 512]  # last entry 512 balances the 512-d pooled map; fused = 1024
+    embedding_dropout_rate: 0.1
+  kwargs:
+    base_channels: 64  # pool_widen doubles per pool stage -> trunk 64 * 2^3 = 512 (pinned across probes)
+    pool_layers: 3
+    conv_layers: 2
+    residual_layers: 5
+    residual_block_type: convnext  # knob 1 of 3 vs simple.yaml
+    mlp_ratio: 4
+    layer_scale_init: 1.0e-6
+    drop_path_rate: 0.1  # knob 2 of 3 vs simple.yaml
+    poly_degree: 5
+    head_type: "dense"
+    dense_layers: []
+    dropout_rate: 0.1
+    residual_attention_every: 2  # knob 3 of 3 vs simple.yaml; body is nside 16 (~448 tokens)
+    residual_attention:
+      num_heads: 8          # body is 512 ch -> key_dim = 512/8 = 64, matching the transformer
+      n_layers: 1
+      mlp_ratio: 2.0        # attention-block MLP ratio (distinct from the ConvNeXt mlp_ratio above)
+      dropout_rate: 0.1
+      positional_embedding: true   # learnable per-token pos-emb over the fixed nside-16 footprint
+      layer_scale_init: 1.0e-4     # near-identity init
+
+dset:
+  training:
+    common:
+      is_eval: False
+      n_readers: 32
+      n_prefetch: 4
+      n_workers: Null
+    grid:
+      local_batch_size: 16
+      file_name_shuffle_buffer: 64
+      examples_shuffle_buffer: 256
+  validation:
+    n_batches: 50
+    common:
+      is_eval: True
+      n_readers: 8
+      n_prefetch: 2
+      n_workers: 16
+    grid:
+      local_batch_size: 16
+  eval:
+    common:
+      is_eval: True
+      n_readers: 64
+      n_prefetch: 2
+      n_workers: Null
+    grid:
+      local_batch_size: 16

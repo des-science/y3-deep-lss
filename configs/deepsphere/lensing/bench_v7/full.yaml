@@ -1,0 +1,146 @@
+# ============================================================================
+# bench_v7 — LENSING, "full stack": ConvNeXt body + DropPath 0.1 + interleaved global attention.
+#
+# Same architecture as combined/bench_v7/full.yaml, minus the clustering probe. See that file for the
+# round's rationale and for why the full-vs-simple contrast is deliberately THREE knobs, not one.
+#
+# NO GCNN LENSING REFERENCE HAS EVER EXISTED. Every DeepSphere bench round (v4/v5/v6) ran on COMBINED
+# only; the sole single-probe GCNN runs on v17 are `lensing/v3_cls` and `clustering/v3_cls`, both of
+# which use the FLATTEN readout at base 32 -- the configuration measured at 0.399 against the two-point
+# baseline on combined. So no lever in the table below has been verified on lensing alone. Treat this
+# round's lensing arms as the first real measurement, not as a confirmation.
+#
+# ATTENTION IS THE WEAKEST-JUSTIFIED KNOB HERE. Its stated mechanism on combined was long-range
+# CROSS-PROBE mixing (bench_v4 fingered cross-probe mixing as the combined-probe gap), and there is no
+# cross-probe mixing in a single-probe run. It measured 1.005-1.056 on combined at base 64 -- straddling
+# the 1.5% seed floor -- and it is kept here only so that all three probes share one recipe and the
+# combined-vs-single sanity gate compares like with like. It costs ~3% of step time. If the lensing
+# full-vs-simple gap comes out smaller than combined's, attention losing its cross-probe rationale is
+# the first thing to suspect.
+#
+# BODY RESOLUTION: lensing enters at native nside 512; pool_layers 3 + conv_layers 2 = 5 stages, each
+# HALVING nside -> the residual body sits at nside 16 (~448 footprint tokens), identical to clustering
+# and combined. So the attention blocks cost the same on every probe -- token count does not vary.
+#
+# TRUNK 512, pinned across all three probes: 64 * 2^3. See combined/bench_v7/full.yaml.
+#
+# SIZING: 3.50 it/s, MEASURED on 4 GPUs for this exact geometry on v18/default (job 3020918,
+# 2026-08-06, batch 16). Single probes run as ONE 12 h job -- ~10.5 h training + the eval+inference
+# tail inside the same job = 37.8 ks -- NOT the 2 x 12 h chain the combined arms use. That is the
+# established convention: the old lensing default is 170 k / 4.45 it/s = 10.6 h in one job.
+#   3.50 x 37.8 ks = 132.3 k, floored to the nearest 10 k -> 130 k.
+#
+# CONFIRMED BY THE PRODUCTION RUN (job 3021200, 2026-08-07): sustained 3.53 it/s over the full
+# 130 k steps -- 10.28 h of training, 10.81 h wall including the eval+inference tail, COMPLETED with
+# ~1.2 h to spare inside the 12 h job. 3.53 x 37.8 ks = 133.4 k, which floors to the same 130 k, so
+# this file still describes the run on disk exactly. The 25-minute sizing probe was accurate to 1%.
+#
+# The measurement is deliberately conservative in two independent ways: the windowed rate was still
+# climbing when read (warmup bleeds past step 500, so the earlier from-step-500 window read 3.33 and
+# only the second-half window reached 3.50), and the 10 k floor rounds down again. Sizing errors are
+# asymmetric -- oversizing forfeits the anneal tail AND the eval tail (nothing scorable at all),
+# undersizing only wastes wall -- so both roundings run the safe way.
+#
+# Do NOT read the rate off tqdm's cumulative figure: it reads 3.22 here against a sustained 3.50,
+# a ~9% startup drag that would undersize every arm. Use a windowed delta-steps/delta-elapsed that
+# starts after warmup and still spans validation stalls.
+#
+# If this ever needs resizing MID-RUN, edit <dir_model>/configs.yaml -- editing THIS file does nothing
+# for a restored job (run_training.py:359 reads the run-dir snapshot, not --net_config), and the
+# failure is silent.
+#
+# Launch: ONE 12 h job, MODEL_DIR=bench_v7_full. Not a chain. See README.md.
+# ============================================================================
+name: deepsphere_default
+
+training:
+  n_steps: 130000  # 3.50 it/s MEASURED (v18, job 3020918) x 37.8 ks = 132.3 k, floored to 10 k
+  output_every: Null
+  checkpoint_every: 5000  # job 2 restores the last checkpoint -- smaller = less lost handoff work
+  vali_every: 1000
+  eval_every: Null
+
+optimization:
+  optimizer: adam
+  gradient_clipping:
+    clip_by_value: null
+    clip_by_norm: null
+    clip_by_global_norm: 1.0
+  mutual_info_loss:
+    learning_rate: 1.0e-4
+    optimizer_kwargs:
+      beta_1: 0.9
+      beta_2: 0.999
+    scheduler: cosine
+    warmup_steps: 5000
+    warmup_init_learning_rate: 1.0e-5
+    decay_alpha: 0.0
+    ema_momentum: null
+
+network:
+  name: resnet
+  spmm_backend: csr
+  n_neighbors: 60
+  max_checkpoints: 50
+  save_second_to_last_layer: False
+  z_bank_size: Null
+  input_norm: true
+  # No smooth_nside: lensing is the only active probe and stays at its native nside throughout.
+  map_pool: mean  # the winning readout: +32.1% paired over flatten at base 64, on 95% of mocks
+  map_feature_dim: null  # no projection: the 512-d pooled map goes straight to map_norm + concat
+  cls:
+    n_bins: 16
+    transform: asinh_per_feature
+    asinh_default_scale: null
+    embedding_layers: [512, 512, 512, 512]  # last entry 512 balances the 512-d pooled map; fused = 1024
+    embedding_dropout_rate: 0.1
+  kwargs:
+    base_channels: 64  # pool_widen doubles per pool stage -> trunk 64 * 2^3 = 512 (pinned across probes)
+    pool_layers: 3
+    conv_layers: 2
+    residual_layers: 5
+    residual_block_type: convnext  # knob 1 of 3 vs simple.yaml
+    mlp_ratio: 4
+    layer_scale_init: 1.0e-6
+    drop_path_rate: 0.1  # knob 2 of 3 vs simple.yaml
+    poly_degree: 5
+    head_type: "dense"
+    dense_layers: []
+    dropout_rate: 0.1
+    residual_attention_every: 2  # knob 3 of 3 vs simple.yaml; body is nside 16 (~448 tokens)
+    residual_attention:
+      num_heads: 8          # body is 512 ch -> key_dim = 512/8 = 64, matching the transformer
+      n_layers: 1
+      mlp_ratio: 2.0        # attention-block MLP ratio (distinct from the ConvNeXt mlp_ratio above)
+      dropout_rate: 0.1
+      positional_embedding: true   # learnable per-token pos-emb over the fixed nside-16 footprint
+      layer_scale_init: 1.0e-4     # near-identity init
+
+dset:
+  training:
+    common:
+      is_eval: False
+      n_readers: 64
+      n_prefetch: 8
+      n_workers: Null
+    grid:
+      local_batch_size: 16
+      file_name_shuffle_buffer: 64
+      examples_shuffle_buffer: 256
+  validation:
+    n_batches: 50
+    common:
+      is_eval: True
+      n_readers: 8
+      n_prefetch: 2
+      n_workers: 16
+    grid:
+      local_batch_size: 16
+  eval:
+    common:
+      is_eval: True
+      n_readers: 64
+      n_prefetch: 2
+      n_workers: Null
+    grid:
+      local_batch_size: 16
