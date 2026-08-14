@@ -40,6 +40,7 @@ from msfm.utils import logger
 
 from deep_lss.nets.encoders.maps.gcnn.resnet import _CONV_HELPERS
 from deep_lss.nets.encoders.maps.multires import MultiResEncoderMixin
+from deep_lss.nets.layers.maps.readout import assemble_scale_taps, forward_with_pool_taps
 from deep_lss.utils.configuration import get_smooth_nside_indices
 
 LOGGER = logger.get_logger(__file__)
@@ -138,6 +139,32 @@ class ResNetMultiResEncoder(MultiResEncoderMixin, tf.keras.Model):
         injection_conv_kwargs (dict, optional): build kwargs for the ``injection_conv_layers`` — ``poly_degree``
             (Chebyshev/graph-conv order K, default 5) and ``conv_type`` ("cheby"/"mono"/"bernstein", default
             "cheby"). Ignored when ``injection_conv_layers == 0``. Defaults to None.
+        fusion_width (int, optional): output width of ``injection_fuse``, i.e. the width of the fused
+            both-probe stream entering ``gcnn_post``. ``None`` (default) keeps the historical behaviour,
+            ``split_Fin`` — the fine stream's width at the seam, which equals ``base_channels`` in the
+            standard schedule. Widening it costs one wider Dense plus wider ``injection_conv_layers``
+            (channel-preserving at this width, so they scale with it). Separate checkpoint lineage.
+
+            CAUTION — this was added to test a "the seam is a pinch" hypothesis that did NOT hold up.
+            The coarse stream carries only 4 channels, and ``injection_proj`` is pointwise, so its
+            output spans a <=4-dimensional subspace: the concat entering ``injection_fuse`` has
+            effective per-pixel dimension <= ``split_Fin`` + 4, not ``2 * split_Fin``. Fusing that to
+            ``split_Fin`` therefore drops at most four directions, and ``post_layers[0]`` is a
+            ``HealpyPseudoConv`` emitting only 128 channels anyway. Any width beyond roughly
+            ``split_Fin`` + 4 adds no cross-probe information. Kept because it is correct and inert
+            unset; if used, prefer a modest value and pair it with ``fuse_act``. Defaults to None.
+        fuse_act (str, optional): activation applied to ``injection_fuse``'s output (followed by a
+            LayerNorm), e.g. ``"relu"``. ``None`` (default) keeps the historical behaviour.
+
+            WHY THIS EXISTS: without it the seam is entirely LINEAR. ``injection_fuse`` is a Dense with
+            no activation and ``post_layers[0]`` is a ``HealpyPseudoConv`` whose relu is applied after
+            its own linear op, so fuse and the following pseudo-conv compose into ONE linear map and
+            concat fusion contributes no multiplicative cross-probe interaction at all — consistent with
+            ``fusion="bilinear"`` (which adds ``x*inj`` explicitly) having measured a wash. This knob is
+            deliberately the ``(activation, LayerNorm)`` pair that ``injection_conv_layers`` attaches to
+            its graph conv, MINUS the conv, so the two differ by exactly the spatial mixing. It is not
+            parameter-matched to a graph conv: it isolates the nonlinearity, not the capacity.
+            Separate checkpoint lineage (adds the LayerNorm's weights). Defaults to None.
     """
 
     def __init__(
@@ -152,10 +179,17 @@ class ResNetMultiResEncoder(MultiResEncoderMixin, tf.keras.Model):
         fusion="concat",
         injection_conv_layers=0,
         injection_conv_kwargs=None,
+        fusion_width=None,
+        fuse_act=None,
     ):
         super().__init__()
         if fusion not in ("concat", "bilinear"):
             raise ValueError(f"fusion must be 'concat' or 'bilinear', got {fusion!r}")
+        if fusion_width is not None and (not isinstance(fusion_width, int) or fusion_width <= 0):
+            raise ValueError(f"fusion_width must be a positive int or None, got {fusion_width!r}")
+        if fuse_act is not None:
+            # resolve eagerly: an unknown name would otherwise fail deep inside the first call
+            tf.keras.activations.get(fuse_act)
         if not isinstance(injection_conv_layers, int) or injection_conv_layers < 0:
             raise ValueError(f"injection_conv_layers must be a non-negative int, got {injection_conv_layers!r}")
         self.fusion = fusion
@@ -202,8 +236,28 @@ class ResNetMultiResEncoder(MultiResEncoderMixin, tf.keras.Model):
         # injection fusion, transformer idiom (nested_transformer injection_proj/injection_fuse):
         # linear Dense embed of the coarse channels, concat with the fine stream, linear Dense fuse
         # back to the fine stream's width — applied before all layers at the coarse nside and below
+        # the pinch: every bit of cross-probe information passes through injection_fuse's output width.
+        # It defaults to the fine stream's width at the seam (split_Fin = base_channels), which is 8x
+        # narrower than the trunk it feeds; fusion_width widens it. gcnn_post is then built at the wider
+        # Fin, and post_layers[0] is a strided HealpyPseudoConv whose Dense infers its input width
+        # lazily, so nothing downstream needs changing. Separate checkpoint lineage.
+        fused_Fin = fusion_width or split_Fin
         self.injection_proj = tf.keras.layers.Dense(split_Fin, name="injection_proj")
-        self.injection_fuse = tf.keras.layers.Dense(split_Fin, name="injection_fuse")
+        self.injection_fuse = tf.keras.layers.Dense(fused_Fin, name="injection_fuse")
+
+        # Optional NONLINEARITY at the seam. Without it the fusion is one composite LINEAR map:
+        # injection_fuse is a Dense with no activation and post_layers[0] is a HealpyPseudoConv whose
+        # relu is applied after its own linear op, so concat fusion contributes no multiplicative
+        # cross-probe interaction at all. This is deliberately the (activation + LayerNorm) pair that
+        # `injection_conv_layers` attaches to its graph conv, MINUS the conv itself, so the two arms
+        # differ by exactly the spatial mixing and a positive injection_conv result can be attributed.
+        # It is NOT parameter-matched to a graph conv (which also adds K*Fin*Fout weights) -- it isolates
+        # the nonlinearity, not the capacity. Applied in call(), not prepended to post_layers, because a
+        # bare activation is not a layer HealpyGCNN's build loop knows how to walk.
+        self.fuse_act = tf.keras.layers.Activation(fuse_act, name="fuse_act") if fuse_act is not None else None
+        self.fuse_act_norm = (
+            tf.keras.layers.LayerNormalization(axis=-1, name="fuse_act_norm") if fuse_act is not None else None
+        )
 
         # optional channel-preserving graph conv(s) at the injection nside on the FUSED both-probe stream,
         # prepended to gcnn_post so they run right after fusion, at the coarse nside (256), before any further
@@ -215,7 +269,7 @@ class ResNetMultiResEncoder(MultiResEncoderMixin, tf.keras.Model):
             K = icw.get("poly_degree", 5)
             injection_convs = []
             for _ in range(injection_conv_layers):
-                injection_convs.append(conv_helper(K=K, Fout=split_Fin, activation=tf.nn.relu))
+                injection_convs.append(conv_helper(K=K, Fout=fused_Fin, activation=tf.nn.relu))
                 injection_convs.append(tf.keras.layers.LayerNormalization(axis=-1))
             post_layers = injection_convs + post_layers
 
@@ -225,7 +279,7 @@ class ResNetMultiResEncoder(MultiResEncoderMixin, tf.keras.Model):
             layers=post_layers,
             n_neighbors=n_neighbors,
             max_batch_size=max_batch_size,
-            initial_Fin=split_Fin,
+            initial_Fin=fused_Fin,
             spmm_backend=spmm_backend,
         )
 
@@ -235,12 +289,31 @@ class ResNetMultiResEncoder(MultiResEncoderMixin, tf.keras.Model):
         LOGGER.warning(
             f"ResNetMultiResEncoder: fine group nside={nside} ({fine['n_channels']} ch, "
             f"{len(pre_layers)} layers), coarse group nside={coarse['nside']} "
-            f"({coarse['n_channels']} ch) injected at {split_Fin} channels "
+            f"({coarse['n_channels']} ch) injected at {split_Fin} channels, fused to {fused_Fin} "
             f"({len(post_layers)} layers after the fusion), fusion={fusion}, "
+            f"fuse_act={fuse_act or 'None (LINEAR seam)'}, "
             f"injection_conv_layers={injection_conv_layers}, input_norm={input_norm}"
         )
 
-    def call(self, maps, training=False):
+    def call(self, maps, training=False, return_taps=False):
+        """Forward pass.
+
+        Args:
+            maps (tf.Tensor): input maps for every probe group.
+            training (bool): Keras training flag.
+            return_taps (bool): also return the multi-scale readout's tap tensors, one per
+                resolution — the FUSED SEAM first, then the output of each downsampling stage in
+                ``gcnn_post``, then the trunk output. The seam is the finest tap because it is the
+                first point at which both probes are present; anything finer exists only in the
+                single-probe ``gcnn_pre`` stream and is not a cross-probe scale. The last
+                downsampling tap is dropped by ``assemble_scale_taps`` because the residual body
+                follows it at the same nside and width. Consumed by
+                ``ResNetMapsPlusCLSNetwork(map_pool_multiscale=True)``.
+
+        Returns:
+            tf.Tensor: conv features ``(B, n_pix_reduced, n_ch)``, or ``(features, taps)`` when
+            ``return_taps`` is set.
+        """
         group_tensors = self.smooth_groups(maps, training=training)
         if self.input_norms is not None:
             group_tensors = [norm(t) for norm, t in zip(self.input_norms, group_tensors)]
@@ -253,5 +326,14 @@ class ResNetMultiResEncoder(MultiResEncoderMixin, tf.keras.Model):
         # (galaxy-galaxy lensing ~ product of the two fields at the same position) directly; injection_fuse
         # infers its input width lazily, so the wider concat needs no construction change.
         parts = [x, inj, x * inj] if self.fusion == "bilinear" else [x, inj]
-        x = self.injection_fuse(tf.concat(parts, axis=-1))  # (B, P_coarse, split_Fin)
-        return self.gcnn_post(x, training=training)
+        x = self.injection_fuse(tf.concat(parts, axis=-1))  # (B, P_coarse, fused_Fin)
+        if self.fuse_act is not None:
+            # the seam's only nonlinearity when set; without it fuse and the next pseudo-conv compose
+            # into a single linear map (see __init__)
+            x = self.fuse_act_norm(self.fuse_act(x), training=training)
+        if not return_taps:
+            return self.gcnn_post(x, training=training)
+
+        seam = x
+        out, pool_taps = forward_with_pool_taps(self.gcnn_post, x, training=training)
+        return out, [seam] + assemble_scale_taps(pool_taps, out)

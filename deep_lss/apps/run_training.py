@@ -946,6 +946,9 @@ def training(args=None):
                         "poly_degree": net_conf["network"]["kwargs"].get("poly_degree", 5),
                         "conv_type": net_conf["network"]["kwargs"].get("conv_type", "cheby"),
                     },
+                    # also a top-level network key, for the same reason as injection_conv_layers
+                    fusion_width=net_conf["network"].get("fusion_width", None),
+                    fuse_act=net_conf["network"].get("fuse_act", None),
                 )
                 norm_owner = map_encoder
             network = ResNetMapsPlusCLSNetwork(
@@ -970,8 +973,11 @@ def training(args=None):
                 # composite; None = legacy raw flattened GCNN features (old checkpoint lineage)
                 map_feature_dim=net_conf["network"].get("map_feature_dim", None),
                 map_encoder=map_encoder,
-                # map-branch readout: None=flatten (legacy), "mean"=mean-pool over pixels
+                # map-branch readout: None=flatten (legacy), "mean"=mean-pool over pixels,
+                # "mean_std"/"moments" add higher moments over the same pixel axis
                 map_pool=net_conf["network"].get("map_pool", None),
+                # apply that readout at every resolution of the map branch, not just the trunk
+                map_pool_multiscale=net_conf["network"].get("map_pool_multiscale", False),
                 # single-res composite builds its own HealpyGCNN; multi-res owns it in map_encoder
                 # (which already carries spmm_backend), so this is inert there
                 spmm_backend=spmm_backend,
@@ -1040,6 +1046,9 @@ def training(args=None):
                         "poly_degree": net_conf["network"]["kwargs"].get("poly_degree", 5),
                         "conv_type": net_conf["network"]["kwargs"].get("conv_type", "cheby"),
                     },
+                    # also a top-level network key, for the same reason as injection_conv_layers
+                    fusion_width=net_conf["network"].get("fusion_width", None),
+                    fuse_act=net_conf["network"].get("fuse_act", None),
                 )
                 norm_owner = network
                 # trace so network.built=True before BaseModel.summary()

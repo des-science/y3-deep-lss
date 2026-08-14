@@ -1,0 +1,163 @@
+# ============================================================================
+# bench_v8 — COMBINED, "k20": the ANCHOR RECIPE on a mid-sized graph. ONE KNOB, AND IT IS THE CLEAN ONE.
+#
+# PARENT: bench_v7/full.yaml (the round's anchor). THE ONLY KNOB: network.n_neighbors 60 -> 20.
+# Architecture byte-identical otherwise: ConvNeXt + DropPath 0.1 + interleaved attention, trunk 512,
+# mean-pool readout, poly_degree 5, three pure pooling stages then real convs at nside 64/32. NO
+# high-resolution conv is added. Sizing switches to the round's wall-clock budget, which is the
+# round's convention for every arm and is not counted as an architecture knob.
+#
+# WHY THIS ARM IS THE ONE THE k=8 RESULTS ACTUALLY NEED.
+# `injection_conv_k8` and `unet_k8` both change the graph AND add high-resolution convolution, and both
+# came out much cheaper per step (249 and 220 ms vs the control's 300), so at fixed compute they buy
+# more optimizer steps. Under the round's fixed-compute axis a win there is a genuine win -- but it
+# cannot say whether a SPARSER GRAPH IS A BETTER OR WORSE KERNEL, because nothing in the round varies k
+# with the architecture held still. This arm does exactly that, and nothing else.
+#
+# It also gives the k axis a third point on ONE architecture:
+#     k = 60 : bench_v7_full (the anchor as run on v18/default)
+#     k = 20 : THIS ARM
+#     k =  8 : NOT TESTED on the plain anchor -- the obvious companion arm, deliberately not added here
+#              because only one was asked for. If the k axis turns out to matter, that is the next run.
+# Read those three together for monotonicity. Three outcomes, all worth knowing:
+#   flat in k          -> the programme has been paying for a 60-neighbour graph for nothing across
+#                         FIVE rounds and 40 configs, and k=8 should simply become the default.
+#   degrades as k falls-> the k=8 arms' speed is bought at kernel quality; there is an optimum, and
+#                         k=20 may be it.
+#   improves as k falls-> the wide graph was over-smoothing the kernel, which would be a real finding
+#                         about the receptive field rather than about cost.
+#
+# WHY 20 SPECIFICALLY. It is the `deep_lss` model-class default (base_model.py:53, delta_model.py:41,
+# grid_model.py:42) -- so it is the value the code itself considers normal, and the one every config in
+# this repo silently overrides to 60. On HEALPix it is roughly the second neighbour ring: hop radius
+# ~sqrt(k/pi) ~ 2.5 px, so at K=5 the reach is ~2 deg, between k=8's ~1 deg and k=60's ~4 deg.
+#
+# COST EXPECTATION -- DELIBERATELY NOT PREDICTED. Two FLOP-based predictions have now failed on this
+# recipe, in opposite directions and by large factors (+21% predicted vs +170% measured for
+# injection_conv; 1.6x predicted vs 2.65x measured for k=8), because the sparse matmul runs far from
+# peak while the GEMMs run near it, so spmm's share of TIME is much larger than its share of FLOPs.
+# The anchor's convs sit at Fout 512 where the FLOP share is smallest (~9%), which naively says "k
+# barely matters here" -- that is exactly the kind of claim that has been wrong twice. n_steps: auto
+# makes the prediction unnecessary: the arm trains for its allotted seconds at whatever rate it
+# achieves, and the step count reached is an output. Read it from throughput.json.
+#
+# !! SILENT LINEAGE TRAP. !! n_neighbors changes the graph Laplacian but NO weight shape -- the
+# Chebyshev kernel is [K*Fin, Fout] and the depthwise kernel [C, K], neither depending on k -- and the
+# restore uses expect_partial(). A checkpoint from ANY k=60 run (including bench_v7_full, whose
+# architecture this otherwise matches exactly) will load into this network with no error and silently
+# meaningless filters. That trap is at its worst HERE, precisely because this config is otherwise
+# identical to an existing run. Launch RUN_NUM=1 into its own MODEL_DIR and never restore across it.
+#
+# COMPARABILITY NOTE. The k=60 reference is `bench_v7_full` as RUN, which trained ~85.7 ks (23.81 h)
+# against this arm's 79.2 ks -- about 8% more training wall, worth ~+0.8% of FoM at the measured
+# ~+7%-per-2x rate. Inside the 1.5% seed floor, so it changes no ranking, but it biases the anchor
+# ratio slightly AGAINST this arm. There is no plain-anchor replicate at 79.2 ks anywhere in bench_v8.
+#
+# SIZING: the standard 79.2 ks of TRAINING over a 2-job chain, wall-matched to every other arm here.
+#
+# Launch: 2-job afterany chain, MODEL_DIR=bench_v8_k20, RUN_NUM=1.
+# ============================================================================
+name: deepsphere_default
+
+training:
+  n_steps: auto  # bounded by wall_budget_seconds alone; the step count reached is an OUTPUT, recorded
+                 # in throughput.json. Do NOT put a projected number here -- see COST EXPECTATION above.
+  wall_budget_seconds: 79200  # TRAINING seconds for the WHOLE run, summed across the 2-job chain.
+                              # The cosine spans all of it and anneals to zero when it is spent.
+  job_budget_seconds: 39600  # this job's share (11 h of 12 h; ~1 h left for the eval tail). Job 1
+                             # stops here and checkpoints cleanly rather than being killed at the wall.
+  output_every: Null
+  checkpoint_every: 5000  # job 2 restores the last checkpoint -- smaller = less lost handoff work
+  vali_every: 1000
+  eval_every: Null
+
+optimization:
+  optimizer: adam
+  gradient_clipping:
+    clip_by_value: null
+    clip_by_norm: null
+    clip_by_global_norm: 1.0
+  mutual_info_loss:
+    learning_rate: 1.0e-4
+    optimizer_kwargs:
+      beta_1: 0.9
+      beta_2: 0.999
+    scheduler: cosine
+    warmup_steps: 5000
+    warmup_init_learning_rate: 1.0e-5
+    decay_alpha: 0.0
+    ema_momentum: null
+
+network:
+  name: resnet
+  spmm_backend: csr
+  # <-- THE ONLY KNOB vs bench_v7/full.yaml. 60 (the max, and every config in this repo) -> 20 (the
+  # deep_lss model-class default; roughly the second HEALPix neighbour ring, ~2 deg reach at K=5).
+  # Allowed values are {8, 20, 40, 60} only, enforced at healpy_networks.py:43.
+  n_neighbors: 20
+  max_checkpoints: 50
+  save_second_to_last_layer: False
+  z_bank_size: Null
+  input_norm: true
+  # Multi-resolution: clustering (fwhm >= 57') is smoothed and injected at nside 256; lensing stays
+  # native. Needs scale_cuts.clustering.theta_fwhm_base in the scales config (8wl,32gc has it).
+  smooth_nside:
+    clustering: 256
+  map_pool: mean  # the winning readout: +32.1% paired over flatten at base 64, on 95% of mocks
+  map_feature_dim: null  # no projection: the 512-d pooled map goes straight to map_norm + concat
+  cls:
+    n_bins: 16
+    transform: asinh_per_feature
+    asinh_default_scale: null
+    embedding_layers: [512, 512, 512, 512]  # last entry 512 balances the 512-d pooled map; fused = 1024
+    embedding_dropout_rate: 0.1
+  kwargs:
+    base_channels: 64  # pool_widen doubles per pool stage -> trunk 64 * 2^3 = 512 (pinned across probes)
+    pool_layers: 3
+    conv_layers: 2
+    residual_layers: 5
+    residual_block_type: convnext
+    mlp_ratio: 4
+    layer_scale_init: 1.0e-6
+    drop_path_rate: 0.1
+    poly_degree: 5
+    head_type: "dense"
+    dense_layers: []
+    dropout_rate: 0.1
+    residual_attention_every: 2  # body is nside 16 (~448 tokens)
+    residual_attention:
+      num_heads: 8          # body is 512 ch -> key_dim = 512/8 = 64, matching the transformer
+      n_layers: 1
+      mlp_ratio: 2.0        # attention-block MLP ratio (distinct from the ConvNeXt mlp_ratio above)
+      dropout_rate: 0.1
+      positional_embedding: true   # learnable per-token pos-emb over the fixed nside-16 footprint
+      layer_scale_init: 1.0e-4     # near-identity init
+
+dset:
+  training:
+    common:
+      is_eval: False
+      n_readers: 32
+      n_prefetch: 4
+      n_workers: Null
+    grid:
+      local_batch_size: 16
+      file_name_shuffle_buffer: 64
+      examples_shuffle_buffer: 256
+  validation:
+    n_batches: 50
+    common:
+      is_eval: True
+      n_readers: 8
+      n_prefetch: 2
+      n_workers: 16
+    grid:
+      local_batch_size: 16
+  eval:
+    common:
+      is_eval: True
+      n_readers: 64
+      n_prefetch: 2
+      n_workers: Null
+    grid:
+      local_batch_size: 16

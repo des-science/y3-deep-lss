@@ -1,0 +1,188 @@
+# ============================================================================
+# bench_v8 — COMBINED, "injection_conv": ONE graph conv at nside 256 on the FUSED both-probe stream.
+#
+# PARENT: bench_v7/full.yaml (ConvNeXt + DropPath 0.1 + interleaved attention, trunk 512).
+# THE ONLY KNOB: network.injection_conv_layers 0 -> 1. Note it is a TOP-LEVEL `network:` key, NOT
+# under `kwargs:` -- kwargs is splatted into ResNetLayers and would silently swallow it. The conv's
+# build params are read from kwargs (poly_degree 5, conv_type cheby), so the basis matches the body.
+#
+# WHY THIS ARM -- IT TARGETS THE MECHANISM, NOT THE CAPACITY.
+# bench_v7 put the combined transformer 12.3% ahead of this arm's parent, while the GCNN ties or wins
+# both single probes. So the deficit is specific to COMBINING the probes, and the encoder log says
+# exactly where it comes from:
+#
+#   fine group nside=512 (4 ch, 1 layers), coarse group nside=256 (4 ch)
+#   injected at 64 channels (15 layers after the fusion), fusion=concat, injection_conv_layers=0
+#
+# The pooling stack precedes every real graph conv (3 pure strided HealpyPseudoConv stages take
+# 512 -> 64), so THE FIRST GENUINE CONVOLUTION RUNS AT nside 64: no equivariant conv ever touches the
+# finest, most non-Gaussian scales, and the two probes are combined only by a POINTWISE Dense at the
+# seam. The transformer does content-dependent mixing at 512 and 256 through its local windows. This
+# knob adds one channel-preserving graph conv (+ LayerNorm) at the injection nside, prepended to
+# gcnn_post, so it runs right after injection_fuse and before any further pooling. Two effects in one
+# layer: it extracts non-Gaussian features at 256 BEFORE the field is pooled down, and because it acts
+# on the fused stream it does content-dependent CROSS-PROBE mixing at high resolution -- the
+# combined-probe gap bench_v4 originally fingered.
+#
+# Orientation-preserving: a real graph conv keeps the NEST child-order gauge, unlike a symmetrized
+# pool or a deepsets merge, which bench_t7 showed costs ~2.25-3x FoM. Orientation info is not a detail
+# here, it is most of the signal.
+#
+# !! THE HONEST RISK -- THIS IS THE ARM THAT COULD COST ROBUSTNESS. !!
+# The GCNN is preferred because it is robust to misspecification: every GCNN sits at <=0.27 sigma
+# posterior shift over the 7 systematics variations vs t2_cls at 0.44, driven by source_clustering at
+# 1.12 sigma where every GCNN is <=0.25. But source clustering IS a coupling between the source
+# density and the lensing field -- a high-resolution cross-probe effect, i.e. precisely what this knob
+# adds the capacity to exploit. There may be a genuine FoM/robustness frontier rather than a free
+# lunch. THIS ARM MUST BE ROBUSTNESS-GATED (Q2 posterior shift on the systematics mocks), not ranked
+# on FoM alone; a win here that carries t2_cls's source-clustering bias is not a win.
+# Also note those sigma numbers are v17/bench_v6 -- nobody has measured robustness for ANY bench_v7
+# arm on v18, and v18 deliberately moved source clustering INTO the shape noise, which changes what
+# the test means. See README.md.
+#
+# WHAT THIS SUPERSEDES. An earlier "conv at nside 512, lensing-only" idea: nside 256 is 4x cheaper AND
+# acts on both probes. The alternative way to get a conv finer -- rebalancing pool_layers 3->2 /
+# conv_layers 2->3 (`poolsplit`) -- is a DIFFERENT lever, still untried, and would need
+# base_channels 128 to hold the trunk at 512. It is NOT in this round; see README.md.
+# Measured-dead downsampling levers, re-scored paired on 1000 mocks from bench_v4, do not re-try:
+# poly_degree 8 (0.970), less_cheby (0.973), bernstein (0.928), graph_unet_256 (0.866),
+# fusion: bilinear (1.010, a wash).
+#
+# The conv runs at the FUSED PINCH WIDTH (split_Fin = base_channels = 64 here, vs 32 in the bench_v5
+# draft of this arm). Widening that pinch is a separate lever, not this one.
+#
+# SIZING: WALL-CLOCK BUDGET -- 79.2 ks of training over a 2-job chain, identical to every other arm.
+# This is the arm that most needed it. It was previously carrying a PLACEHOLDER n_steps derived by
+# scaling bench_v5's 351.9 ms/step (job 2890658, 2.13x its anchor) -- a measurement taken at base 32 on
+# the CLASSIC block, so a width change AND a block change away from this config. Extrapolating a rate
+# across a width change is the exact mistake that over-predicted the ConvNeXt advantage by ~25% and
+# nearly killed three bench_v6 runs. n_steps: auto + wall_budget_seconds removes the question entirely:
+# the run trains for the allotted seconds at whatever rate a compute-heavy nside-256 conv achieves, and
+# the cosine anneals to zero exactly when they are spent.
+#
+# FOR REFERENCE ONLY, NOT USED FOR SIZING: rate probe 3056942 held a steady ~1.56 it/s over 3326 steps
+# on nid006241 before being cancelled (its tqdm cumulative read 1.42 it/s, which includes XLA compile
+# and understates the sustained rate -- see f98facf). Do NOT convert that back into an n_steps.
+#
+# WALL-MATCHED TO THE PARENT ON PURPOSE: the same allocation bench_v7_full got, so the contrast is
+# "best use of a fixed compute budget". That means this arm buys far FEWER optimizer steps than its
+# parent. At the observed ~1.56 it/s against the parent's 2.62-3.24, the factor is ~1.7-2.1x, not the
+# 2.13x assumed from bench_v5. Since budget is worth ~+7% per 2x with the pooled readout, the conv must
+# buy very roughly 5-7% just to break even on steps. That is the bet: one high-resolution cross-probe
+# conv against ~2x the optimizer steps. If it lands within the seed floor of the parent, the conv is NOT
+# neutral -- it paid for itself, and the lever is then worth a cheaper variant (poly_degree 3 at the
+# injection). Read the actual step counts from throughput.json in both run dirs before quoting a ratio.
+#
+# !! ATTRIBUTION CAVEAT. !! This knob adds the first NONLINEARITY at the fusion seam as well as spatial
+# mixing at nside 256: injection_fuse is a Dense with no activation and HealpyPseudoConv's relu follows
+# its own linear op, so the parent's seam is one composite LINEAR map. A win here cannot be split
+# between the two mechanisms without the `fuse_act` control (activation at the seam, no spatial mixing).
+# See README.md and _deferred/wide_pinch.yaml.
+#
+# Launch: 2-job afterany chain, MODEL_DIR=bench_v8_injection_conv. See README.md.
+# ============================================================================
+name: deepsphere_default
+
+training:
+  n_steps: auto  # bounded by wall_budget_seconds alone; the step count reached is an OUTPUT, recorded
+                 # in throughput.json. At the observed ~1.56 it/s this is ~124 k -- reference, not a cap.
+  wall_budget_seconds: 79200  # TRAINING seconds for the WHOLE run, summed across the 2-job chain.
+                              # The cosine spans all of it and anneals to zero when it is spent.
+  job_budget_seconds: 39600  # this job's share (11 h of 12 h; ~1 h left for the eval tail). Job 1
+                             # stops here and checkpoints cleanly rather than being killed at the wall.
+  output_every: Null
+  checkpoint_every: 5000  # job 2 restores the last checkpoint -- smaller = less lost handoff work
+  vali_every: 1000
+  eval_every: Null
+
+optimization:
+  optimizer: adam
+  gradient_clipping:
+    clip_by_value: null
+    clip_by_norm: null
+    clip_by_global_norm: 1.0
+  mutual_info_loss:
+    learning_rate: 1.0e-4
+    optimizer_kwargs:
+      beta_1: 0.9
+      beta_2: 0.999
+    scheduler: cosine
+    warmup_steps: 5000
+    warmup_init_learning_rate: 1.0e-5
+    decay_alpha: 0.0
+    ema_momentum: null
+
+network:
+  name: resnet
+  spmm_backend: csr
+  n_neighbors: 60
+  max_checkpoints: 50
+  save_second_to_last_layer: False
+  z_bank_size: Null
+  input_norm: true
+  # Multi-resolution: clustering (fwhm >= 57') is smoothed and injected at nside 256; lensing stays
+  # native. Needs scale_cuts.clustering.theta_fwhm_base in the scales config (8wl,32gc has it).
+  smooth_nside:
+    clustering: 256
+  # <-- THE ONLY KNOB vs bench_v7/full.yaml. Top-level network key on purpose: `kwargs` below is a
+  # bare ** splat into ResNetLayers, which would silently absorb it and leave the conv off. Build
+  # params come from kwargs (poly_degree 5, conv_type cheby default), matching the body's basis.
+  injection_conv_layers: 1
+  map_pool: mean  # the winning readout: +32.1% paired over flatten at base 64, on 95% of mocks
+  map_feature_dim: null  # no projection: the 512-d pooled map goes straight to map_norm + concat
+  cls:
+    n_bins: 16
+    transform: asinh_per_feature
+    asinh_default_scale: null
+    embedding_layers: [512, 512, 512, 512]  # last entry 512 balances the 512-d pooled map; fused = 1024
+    embedding_dropout_rate: 0.1
+  kwargs:
+    base_channels: 64  # pool_widen doubles per pool stage -> trunk 64 * 2^3 = 512 (pinned across probes)
+    pool_layers: 3
+    conv_layers: 2
+    residual_layers: 5
+    residual_block_type: convnext
+    mlp_ratio: 4
+    layer_scale_init: 1.0e-6
+    drop_path_rate: 0.1
+    poly_degree: 5  # also the injection conv's Chebyshev order K -- see injection_conv_layers above
+    head_type: "dense"
+    dense_layers: []
+    dropout_rate: 0.1
+    residual_attention_every: 2  # body is nside 16 (~448 tokens)
+    residual_attention:
+      num_heads: 8          # body is 512 ch -> key_dim = 512/8 = 64, matching the transformer
+      n_layers: 1
+      mlp_ratio: 2.0        # attention-block MLP ratio (distinct from the ConvNeXt mlp_ratio above)
+      dropout_rate: 0.1
+      positional_embedding: true   # learnable per-token pos-emb over the fixed nside-16 footprint
+      layer_scale_init: 1.0e-4     # near-identity init
+
+dset:
+  training:
+    common:
+      is_eval: False
+      n_readers: 32
+      n_prefetch: 4
+      n_workers: Null
+    grid:
+      local_batch_size: 16
+      file_name_shuffle_buffer: 64
+      examples_shuffle_buffer: 256
+  validation:
+    n_batches: 50
+    common:
+      is_eval: True
+      n_readers: 8
+      n_prefetch: 2
+      n_workers: 16
+    grid:
+      local_batch_size: 16
+  eval:
+    common:
+      is_eval: True
+      n_readers: 64
+      n_prefetch: 2
+      n_workers: Null
+    grid:
+      local_batch_size: 16

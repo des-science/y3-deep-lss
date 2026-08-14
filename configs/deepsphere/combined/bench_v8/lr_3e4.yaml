@@ -1,0 +1,159 @@
+# ============================================================================
+# bench_v8 — COMBINED, "lr_3e4": 3x the peak learning rate. The first optimizer arm in the programme.
+#
+# PARENT: bench_v7/full.yaml. THE ONLY KNOB: mutual_info_loss.learning_rate 1.0e-4 -> 3.0e-4.
+# Everything else in `optimization:` is untouched, and the whole `network:` block is byte-identical to
+# the parent -- this is an optimization arm, not an architecture one.
+#
+# WHY THIS IS WORTH A SLOT: THE OPTIMIZER HAS NEVER BEEN SEARCHED, AT ALL.
+# Every architecture round in this programme -- bench_v4 through bench_v7, both architectures, every
+# probe -- ran the identical recipe: Adam, lr 1e-4, cosine to zero, 5 k warmup, decay_alpha 0.0,
+# clip_by_global_norm 1.0, no weight decay. It was held fixed so architecture arms stayed comparable,
+# which was right, but it means the entire architecture search has been conducted at ONE point in
+# optimizer space that nobody has ever checked is a good one. An architecture-neutral gain could be
+# sitting here, and unlike every other arm in this round it CANNOT cost robustness, because the
+# network is bit-identical to the parent.
+#
+# WHY A HIGHER LR SPECIFICALLY, AND WHY IT IS NOT A BLIND GUESS.
+# The direct evidence that these runs end UNDER-TRAINED rather than converged is `long`: 2x the budget
+# bought +7.3% (1.073) on the pooled-readout recipe, i.e. the model was still improving when the
+# allocation ran out. Under-training is exactly what a too-low peak LR looks like at a fixed budget.
+# So this arm and long.yaml test the SAME hypothesis by different means -- more steps vs. bigger steps
+# -- and this one costs half the compute. Read the two together:
+#   both win        -> the recipe was budget-limited; combine (long at the better LR) next.
+#   only lr wins    -> it was LR-limited, and `long`'s 4-job chain is the expensive way to buy it.
+#   only long wins  -> genuinely budget-limited; leave the LR alone.
+#   neither         -> the operating point is fine and the gap is architectural after all.
+#
+# WHY 3x AND NOT 2x. A 2x LR change frequently lands inside run-to-run noise: the paired seed floor is
+# ~1.5%, and node-to-node throughput variation alone is 24%. 3x is large enough that a null result is
+# informative rather than merely underpowered. It is still conservative next to the ConvNeXt recipe
+# these blocks come from (AdamW at 4e-3 with a 4096 batch), and the guards below are all in place.
+#
+# THE DIVERGENCE GUARDS, WHICH ARE WHY 3x IS SAFE TO TRY ON A 24 H ALLOCATION:
+#   * warmup_steps 5000 with warmup_init_learning_rate 1.0e-5 -- the peak is approached slowly;
+#   * clip_by_global_norm 1.0 -- aggressive, and it is the parent's own setting, not a concession;
+#   * decay_alpha 0.0 -- cosine still anneals to exactly zero, so the tail is unchanged in character;
+#   * nan_abort_after in the training loop kills a diverged run rather than burning the wall.
+# NOTE a consequence, not a second knob: warmup_init_learning_rate stays at 1.0e-5, so the warmup now
+# spans 30x rather than 10x. That is the standard "change the peak only" convention; scaling the floor
+# too would have made this a two-knob file.
+#
+# WHAT IS DELIBERATELY *NOT* IN THIS FILE. Weight decay is the other obvious optimizer lever and is
+# arguably better motivated -- the recipe already imports the ConvNeXt ingredients (ConvNeXt blocks,
+# LayerScale 1e-6, DropPath 0.1) that were co-designed with AdamW at wd ~0.05, while the optimizer
+# stayed plain Adam at wd = 0. `optimizer: adamw` IS supported (deep_lss/utils/optimization.py) and
+# takes weight_decay through optimizer_kwargs. It is held back only because LR is the higher-variance
+# knob and this round can afford one optimizer arm, not two. `adamw_wd05` is the follow-up.
+#
+# YAML TRAP: the learning rate MUST be written 3.0e-4, not 3e-4 -- a bare 3e-4 parses as a STRING.
+# The code happens to float() it, so this one would survive, but the convention is not negotiable
+# because most such keys are not float()-ed. See reference_yaml_scientific_float_gotcha.
+#
+# SIZING: wall-clock budget, 79.2 ks of training over a 2-job chain -- identical to every other arm.
+# The architecture is unchanged, so the step count should land close to the parent's; it is still an
+# OUTPUT (throughput.json), not an input, and needs no probe.
+#
+# Launch: 2-job afterany chain, MODEL_DIR=bench_v8_lr_3e4. See README.md.
+# ============================================================================
+name: deepsphere_default
+
+training:
+  n_steps: auto  # bounded by wall_budget_seconds alone; the step count reached is an OUTPUT, recorded
+                 # in throughput.json next to the model.
+  wall_budget_seconds: 79200  # TRAINING seconds for the WHOLE run, summed across the 2-job chain.
+                              # The cosine spans all of it and anneals to zero when it is spent.
+  job_budget_seconds: 39600  # this job's share (11 h of 12 h; ~1 h left for the eval tail). Job 1
+                             # stops here and checkpoints cleanly rather than being killed at the wall.
+  output_every: Null
+  checkpoint_every: 5000  # job 2 restores the last checkpoint -- smaller = less lost handoff work
+  vali_every: 1000
+  eval_every: Null
+
+optimization:
+  optimizer: adam
+  gradient_clipping:
+    clip_by_value: null
+    clip_by_norm: null
+    clip_by_global_norm: 1.0  # unchanged from the parent, and the main reason 3x is safe to try
+  mutual_info_loss:
+    learning_rate: 3.0e-4  # <-- THE ONLY KNOB vs bench_v7/full.yaml (parent: 1.0e-4). NOT `3e-4`.
+    optimizer_kwargs:
+      beta_1: 0.9
+      beta_2: 0.999
+    scheduler: cosine
+    warmup_steps: 5000
+    warmup_init_learning_rate: 1.0e-5  # unchanged -> the warmup now spans 30x, not 10x (see header)
+    decay_alpha: 0.0
+    ema_momentum: null
+
+network:
+  name: resnet
+  spmm_backend: csr
+  n_neighbors: 60
+  max_checkpoints: 50
+  save_second_to_last_layer: False
+  z_bank_size: Null
+  input_norm: true
+  # Multi-resolution: clustering (fwhm >= 57') is smoothed and injected at nside 256; lensing stays
+  # native. Needs scale_cuts.clustering.theta_fwhm_base in the scales config (8wl,32gc has it).
+  smooth_nside:
+    clustering: 256
+  map_pool: mean  # the winning readout: +32.1% paired over flatten at base 64, on 95% of mocks
+  map_feature_dim: null  # no projection: the 512-d pooled map goes straight to map_norm + concat
+  cls:
+    n_bins: 16
+    transform: asinh_per_feature
+    asinh_default_scale: null
+    embedding_layers: [512, 512, 512, 512]  # last entry 512 balances the 512-d pooled map; fused = 1024
+    embedding_dropout_rate: 0.1
+  kwargs:
+    base_channels: 64  # pool_widen doubles per pool stage -> trunk 64 * 2^3 = 512 (pinned across probes)
+    pool_layers: 3
+    conv_layers: 2
+    residual_layers: 5
+    residual_block_type: convnext
+    mlp_ratio: 4
+    layer_scale_init: 1.0e-6
+    drop_path_rate: 0.1
+    poly_degree: 5
+    head_type: "dense"
+    dense_layers: []
+    dropout_rate: 0.1
+    residual_attention_every: 2  # body is nside 16 (~448 tokens)
+    residual_attention:
+      num_heads: 8          # body is 512 ch -> key_dim = 512/8 = 64, matching the transformer
+      n_layers: 1
+      mlp_ratio: 2.0        # attention-block MLP ratio (distinct from the ConvNeXt mlp_ratio above)
+      dropout_rate: 0.1
+      positional_embedding: true   # learnable per-token pos-emb over the fixed nside-16 footprint
+      layer_scale_init: 1.0e-4     # near-identity init
+
+dset:
+  training:
+    common:
+      is_eval: False
+      n_readers: 32
+      n_prefetch: 4
+      n_workers: Null
+    grid:
+      local_batch_size: 16
+      file_name_shuffle_buffer: 64
+      examples_shuffle_buffer: 256
+  validation:
+    n_batches: 50
+    common:
+      is_eval: True
+      n_readers: 8
+      n_prefetch: 2
+      n_workers: 16
+    grid:
+      local_batch_size: 16
+  eval:
+    common:
+      is_eval: True
+      n_readers: 64
+      n_prefetch: 2
+      n_workers: Null
+    grid:
+      local_batch_size: 16

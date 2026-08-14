@@ -298,7 +298,16 @@ class BaseModel(object):
 
         try:
             restore_dir = self.checkpoint_manager.latest_checkpoint
-            status = self.checkpoint.restore(restore_dir)
+            # expect_partial: mirrors restore_model_from_checkpoint_path below. Evaluation reaches
+            # this method through __init__ with restore_checkpoint=True and no training optimizer, so
+            # the training checkpoint's optimizer slots are left unconsumed. Without expect_partial
+            # the restore coordinator survives to interpreter shutdown and its __del__ tries to log
+            # that as a warning, by which point TF's module globals are None -- surfacing as a bogus
+            # "Exception ignored in: _CheckpointRestoreCoordinatorDeleter.__del__ / TypeError:
+            # 'NoneType' object is not callable" traceback at the end of every evaluation log.
+            # This only silences unused-CHECKPOINT-entry warnings; the assert below is the real gate
+            # and still hard-fails in the direction that matters.
+            status = self.checkpoint.restore(restore_dir).expect_partial()
             # Hard-fail if any already-built variable has no counterpart in the checkpoint
             # (e.g. the network gained new layers since the checkpoint was saved); otherwise the
             # new variables silently keep their init values and the restored model computes a

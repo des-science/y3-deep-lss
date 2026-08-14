@@ -367,7 +367,23 @@ if __name__ == "__main__":
                         n_neighbors=net_conf["network"]["n_neighbors"],
                         max_batch_size=max_batch_size,
                         input_norm=input_norm,
+                        spmm_backend=net_conf["network"].get("spmm_backend", "csr"),
                         fusion=net_conf["network"].get("fusion", "concat"),
+                        # MUST mirror run_training's construction exactly. These three were missing
+                        # here, and the failure mode is silent: the injection convs are PREPENDED to
+                        # gcnn_post, so omitting them shifts every later layer's position in the
+                        # object graph. base_model restores with expect_partial() +
+                        # assert_existing_objects_matched(), which only checks that variables in the
+                        # BUILT graph found a match -- extra checkpoint entries are ignored without a
+                        # warning. So a run trained with injection_conv_layers > 0 would be evaluated
+                        # against a differently-wired network, with weights mismatched by position.
+                        injection_conv_layers=net_conf["network"].get("injection_conv_layers", 0),
+                        injection_conv_kwargs={
+                            "poly_degree": net_conf["network"]["kwargs"].get("poly_degree", 5),
+                            "conv_type": net_conf["network"]["kwargs"].get("conv_type", "cheby"),
+                        },
+                        fusion_width=net_conf["network"].get("fusion_width", None),
+                        fuse_act=net_conf["network"].get("fuse_act", None),
                     )
                 network = ResNetMapsPlusCLSNetwork(
                     conv_layers=None if is_multires_gcnn else net_spec.get_conv_layers(),
@@ -391,6 +407,10 @@ if __name__ == "__main__":
                     map_feature_dim=net_conf["network"].get("map_feature_dim", None),
                     map_encoder=map_encoder,
                     map_pool=net_conf["network"].get("map_pool", None),
+                    # must match training: a readout forwarded here but not there (or vice versa)
+                    # changes the architecture between train and eval and expect_partial() will NOT
+                    # raise — the injection_conv_layers precedent in bench_v8
+                    map_pool_multiscale=net_conf["network"].get("map_pool_multiscale", False),
                 )
                 if network.gcnn is not None:
                     network.gcnn.build((max_batch_size, len(smooth_indices), n_z_bins))
@@ -421,7 +441,17 @@ if __name__ == "__main__":
                         n_neighbors=net_conf["network"]["n_neighbors"],
                         max_batch_size=max_batch_size,
                         input_norm=input_norm,
+                        spmm_backend=net_conf["network"].get("spmm_backend", "csr"),
                         fusion=net_conf["network"].get("fusion", "concat"),
+                        # maps-only counterpart of the maps+cls site above -- same silent-mismatch
+                        # reasoning, same three previously-missing kwargs.
+                        injection_conv_layers=net_conf["network"].get("injection_conv_layers", 0),
+                        injection_conv_kwargs={
+                            "poly_degree": net_conf["network"]["kwargs"].get("poly_degree", 5),
+                            "conv_type": net_conf["network"]["kwargs"].get("conv_type", "cheby"),
+                        },
+                        fusion_width=net_conf["network"].get("fusion_width", None),
+                        fuse_act=net_conf["network"].get("fuse_act", None),
                     )
                     network(tf.zeros((2, len(smooth_indices), n_z_bins)), training=False)
                     model = BaseModel(
@@ -603,8 +633,3 @@ if __name__ == "__main__":
     else:
         LOGGER.warning("Evaluating only the latest checkpoint")
         evaluate_current_checkpoint(model)
-
-    # Release TF checkpoint objects explicitly so _CheckpointRestoreCoordinatorDeleter
-    # is GC'd now, before interpreter shutdown nulls out TF module-level state.
-    model.checkpoint = None
-    model.checkpoint_manager = None

@@ -1,0 +1,185 @@
+# ============================================================================
+# bench_v9 — COMBINED, "unet_k20": the graph U-NET schedule on the BETTER-MEASURED KERNEL.
+#
+# PARENT: bench_v8/unet_k8.yaml. THE ONLY KNOB: n_neighbors 8 -> 20.
+#
+# WHAT IT TESTS, AND WHY IT IS WORTH A SLOT. unet_k8 scored 0.933 paired -- a clear loss -- but it
+# moved FIVE knobs at once and the sparse k=8 graph was one of them. Of the three graph-sparsity arms
+# in bench_v8, k=20 is the only one that did not lose:
+#     bench_v8_k20                1.020   [1.013, 1.029]   <- one knob, architecture held fixed
+#     bench_v8_injection_conv_k8  0.970   [0.962, 0.978]
+#     bench_v8_unet_k8            0.933   [0.924, 0.941]
+# k20 was also the ONLY clean single-knob k test in that round -- both k8 arms moved the architecture
+# as well -- so it is the one measurement of k as a KERNEL rather than as a budget lever. This arm
+# asks the question that separates the two: was the U-net's loss the SCHEDULE, or the SPARSE GRAPH?
+#
+# IT IS ALSO THE CONTROL FOR unet_multiscale.yaml, WHICH IS ONE KNOB OFF THIS FILE.
+# That is the reason this arm exists in a round that is otherwise about the readout. Without it,
+# unet_multiscale moves both k and the readout and cannot be attributed to either; with it, the round
+# has a clean chain:
+#     bench_v8/unet_k8.yaml  --(k 8->20)-->  unet_k20.yaml  --(readout)-->  unet_multiscale.yaml
+# Read the three together. If unet_k20 recovers most of the 0.933 on its own, the U-net schedule was
+# never the problem and the sparse graph was; if it does not move, the schedule is the suspect and
+# multi-scale readout is being asked to rescue an architecture that does not work.
+#
+# WHAT IT DOES *NOT* TEST. This is a clean test of k WITHIN the U-net, NOT of the U-net against the
+# bench_v8_mean_std anchor -- it still carries every one of unet_k8's other four knobs (pool_layers
+# 1, conv_layers 4, conv_widen, base_channels 32) and therefore its width confound whole: HALF THE
+# WIDTH at every downsampling level except the last, forced by holding the trunk pin at 512. Read
+# bench_v8/unet_k8.yaml's width block before quoting this arm against anything outside the U-net
+# family. There is still no width-matched nside-256 U-net at trunk 512.
+#
+# !! COST -- THE REASON THIS IS NOT A FREE CONTROL. !!
+# k enters only the sparse L @ x term, and the share it can shrink depends ONLY on the conv's OUTPUT
+# WIDTH: spmm_share = (K-1)(k+1) / [(K-1)(k+1) + K*Fout]. A U-net's high-resolution convs are NARROW
+# by construction (Fout 64 / 128 / 256 / 512), which is exactly where k dominates -- the same fact
+# that made k=8 such a large speedup for unet_k8 makes k=20 a correspondingly large cost here.
+# unet_k8 measured 221 ms/step, the FASTEST arm in bench_v8, and reached 335300 steps at this budget.
+# This arm will reach materially fewer, and under equal wall that is a real handicap that is not the
+# knob being tested. bench_v8 measured +7.3% for a 2x budget on this recipe, so it is not negligible.
+#   => A WIN is strong: it won despite training on fewer samples.
+#   => A LOSS is ambiguous between "k=20 is a worse kernel here" and "it simply saw less data".
+# RATE-PROBE THIS BEFORE COMMITTING THE CHAIN, and probe unet_multiscale.yaml in the same pass so the
+# two share a rate reference. Not for sizing -- n_steps: auto handles that -- but to decide between a
+# 79200 s and a 158400 s budget while it is still free to change. The FLOP model has been wrong in
+# BOTH directions on this recipe (predicted +21% for injection_conv, measured +170%; predicted 1.6x
+# for k=8, measured ~3x), so no analytic estimate of this arm's step time is worth anything.
+#
+# ROBUSTNESS. unet_k8 measured 0.68 sigma worst-case posterior shift (v18, 2026-08-14) -- the LOWEST
+# of any GCNN arm, against the bench_v7_full anchor at 0.70 and bench_v8_mean_std at 0.72. So the
+# U-net schedule showed no robustness cost at k=8, which is the precedent this arm inherits. k=20 has
+# a WIDER kernel reach than k=8 (~2 deg vs ~1 deg at nside 256), giving the network more capacity to
+# couple high-resolution cross-probe structure -- and source clustering is exactly such a structure.
+# GATE ON source_clustering_in_place AND source_clustering_gatti, not on the worst-overall number:
+# dmo biases every architecture by +0.58 to +0.97 sigma regardless of compression and will always win
+# a max, while source clustering spreads 0.0 -> 1.66 across runs and is the discriminating axis.
+#
+# !! SILENT LINEAGE TRAP -- THE MAIN WAY THIS ARM GOES WRONG. !!
+# n_neighbors changes the Laplacian but NO weight shape (the Chebyshev kernel is [K*Fin, Fout], the
+# depthwise kernel [C, K]; neither depends on k), and the restore uses expect_partial(). A k=8
+# checkpoint therefore loads into a k=20 network with NO ERROR and meaningless filters. Since this
+# arm's only difference from unet_k8 is k, that is a live risk here in a way it is not elsewhere in
+# the round: launch RUN_NUM=1 into its OWN MODEL_DIR, never restore from bench_v8_unet_k8.
+#
+# CODE: none. Unlike the other two arms in this round, unet_k20 needs no network changes -- every key
+# it sets already exists. It could launch today.
+#
+# SIZING: WALL-CLOCK BUDGET -- 79.2 ks of training over a 2-job chain, matched to every bench_v8 arm
+# and to the rest of bench_v9, so the comparison is like-for-like on wall. n_steps: auto +
+# wall_budget_seconds (throughput.WallClockBudget, f98facf): the cosine is parameterised by wall clock
+# and anneals to zero exactly when the budget is spent. n_steps is an OUTPUT (throughput.json), and
+# here it is also a RESULT -- it is what the k=20 kernel costs the U-net, and the number that decides
+# whether unet_multiscale wants the same budget or a doubled one.
+#
+# Launch: rate probe first, then a 2-job afterany chain, MODEL_DIR=bench_v9_unet_k20, RUN_NUM=1.
+# See README.md.
+# ============================================================================
+name: deepsphere_default
+
+training:
+  n_steps: auto  # bounded by wall_budget_seconds alone; the step count reached is an OUTPUT, recorded
+                 # in throughput.json. Do NOT put a projected number here -- see SIZING above.
+  wall_budget_seconds: 79200  # TRAINING seconds for the WHOLE run, summed across the 2-job chain.
+                              # The cosine spans all of it and anneals to zero when it is spent.
+  job_budget_seconds: 39600  # this job's share (11 h of 12 h; ~1 h left for the eval tail). Job 1
+                             # stops here and checkpoints cleanly rather than being killed at the wall.
+  output_every: Null
+  checkpoint_every: 5000  # job 2 restores the last checkpoint -- smaller = less lost handoff work
+  vali_every: 1000
+  eval_every: Null
+
+optimization:
+  optimizer: adam
+  gradient_clipping:
+    clip_by_value: null
+    clip_by_norm: null
+    clip_by_global_norm: 1.0
+  mutual_info_loss:
+    learning_rate: 1.0e-4
+    optimizer_kwargs:
+      beta_1: 0.9
+      beta_2: 0.999
+    scheduler: cosine
+    warmup_steps: 5000
+    warmup_init_learning_rate: 1.0e-5
+    decay_alpha: 0.0
+    ema_momentum: null
+
+network:
+  name: resnet
+  spmm_backend: csr  # csr has no 2^31 output-size ceiling (that is coo-only), so the nside-256 conv
+                     # needs no half-width dodge of the kind graph_unet_256 used.
+  n_neighbors: 20  # <-- THE ONLY KNOB vs bench_v8/unet_k8.yaml (8 -> 20). Costs steps: the U-net's
+                   # high-resolution convs are NARROW, which is exactly where k dominates the spmm term.
+  max_checkpoints: 50
+  save_second_to_last_layer: False
+  z_bank_size: Null
+  input_norm: true
+  # Multi-resolution: clustering (fwhm >= 57') is smoothed and injected at nside 256; lensing stays
+  # native. Needs scale_cuts.clustering.theta_fwhm_base in the scales config (8wl,32gc has it).
+  # The seam POSITION is unchanged at nside 256; its WIDTH is split_Fin = base_channels = 32 (see header).
+  smooth_nside:
+    clustering: 256
+  injection_conv_layers: 0  # OFF, and not a knob here: the first conv_layers stage now runs at nside
+                            # 256 on the fused stream anyway, so an injection conv would be redundant
+                            # capacity at the same resolution and would confound the schedule change.
+  map_pool: mean  # the winning readout: +32.1% paired over flatten at base 64, on 95% of mocks
+  map_feature_dim: null  # no projection: the 512-d pooled map goes straight to map_norm + concat
+  cls:
+    n_bins: 16
+    transform: asinh_per_feature
+    asinh_default_scale: null
+    embedding_layers: [512, 512, 512, 512]  # last entry 512 balances the 512-d pooled map; fused = 1024
+    embedding_dropout_rate: 0.1
+  kwargs:
+    base_channels: 32  # unchanged from unet_k8.yaml: trunk = 32 * 2^(1+4-1) = 512, holding the pin.
+                       # Carries that arm's width confound whole -- see its header.
+    pool_layers: 1  # only the top pool (512 -> 256) stays pure strided pseudo-conv
+    conv_layers: 4  # real graph convs at nside 256 / 128 / 64 / 32
+    conv_widen: true  # widen by channel_multiplier at each graph-conv stage (U-net schedule)
+    residual_layers: 5
+    residual_block_type: convnext  # body only -- the four downsampling convs are plain Chebyshev
+    mlp_ratio: 4
+    layer_scale_init: 1.0e-6
+    drop_path_rate: 0.1
+    poly_degree: 5  # Chebyshev order K in every graph conv, unchanged from the anchor
+    head_type: "dense"
+    dense_layers: []
+    dropout_rate: 0.1
+    residual_attention_every: 2  # body is nside 16 (~448 tokens)
+    residual_attention:
+      num_heads: 8          # body is 512 ch -> key_dim = 512/8 = 64, matching the transformer
+      n_layers: 1
+      mlp_ratio: 2.0        # attention-block MLP ratio (distinct from the ConvNeXt mlp_ratio above)
+      dropout_rate: 0.1
+      positional_embedding: true   # learnable per-token pos-emb over the fixed nside-16 footprint
+      layer_scale_init: 1.0e-4     # near-identity init
+
+dset:
+  training:
+    common:
+      is_eval: False
+      n_readers: 32
+      n_prefetch: 4
+      n_workers: Null
+    grid:
+      local_batch_size: 16
+      file_name_shuffle_buffer: 64
+      examples_shuffle_buffer: 256
+  validation:
+    n_batches: 50
+    common:
+      is_eval: True
+      n_readers: 8
+      n_prefetch: 2
+      n_workers: 16
+    grid:
+      local_batch_size: 16
+  eval:
+    common:
+      is_eval: True
+      n_readers: 64
+      n_prefetch: 2
+      n_workers: Null
+    grid:
+      local_batch_size: 16

@@ -1,0 +1,195 @@
+# ============================================================================
+# !! DEFERRED 2026-08-11, NEVER RUN. THE PREMISE BELOW IS QUANTITATIVELY WRONG. !!
+#
+# The rationale in this header claims injection_fuse is a 64-channel pinch on a 128-d concat,
+# "8x narrower than the trunk it feeds". Checked against the code and the real run log, it is not
+# a bottleneck at all, for three independent reasons:
+#
+#   1. THE COARSE STREAM CARRIES 4 CHANNELS, NOT 64. bench_v7_full logs "coarse group nside=256
+#      (4 ch)". injection_proj is a Dense(split_Fin) applied POINTWISE to those 4 channels, so its
+#      output spans a <=4-dimensional affine subspace of R^64, not 64 dimensions. The concat
+#      entering injection_fuse therefore has effective per-pixel dimension <= 64 (fine, full rank)
+#      + 4 (coarse) = 68, NOT the nominal 128. Fusing 68 -> 64 can drop at most FOUR directions.
+#
+#   2. THE "8x" COMPARES TO THE BODY, FOUR STAGES DOWNSTREAM -- NOT TO WHAT THE SEAM FEEDS.
+#      post_layers[0] is HealpyPseudoConv(p=1, Fout=128), which consumes 4 children x 64 = 256
+#      values and emits 128. 256 >= 128, so the pinch does not even constrain the rank its
+#      immediate consumer can output. The trunk only reaches 512 two widening pools later.
+#
+#   3. SO fusion_width > ~68 CANNOT ADD CROSS-PROBE INFORMATION. 128 would remove the 4-direction
+#      squeeze outright; 256 is ~4x past the point of any representational effect, and pays for it
+#      at nside 256 where pixels are 16x the body's. (Measured: ~3.3 it/s, so it IS cheap -- the
+#      objection is that it tests nothing, not that it costs too much.)
+#
+# WHAT THE CHECK DID TURN UP, AND IT IS WORTH MORE THAN THIS ARM: THE SEAM IS ENTIRELY LINEAR.
+# injection_fuse is a Dense with NO activation, and HealpyPseudoConv is a Conv1D whose relu is
+# applied after its own linear op, so fuse -> concat -> pseudo-conv is ONE COMPOSITE LINEAR MAP.
+# Concat fusion thus provides zero MULTIPLICATIVE cross-probe interaction -- consistent with
+# `fusion: bilinear` (which added x*inj explicitly) scoring 1.010, a wash, in bench_v4.
+# The successor idea is therefore a NONLINEARITY at the seam (activation/LayerNorm on
+# injection_fuse), not a wider one: near-zero compute, and it isolates half of what
+# injection_conv.yaml changes, since that arm adds the first seam nonlinearity AND spatial mixing
+# at 256 in a single knob.
+#
+# The deeper asymmetry vs the transformer, which no arm in this round addresses: clustering enters
+# the seam as 4 RAW smoothed channels with no learned spatial features, while lensing has already
+# been through a conv stage. That, not seam width, is what limits cross-probe information here.
+#
+# The `fusion_width` kwarg itself is KEPT in nets/encoders/maps/gcnn/resnet_multires.py and stays
+# plumbed through all six construction sites. It is correct, defaults to the old behaviour
+# (None -> split_Fin), and costs nothing unset. If this is ever revisited, use 128, not 256 --
+# and pair it with a seam nonlinearity, or it is testing an over-complete linear map.
+#
+# Rate probe 3057100 was cancelled at ~18 min. NOT LAUNCHED. Original rationale preserved below.
+# ============================================================================
+# bench_v8 — COMBINED, "wide_pinch": widen the cross-probe fusion bottleneck 64 -> 256.
+#
+# PARENT: bench_v7/full.yaml. THE ONLY KNOB: network.fusion_width absent (= 64) -> 256.
+# Top-level `network:` key, like injection_conv_layers and for the same reason -- `kwargs:` is a bare
+# ** splat into ResNetLayers and would silently swallow it.
+#
+# WHY. The multi-res encoder fuses the two probes with
+#     injection_proj(coarse) -> concat with the pooled fine stream -> injection_fuse(...)
+# and injection_fuse's output width was hard-wired to split_Fin, the fine stream's width at the seam,
+# which equals base_channels = 64. THE TRUNK IT FEEDS IS 512. So every bit of cross-probe information
+# passes through a 64-channel pinch, 8x narrower than the body downstream of it -- the narrowest point
+# in the entire map branch, sitting exactly at the one operation that has to combine the probes.
+# The transformer has no analogous bottleneck: it merges at the body width and its channel_dims reach
+# 1024. bench_v4 diagnosed the combined gap as readout/cross-probe mixing rather than body capacity,
+# and this is cross-probe mixing capacity in the most literal sense available.
+#
+# WHY 256 AND NOT 512. 256 is the trunk width two pool stages later, so the fused stream enters
+# gcnn_post already at the width it would otherwise reach only after two more widening pools -- it
+# removes the pinch without making the seam wider than the body around it. 512 would invert the
+# schedule (fusion wider than the next two trunk stages) and costs more at nside 256, where pixels are
+# 16x the body's. If 256 pays, 512 is the follow-up.
+#
+# COMPLEMENTARY TO injection_conv.yaml, NOT A SUBSTITUTE. That arm adds a CONVOLUTION at the seam
+# (content-dependent, spatial); this one widens the CHANNEL capacity of the seam (pointwise, no new
+# spatial mixing). They are separable and could compose -- the injection convs are channel-preserving
+# at the fused width, so with both knobs on they would run at 256 channels instead of 64. Do not set
+# both in one file; `injection_conv_wide` is the composition arm if both win individually.
+#
+# ROBUSTNESS: this widens a pointwise linear map. It adds cross-probe CAPACITY, so it carries some of
+# the same risk as injection_conv.yaml (source clustering is a source-density/lensing coupling, i.e. a
+# cross-probe effect), but no new high-resolution spatial mixing, which is the part most likely to
+# exploit it. Expect a weaker version of that arm's risk. Gate on Q2 posterior shift regardless.
+#
+# CODE: `fusion_width` was added for this round in nets/encoders/maps/gcnn/resnet_multires.py and
+# plumbed through run_training.py, run_evaluation.py and benchmark_resnet.py (all SIX construction
+# sites -- run_evaluation was ALSO missing injection_conv_layers/injection_conv_kwargs/spmm_backend
+# entirely, which would have mis-restored injection_conv.yaml silently; see README.md).
+# gcnn_post is built at the widened Fin and post_layers[0] is a strided HealpyPseudoConv whose Dense
+# infers its input width lazily, so nothing else changes. NEW CHECKPOINT LINEAGE.
+#
+# !! SIZING IS PROVISIONAL -- DO NOT LAUNCH BEFORE THE RATE PROBE LANDS. !!
+# The wider Dense is cheap, but it runs at nside 256 (~118 k footprint pixels, 16x the nside-64 body),
+# so this is NOT free and must not be assumed to match the parent. n_steps below is the parent's
+# budget as a placeholder ONLY. Replace with `it/s x 79200`, floored to 10 k, from
+# maps/benchmarks/rate_probe.sh on THIS file. Extrapolating a rate across a width change is the exact
+# mistake that nearly killed three bench_v6 runs; oversizing forfeits the anneal tail AND the eval
+# tail and yields nothing scorable.
+#
+# Launch: 2-job afterany chain, MODEL_DIR=bench_v8_wide_pinch. See README.md.
+# ============================================================================
+name: deepsphere_default
+
+training:
+  n_steps: 200000  # !! PROVISIONAL: the PARENT's budget, not a measured rate for this geometry.
+                   # Replace from maps/benchmarks/rate_probe.sh on this file: it/s x 79.2 ks, floor 10 k.
+                   # TOTAL across the 2-job chain; the cosine spans it.
+  output_every: Null
+  checkpoint_every: 5000  # job 2 restores the last checkpoint -- smaller = less lost handoff work
+  vali_every: 1000
+  eval_every: Null
+
+optimization:
+  optimizer: adam
+  gradient_clipping:
+    clip_by_value: null
+    clip_by_norm: null
+    clip_by_global_norm: 1.0
+  mutual_info_loss:
+    learning_rate: 1.0e-4
+    optimizer_kwargs:
+      beta_1: 0.9
+      beta_2: 0.999
+    scheduler: cosine
+    warmup_steps: 5000
+    warmup_init_learning_rate: 1.0e-5
+    decay_alpha: 0.0
+    ema_momentum: null
+
+network:
+  name: resnet
+  spmm_backend: csr
+  n_neighbors: 60
+  max_checkpoints: 50
+  save_second_to_last_layer: False
+  z_bank_size: Null
+  input_norm: true
+  # Multi-resolution: clustering (fwhm >= 57') is smoothed and injected at nside 256; lensing stays
+  # native. Needs scale_cuts.clustering.theta_fwhm_base in the scales config (8wl,32gc has it).
+  smooth_nside:
+    clustering: 256
+  # <-- THE ONLY KNOB vs bench_v7/full.yaml. injection_fuse's output width, i.e. the width of the fused
+  # both-probe stream entering gcnn_post. Absent/None = split_Fin = base_channels = 64 (the pinch).
+  fusion_width: 256
+  map_pool: mean  # the winning readout: +32.1% paired over flatten at base 64, on 95% of mocks
+  map_feature_dim: null  # no projection: the 512-d pooled map goes straight to map_norm + concat
+  cls:
+    n_bins: 16
+    transform: asinh_per_feature
+    asinh_default_scale: null
+    embedding_layers: [512, 512, 512, 512]  # last entry 512 balances the 512-d pooled map; fused = 1024
+    embedding_dropout_rate: 0.1
+  kwargs:
+    base_channels: 64  # pool_widen doubles per pool stage -> trunk 64 * 2^3 = 512 (pinned across probes)
+    pool_layers: 3
+    conv_layers: 2
+    residual_layers: 5
+    residual_block_type: convnext
+    mlp_ratio: 4
+    layer_scale_init: 1.0e-6
+    drop_path_rate: 0.1
+    poly_degree: 5
+    head_type: "dense"
+    dense_layers: []
+    dropout_rate: 0.1
+    residual_attention_every: 2  # body is nside 16 (~448 tokens)
+    residual_attention:
+      num_heads: 8          # body is 512 ch -> key_dim = 512/8 = 64, matching the transformer
+      n_layers: 1
+      mlp_ratio: 2.0        # attention-block MLP ratio (distinct from the ConvNeXt mlp_ratio above)
+      dropout_rate: 0.1
+      positional_embedding: true   # learnable per-token pos-emb over the fixed nside-16 footprint
+      layer_scale_init: 1.0e-4     # near-identity init
+
+dset:
+  training:
+    common:
+      is_eval: False
+      n_readers: 32
+      n_prefetch: 4
+      n_workers: Null
+    grid:
+      local_batch_size: 16
+      file_name_shuffle_buffer: 64
+      examples_shuffle_buffer: 256
+  validation:
+    n_batches: 50
+    common:
+      is_eval: True
+      n_readers: 8
+      n_prefetch: 2
+      n_workers: 16
+    grid:
+      local_batch_size: 16
+  eval:
+    common:
+      is_eval: True
+      n_readers: 64
+      n_prefetch: 2
+      n_workers: Null
+    grid:
+      local_batch_size: 16

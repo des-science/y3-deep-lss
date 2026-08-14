@@ -1,0 +1,163 @@
+# ============================================================================
+# bench_v8 — COMBINED, "fuse_act": put a NONLINEARITY at the cross-probe fusion seam.
+#
+# PARENT: bench_v7/full.yaml. THE ONLY KNOB: network.fuse_act absent (= None) -> "relu".
+# Top-level `network:` key, like injection_conv_layers and fusion_width, and for the same reason --
+# `kwargs:` is a bare ** splat into ResNetLayers and would silently swallow it.
+#
+# WHY. THE SEAM IS CURRENTLY ENTIRELY LINEAR, AND THAT WAS NOT A DELIBERATE CHOICE.
+# The multi-res encoder fuses the probes with
+#     injection_proj(coarse) -> concat with the pooled fine stream -> injection_fuse(...)
+# injection_fuse is a Dense with NO activation, and the layer it feeds, post_layers[0], is a
+# HealpyPseudoConv -- a Conv1D whose relu is applied AFTER its own linear op. So fuse and the
+# pseudo-conv compose into ONE linear map: the "fusion" of lensing and clustering is a linear
+# combination, with no multiplicative interaction between the probes anywhere at the seam. That is
+# consistent with the one arm that DID add a product explicitly, `fusion: bilinear` (which feeds
+# x*inj to the trunk), measuring 1.010 [0.999, 1.023] -- a wash -- in bench_v4: it added the product
+# but left everything else linear around it.
+#
+# WHAT IT IS FOR: ATTRIBUTING injection_conv.yaml. That arm changes TWO things at once -- it adds
+# spatial mixing at nside 256 AND, because its graph conv carries a relu, the first nonlinearity at
+# the seam. A win there cannot be split between them. This arm is deliberately the (activation +
+# LayerNorm) pair that injection_conv attaches to its graph conv, MINUS the conv itself, so the two
+# differ by EXACTLY the spatial mixing:
+#
+#     injection_conv :  graph conv (K=5, relu) + LayerNorm      <- spatial mixing + nonlinearity
+#     fuse_act       :                   relu  + LayerNorm      <- nonlinearity only
+#
+# Read them together. If fuse_act captures most of injection_conv's gain, the mechanism is the
+# nonlinearity and the expensive high-resolution conv is not what is paying. If injection_conv wins
+# clearly beyond fuse_act, the spatial mixing at 256 is real and worth its ~2x step cost.
+#
+# NOT PARAMETER-MATCHED, ON PURPOSE. A graph conv also adds K*Fin*Fout weights; this adds only the
+# LayerNorm's 2*fused_Fin. The arm isolates the NONLINEARITY, not the capacity. If it wins, that is a
+# remarkably cheap gain; if it loses while injection_conv wins, capacity/spatial mixing is implicated
+# rather than the mere presence of a nonlinearity. Do not quote it as a capacity result.
+#
+# COST: essentially nothing. One elementwise relu and one LayerNorm at nside 256, against a trunk
+# that runs 5 ConvNeXt blocks at 512 channels. It should buy very nearly as many steps as the parent
+# within the same wall, which makes it -- with mean_std.yaml -- the best value-per-risk in the round.
+#
+# ROBUSTNESS: this adds no cross-probe CAPACITY and no new high-resolution spatial mixing, so it does
+# not obviously import the transformer's source-clustering vulnerability the way injection_conv.yaml
+# might. It does make the seam able to represent probe interactions it previously could not, so it is
+# not risk-free either. Gate on Q2 posterior shift like every other arm in this round.
+#
+# WHY relu AND NOT gelu. It matches injection_conv exactly: ResNetLayers' default activation is
+# tf.nn.relu and the injection convs are built with activation=tf.nn.relu. Using gelu here would add a
+# second difference between the two arms and defeat the point of the control.
+#
+# CODE: `fuse_act` was added for this round in nets/encoders/maps/gcnn/resnet_multires.py and plumbed
+# through run_training.py, run_evaluation.py and benchmark_resnet.py (all SIX construction sites).
+# Applied in call() rather than prepended to post_layers, because a bare activation is not a layer
+# HealpyGCNN's build loop knows how to walk. NEW CHECKPOINT LINEAGE (the LayerNorm adds weights).
+#
+# SIZING: wall-clock budget, 79.2 ks of training over a 2-job chain -- identical to every other arm.
+# n_steps: auto, so the step count is an OUTPUT (throughput.json), not an input. No rate probe.
+#
+# Launch: 2-job afterany chain, MODEL_DIR=bench_v8_fuse_act. See README.md.
+# ============================================================================
+name: deepsphere_default
+
+training:
+  n_steps: auto  # bounded by wall_budget_seconds alone; the step count reached is an OUTPUT, recorded
+                 # in throughput.json next to the model.
+  wall_budget_seconds: 79200  # TRAINING seconds for the WHOLE run, summed across the 2-job chain.
+                              # The cosine spans all of it and anneals to zero when it is spent.
+  job_budget_seconds: 39600  # this job's share (11 h of 12 h; ~1 h left for the eval tail). Job 1
+                             # stops here and checkpoints cleanly rather than being killed at the wall.
+  output_every: Null
+  checkpoint_every: 5000  # job 2 restores the last checkpoint -- smaller = less lost handoff work
+  vali_every: 1000
+  eval_every: Null
+
+optimization:
+  optimizer: adam
+  gradient_clipping:
+    clip_by_value: null
+    clip_by_norm: null
+    clip_by_global_norm: 1.0
+  mutual_info_loss:
+    learning_rate: 1.0e-4
+    optimizer_kwargs:
+      beta_1: 0.9
+      beta_2: 0.999
+    scheduler: cosine
+    warmup_steps: 5000
+    warmup_init_learning_rate: 1.0e-5
+    decay_alpha: 0.0
+    ema_momentum: null
+
+network:
+  name: resnet
+  spmm_backend: csr
+  n_neighbors: 60
+  max_checkpoints: 50
+  save_second_to_last_layer: False
+  z_bank_size: Null
+  input_norm: true
+  # Multi-resolution: clustering (fwhm >= 57') is smoothed and injected at nside 256; lensing stays
+  # native. Needs scale_cuts.clustering.theta_fwhm_base in the scales config (8wl,32gc has it).
+  smooth_nside:
+    clustering: 256
+  # <-- THE ONLY KNOB vs bench_v7/full.yaml. Activation (+ LayerNorm) on injection_fuse's output.
+  # Absent/None = the historical LINEAR seam. See the header for why that is the thing being tested.
+  fuse_act: relu
+  map_pool: mean  # the winning readout: +32.1% paired over flatten at base 64, on 95% of mocks
+  map_feature_dim: null  # no projection: the 512-d pooled map goes straight to map_norm + concat
+  cls:
+    n_bins: 16
+    transform: asinh_per_feature
+    asinh_default_scale: null
+    embedding_layers: [512, 512, 512, 512]  # last entry 512 balances the 512-d pooled map; fused = 1024
+    embedding_dropout_rate: 0.1
+  kwargs:
+    base_channels: 64  # pool_widen doubles per pool stage -> trunk 64 * 2^3 = 512 (pinned across probes)
+    pool_layers: 3
+    conv_layers: 2
+    residual_layers: 5
+    residual_block_type: convnext
+    mlp_ratio: 4
+    layer_scale_init: 1.0e-6
+    drop_path_rate: 0.1
+    poly_degree: 5
+    head_type: "dense"
+    dense_layers: []
+    dropout_rate: 0.1
+    residual_attention_every: 2  # body is nside 16 (~448 tokens)
+    residual_attention:
+      num_heads: 8          # body is 512 ch -> key_dim = 512/8 = 64, matching the transformer
+      n_layers: 1
+      mlp_ratio: 2.0        # attention-block MLP ratio (distinct from the ConvNeXt mlp_ratio above)
+      dropout_rate: 0.1
+      positional_embedding: true   # learnable per-token pos-emb over the fixed nside-16 footprint
+      layer_scale_init: 1.0e-4     # near-identity init
+
+dset:
+  training:
+    common:
+      is_eval: False
+      n_readers: 32
+      n_prefetch: 4
+      n_workers: Null
+    grid:
+      local_batch_size: 16
+      file_name_shuffle_buffer: 64
+      examples_shuffle_buffer: 256
+  validation:
+    n_batches: 50
+    common:
+      is_eval: True
+      n_readers: 8
+      n_prefetch: 2
+      n_workers: 16
+    grid:
+      local_batch_size: 16
+  eval:
+    common:
+      is_eval: True
+      n_readers: 64
+      n_prefetch: 2
+      n_workers: Null
+    grid:
+      local_batch_size: 16

@@ -1,0 +1,170 @@
+# ============================================================================
+# bench_v8 — COMBINED, "long": the bench_v7 champion at 2x the WALL budget. Nothing else changes.
+#
+# PARENT: bench_v7/full.yaml (ConvNeXt + DropPath 0.1 + interleaved attention, trunk 512).
+# THE ONLY KNOB: the training budget -- 79.2 ks -> 158.4 ks of training, i.e. a 4-job afterany chain
+# instead of 2. The whole `network:` block below is BYTE-IDENTICAL to the parent; only the `training:`
+# budget keys and this header differ.
+#
+# NOTE the parent was run with a FIXED n_steps (250 k as actually trained; its file says 200 k -- see
+# its !! PROVENANCE !! block), whereas this arm is bounded by wall clock. Both got/get the same kind
+# of allocation, so the contrast is still "2x the compute", and it is now exact rather than estimated.
+#
+# WHY THIS ARM. bench_v7 scored the combined transformer at 1.153 vs the GCNN `simple` anchor and
+# 1.123 vs this arm's parent -- a 12.3% deficit for the best GCNN. Budget is the one lever in the
+# programme that is BOTH measured positive on the pooled-readout recipe and free of architectural
+# risk: 2x steps bought 1.073 (+7.3%) in bench_v5/v6. If that transfers it closes roughly 60% of the
+# transformer gap without touching the architecture -- and therefore without touching the robustness
+# advantage that motivates staying with DeepSphere at all (every GCNN <=0.27 sigma posterior shift on
+# the systematics mocks vs t2_cls at 0.44, driven by source_clustering at 1.12 sigma). Cheap, safe
+# and known-signed: run it first.
+#
+# BUDGET IS CONDITIONAL ON THE READOUT -- this arm is only safe because the parent pools.
+# With the FLATTEN readout more steps actively HURT: `v3_cls` degrades monotonically across its
+# checkpoints (0.545 @150k -> 0.302 @200k -> 0.270 @310k). map_pool: mean is what makes budget
+# spendable. Do NOT copy this n_steps onto a flatten-readout config.
+#
+# +7.3% IS NOT A PROMISE. It was measured 1x -> 2x on the bench_v5 pool_head anchor on v17, not on
+# this ConvNeXt+DropPath+attn recipe on v18, and the anneal-tail mechanism means returns diminish:
+# transformer lensing at 250 k REGRESSED against 150 k. This arm tests whether budget still pays at
+# the champion's operating point; it is not a guaranteed +7%.
+#
+# SIZING: WALL-CLOCK BUDGET, NOT A STEP COUNT. NO RATE PROBE IS NEEDED FOR THIS ARM OR ANY OTHER.
+# n_steps: auto + wall_budget_seconds (throughput.WallClockBudget, added in f98facf) trains for a
+# fixed number of TRAINING SECONDS and parameterises the cosine by wall clock, so it anneals to zero
+# exactly when the budget is spent. n_steps becomes an OUTPUT of the run (throughput.json) rather
+# than an input to it, and the anneal tail plus the eval tail are guaranteed at whatever rate the
+# run achieves.
+#   4 x 12 h chain = 158.4 ks of training total, 39.6 ks (11 h) per job, ~1 h/job for the eval tail.
+#
+# THIS IS WHY THE ARM NO LONGER NEEDS A MEASURED RATE, AND WHY THAT MATTERS MOST HERE.
+# The same recipe measured 3.24 it/s in job 1 and 2.62 in job 2 -- a 24% swing between nodes on
+# identical work, an order of magnitude above the 1.5% seed floor. Under fixed n_steps a chain has to
+# be sized for the WORST node it might draw, and over FOUR jobs the chance of drawing a slow one is
+# higher than over two, so the old rule wasted wall by construction. A wall budget absorbs node
+# variation, contention, restarts and rate ramps instead of guessing around them. (bench_v7's own
+# logs had one arm ramp 5.8 -> 8.8 it/s over six hours, so no early window described the run at all,
+# and a standalone probe of that config did not ramp -- the rate is not always a property of the
+# config, which is why probing then fixing n_steps is not sound.)
+#
+# THE COSINE SPANS THE WHOLE 158.4 ks BUDGET, SO A PARTIAL CHAIN IS WORTHLESS, NOT SMALLER.
+# A 4-job chain that dies after job 3 does not yield a "3/4-length run" -- it yields a run whose LR
+# never annealed to zero, and the gain lives in that tail. `afterany` continues past a failure, so
+# verify each handoff before trusting the result: budget_progress.json carries consumed_seconds and
+# warmup_end_seconds across the boundary, and job N+1 logs the seconds already spent by earlier jobs.
+# With four jobs there are three such handoffs instead of one.
+#
+# EQUAL-WALL, NOT EQUAL-SAMPLE -- and that is what this round wants. Two runs of one config no longer
+# take the same number of steps. A controlled sample-budget comparison would need fixed n_steps; this
+# round is explicitly "best use of a fixed compute budget", so the wall budget is the faithful choice.
+#
+# Launch: 4-job afterany chain, MODEL_DIR=bench_v8_long. See README.md.
+# ============================================================================
+name: deepsphere_default
+
+training:
+  n_steps: auto  # no step cap: the run is bounded by wall_budget_seconds alone, and the step count it
+                 # reaches is an OUTPUT, recorded in throughput.json next to the model.
+  wall_budget_seconds: 158400  # TRAINING seconds for the WHOLE run, summed across the chain:
+                               # 4 x 39.6 ks. The cosine is parameterised by this, so it anneals to
+                               # zero exactly when the budget is spent, whatever rate is achieved.
+                               # For reference only, at the parent's 2.62-3.24 it/s this buys ~415-513 k
+                               # steps -- do NOT turn that back into an n_steps.
+  job_budget_seconds: 39600  # this job's share (11 h of a 12 h alloc, ~1 h left for the eval tail).
+                             # Each job stops here and checkpoints CLEANLY instead of being killed at
+                             # the wall, so a handoff costs nothing.
+  output_every: Null
+  checkpoint_every: 5000  # every job after the first restores the last checkpoint -- smaller = less
+                          # lost handoff work, and there are three handoffs here rather than one.
+                          # NOTE max_checkpoints below is 50, i.e. the last 250 k steps at this
+                          # cadence; raise it if the across-checkpoint trajectory is wanted.
+  vali_every: 1000
+  eval_every: Null
+
+optimization:
+  optimizer: adam
+  gradient_clipping:
+    clip_by_value: null
+    clip_by_norm: null
+    clip_by_global_norm: 1.0
+  mutual_info_loss:
+    learning_rate: 1.0e-4
+    optimizer_kwargs:
+      beta_1: 0.9
+      beta_2: 0.999
+    scheduler: cosine
+    warmup_steps: 5000
+    warmup_init_learning_rate: 1.0e-5
+    decay_alpha: 0.0
+    ema_momentum: null
+
+network:
+  name: resnet
+  spmm_backend: csr
+  n_neighbors: 60
+  max_checkpoints: 50
+  save_second_to_last_layer: False
+  z_bank_size: Null
+  input_norm: true
+  # Multi-resolution: clustering (fwhm >= 57') is smoothed and injected at nside 256; lensing stays
+  # native. Needs scale_cuts.clustering.theta_fwhm_base in the scales config (8wl,32gc has it).
+  smooth_nside:
+    clustering: 256
+  map_pool: mean  # the winning readout: +32.1% paired over flatten at base 64, on 95% of mocks
+  map_feature_dim: null  # no projection: the 512-d pooled map goes straight to map_norm + concat
+  cls:
+    n_bins: 16
+    transform: asinh_per_feature
+    asinh_default_scale: null
+    embedding_layers: [512, 512, 512, 512]  # last entry 512 balances the 512-d pooled map; fused = 1024
+    embedding_dropout_rate: 0.1
+  kwargs:
+    base_channels: 64  # pool_widen doubles per pool stage -> trunk 64 * 2^3 = 512 (pinned across probes)
+    pool_layers: 3
+    conv_layers: 2
+    residual_layers: 5
+    residual_block_type: convnext
+    mlp_ratio: 4
+    layer_scale_init: 1.0e-6
+    drop_path_rate: 0.1
+    poly_degree: 5
+    head_type: "dense"
+    dense_layers: []
+    dropout_rate: 0.1
+    residual_attention_every: 2  # body is nside 16 (~448 tokens)
+    residual_attention:
+      num_heads: 8          # body is 512 ch -> key_dim = 512/8 = 64, matching the transformer
+      n_layers: 1
+      mlp_ratio: 2.0        # attention-block MLP ratio (distinct from the ConvNeXt mlp_ratio above)
+      dropout_rate: 0.1
+      positional_embedding: true   # learnable per-token pos-emb over the fixed nside-16 footprint
+      layer_scale_init: 1.0e-4     # near-identity init
+
+dset:
+  training:
+    common:
+      is_eval: False
+      n_readers: 32
+      n_prefetch: 4
+      n_workers: Null
+    grid:
+      local_batch_size: 16
+      file_name_shuffle_buffer: 64
+      examples_shuffle_buffer: 256
+  validation:
+    n_batches: 50
+    common:
+      is_eval: True
+      n_readers: 8
+      n_prefetch: 2
+      n_workers: 16
+    grid:
+      local_batch_size: 16
+  eval:
+    common:
+      is_eval: True
+      n_readers: 64
+      n_prefetch: 2
+      n_workers: Null
+    grid:
+      local_batch_size: 16

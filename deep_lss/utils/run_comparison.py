@@ -54,6 +54,10 @@ _GATE_FIELDS = {
     "dim_summary_fac": ("loss", "mutual_info_loss", "dim_summary_fac"),
     "loss_function": ("loss", "loss_function"),
     "signal_indices": ("data", "signal_indices"),
+    # Input modality. The `probe` key above only records which of lensing/clustering/cross are USED,
+    # which is identical for a maps+cls run and a Cls-only two-point baseline -- so without this the
+    # gate silently passes the one comparison where the whole point is that the inputs differ.
+    "input_modality": None,
 }
 
 _PROBE_KEYS = ("with_lensing", "with_clustering", "with_cross_probe", "with_cross_z")
@@ -91,10 +95,23 @@ def load_run_config(run_dir):
         return yaml.safe_load(f)
 
 
+def input_modality(cfg):
+    """Which inputs the compression saw: 'maps+cls' (a map encoder is configured) or 'cls' (two-point).
+
+    Read from the config's own top-level shape rather than the run's path: a map run carries a `net`
+    block (the map encoder), while a Cls-only baseline carries `mlp` and no `net`.
+    """
+    has_map_encoder = isinstance(_dig(cfg, ("net", "network")), dict)
+    return "maps+cls" if has_map_encoder else "cls"
+
+
 def comparability_key(cfg):
     """Reduce a run config to the fields that must agree across a comparison."""
     key = {}
     for name, path in _GATE_FIELDS.items():
+        if name == "input_modality":
+            key[name] = input_modality(cfg)
+            continue
         value = _dig(cfg, path)
         if name == "probe":
             value = tuple(bool(_dig(cfg, path + (k,), False)) for k in _PROBE_KEYS)
@@ -164,10 +181,10 @@ def fom_per_mock(theta_sample, params, pair=("Om", "S8")):
     cxx = (xc * xc).sum(0) / (n - 1)
     cyy = (yc * yc).sum(0) / (n - 1)
     cxy = (xc * yc).sum(0) / (n - 1)
-    det = cxx * cyy - cxy ** 2
+    det = cxx * cyy - cxy**2
     if np.any(det <= 0):
         raise ValueError(f"non-positive covariance determinant for {int((det <= 0).sum())} mocks")
-    return det ** -0.5
+    return det**-0.5
 
 
 def load_run(run_dir, pair=("Om", "S8")):
@@ -236,9 +253,33 @@ def align_to(reference_idx, other_idx):
     if missing:
         raise ValueError(
             f"{len(missing)} mocks are absent from the reference set (first: {missing[0]}); the runs "
-            f"were evaluated on different mocks and cannot be paired"
+            f"were evaluated on different mocks and cannot be paired. If the runs come from different "
+            f"pipelines (maps vs cls), their coverage mock sets alias differently and only overlap "
+            f"partially -- use intersect=True to pair on the common subset instead."
         )
     return np.array([ref_map[tuple(row)] for row in other_idx.tolist()])
+
+
+def common_mocks(idx_list):
+    """Rows present in EVERY run's mock set, as an (n_common, 3) array sorted by the real_idx tuple.
+
+    Needed because the maps and Cls pipelines pack the (i_signal, i_noise) example axis transposed, and
+    the coverage selection strides by row POSITION -- so the two pipelines' 1000 mocks are different
+    physical realizations of the same 1000 cosmologies and only partially coincide. Pairing on the
+    intersection keeps the comparison valid (identical theta_true, identical realization) at the cost of
+    a smaller n; pairing on i_sobol alone would NOT, since i_signal carries the astrophysical draw.
+    """
+    sets = [{tuple(row) for row in idx.tolist()} for idx in idx_list]
+    common = set.intersection(*sets)
+    if not common:
+        raise ValueError("the runs share no mocks at all (empty real_idx intersection); they cannot be paired")
+    return np.array(sorted(common), dtype=np.int64)
+
+
+def gather_mocks(idx, fom, wanted):
+    """Reorder one run's per-mock FoM onto the rows of `wanted` (an (n, 3) real_idx array)."""
+    row_of = {tuple(row): i for i, row in enumerate(idx.tolist())}
+    return fom[np.array([row_of[tuple(row)] for row in wanted.tolist()])]
 
 
 def paired_ratio(fom_reference, fom_run, i_sobol=None, n_boot=4000, seed=0):
@@ -336,7 +377,7 @@ def read_vali_total(run_dir, tag="loss/vali_total", steps=None):
     return float(tensor_util.make_ndarray(events[-1].tensor_proto))
 
 
-def compare_runs(run_dirs, reference, pair=("Om", "S8"), n_boot=4000, seed=0, strict=True):
+def compare_runs(run_dirs, reference, pair=("Om", "S8"), n_boot=4000, seed=0, strict=True, intersect=False):
     """Run the full recipe and return (rows, mock_set_info).
 
     Steps, in order, with the first two as gates:
@@ -380,12 +421,28 @@ def compare_runs(run_dirs, reference, pair=("Om", "S8"), n_boot=4000, seed=0, st
             warnings.append(message)
 
     # --- gate 2: same mocks, and a structure the bootstrap can handle ----------------------------
+    if intersect:
+        # cross-pipeline case: pair on the mocks every run actually evaluated, not on the reference set
+        wanted = common_mocks([idx for idx, _, _, _ in loaded.values()])
+        ref_fom = gather_mocks(ref_idx, ref_fom, wanted)
+        ref_idx = wanted
+        dropped = {
+            os.path.basename(os.path.normpath(d)): len(idx) - len(wanted) for d, (idx, _, _, _) in loaded.items()
+        }
+        if any(dropped.values()):
+            warnings.append(
+                f"paired on the {len(wanted)}-mock intersection of the runs' coverage sets (dropped per "
+                f"run: {dropped}); the CI widens as sqrt(n) but the seed floor does not"
+            )
     info = describe_mock_set(ref_idx)
     rows = []
     for d, (idx, fom, cfg, prov) in loaded.items():
-        order = align_to(ref_idx, idx)
-        aligned = np.empty_like(fom)
-        aligned[order] = fom
+        if intersect:
+            aligned = gather_mocks(idx, fom, ref_idx)
+        else:
+            order = align_to(ref_idx, idx)
+            aligned = np.empty_like(fom)
+            aligned[order] = fom
         stats = paired_ratio(
             ref_fom, aligned, i_sobol=ref_idx[:, 0] if info["clustered"] else None, n_boot=n_boot, seed=seed
         )
@@ -447,6 +504,12 @@ def main(argv=None):
     parser.add_argument(
         "--no_strict", action="store_true", help="downgrade the comparability gate from an error to a warning"
     )
+    parser.add_argument(
+        "--intersect",
+        action="store_true",
+        help="pair on the mocks common to all runs instead of requiring identical mock sets (needed to "
+        "compare a maps run against a Cls-only baseline, whose coverage sets alias differently)",
+    )
     args = parser.parse_args(argv)
 
     names = args.runs if args.reference in args.runs else [args.reference] + args.runs
@@ -460,6 +523,7 @@ def main(argv=None):
         n_boot=args.n_boot,
         seed=args.seed,
         strict=not args.no_strict,
+        intersect=args.intersect,
     )
     print(format_table(rows, info, os.path.basename(os.path.normpath(reference_dir))))
     return 0

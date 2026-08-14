@@ -1,0 +1,178 @@
+# ============================================================================
+# bench_v8 — COMBINED, "poolsplit": move the first REAL graph conv from nside 64 to nside 128.
+#
+# PARENT: bench_v7/full.yaml.
+#
+# !! THIS FILE MOVES THREE KNOBS, AND THAT IS NOT OPTIONAL. !!
+#   base_channels  64 -> 128
+#   pool_layers     3 -> 2
+#   conv_layers     2 -> 3
+# They are one IDEA, not three levers, because the trunk width is COUPLED to the pooling schedule:
+# trunk = base_channels * 2^pool_layers (pool_widen doubles on pool stages only; conv_widen is off).
+# Rebalancing pool 3->2 / conv 2->3 alone would narrow the trunk 512 -> 256, so base_channels must
+# double to hold it at 512 -- and the trunk is PINNED at 512 across all probes so the cross-probe
+# sanity gate stays meaningful. The three ways to hold 512 were enumerated in bench_v5: conv_widen
+# (= the graph_unet schedule, which LOST, re-scored 0.866-0.934, and needs base 16 which the user
+# rejected), accepting a 128 trunk (capacity loss, rejected), or this. A one-knob version does not
+# exist. Do NOT quote this arm as evidence about base_channels, pool_layers or conv_layers singly.
+#
+# WHY. Three pure strided HealpyPseudoConv stages take 512 -> 64 before ANY graph convolution runs, so
+# the first genuine conv is at nside 64 and no equivariant conv ever touches the finest, most
+# non-Gaussian scales. This rebalance spends one pooling stage to buy a conv stage, putting the first
+# real conv at nside 128 instead of 64 -- four times the pixels, i.e. genuinely finer spatial
+# structure entering the learned filters.
+#
+# HOW IT DIFFERS FROM injection_conv.yaml. That arm ADDS a conv at the fusion seam (nside 256), on the
+# fused stream, at the pinch width. This one MOVES existing capacity finer in the trunk, at full trunk
+# width, and is not specifically about the seam. Together they bracket the question "does the GCNN lose
+# because it convolves too coarsely?" -- one answer at the seam, one in the body.
+#
+# A SIDE EFFECT ON THE FUSION SEAM, WHICH IS REAL BUT ARGUED TO BE INCONSEQUENTIAL.
+# split_Fin -- the fusion width -- is the fine stream's width at the seam, which in the standard
+# schedule equals base_channels. Doubling base_channels to 128 therefore ALSO doubles the cross-probe
+# fusion width, 64 -> 128, as a side effect, so this arm is not purely a conv-placement change.
+# It was originally to be disentangled by `wide_pinch.yaml` (fusion_width 256, schedule untouched).
+# That arm is now in `_deferred/`: checking it against the code showed the seam is NOT a bottleneck,
+# because the coarse stream carries only 4 CHANNELS (bench_v7_full logs "coarse group nside=256
+# (4 ch)"), so the concat entering injection_fuse has effective per-pixel dimension <= 64 + 4 = 68,
+# not 128, and fusing 68 -> 64 drops at most FOUR directions. At base_channels 128 the same
+# arithmetic gives <= 128 + 4 = 132 fused to 128: still at most four. The widened seam therefore
+# cannot plausibly drive a result here, and a win IS attributable to the conv placement.
+# See _deferred/wide_pinch.yaml for the full argument -- including that the seam is entirely LINEAR
+# (injection_fuse has no activation and HealpyPseudoConv's relu follows its own linear op), which is
+# the finding that actually matters and which injection_conv.yaml partly addresses.
+#
+# WHAT IS ALREADY MEASURED-DEAD in the downsampling phase (re-scored paired on 1000 mocks from
+# bench_v4, whose original 16-mock ranking was invalid) -- do not re-try: poly_degree 8 (0.970),
+# less_cheby (0.973), bernstein (0.928), graph_unet_256 (0.866), fusion bilinear (1.010, wash),
+# deep_trunk (0.980), and wide_shallow vs w64 (0.985, so trunk DEPTH 5->2 is neutral). The conv basis
+# and degree are settled at cheby/K=5. conv_widen and graph_unet are dead.
+#
+# LINEAGE: bench_v5's `_deferred/convnext_poolsplit.yaml` is the ancestor of this arm (benched at
+# 355 ms/step, the slowest in that sweep, and never run). This is its bench_v7-champion port.
+# NEW CHECKPOINT LINEAGE -- every layer width and the layer count change.
+#
+# SIZING: WALL-CLOCK BUDGET -- 79.2 ks of training over a 2-job chain, identical to every other arm.
+# This is the most expensive arm in the round and was the most likely to be mis-sized: a real graph conv
+# at nside 128 has 4x the pixels of one at 64, AND base_channels doubling widens every stage, while the
+# only prior measurement (bench_v5's 355 ms/step) was at base 32 on the CLASSIC block -- a different
+# width AND a different block, so doubly inapplicable. n_steps: auto + wall_budget_seconds makes the
+# question moot: the arm trains for its allotted seconds at whatever rate this geometry achieves, and
+# the cosine anneals to zero exactly when they are spent, so the eval tail is guaranteed either way.
+#
+# FOR REFERENCE ONLY, NOT USED FOR SIZING: rate probe 3057101 held a steady ~1.34-1.35 it/s over 1382
+# steps on nid006874 before being cancelled -- so this arm is roughly 2x the parent's step cost, close
+# to what was guessed, and it will buy the fewest optimizer steps of any arm here (~106 k at that rate).
+# Read the real number from throughput.json, and weigh a result against the parent's step count the same
+# way injection_conv.yaml describes: at equal wall, fewer steps is part of the cost of the knob.
+#
+# WATCH THE cuSPARSE CEILING. base_channels 128 raises nnz*Fout at every stage, and the hard limit is
+# `output.shape[1] * nnz(a) > 2^31` in split_sparse_dense_matmul. It does not bite at batch 16 on the
+# base-64 configs, but this arm is the widest in the round -- if the rate probe dies with that error
+# rather than a rate, that is why, and the fix is a smaller batch, not a smaller n_steps.
+#
+# Launch: 2-job afterany chain, MODEL_DIR=bench_v8_poolsplit. See README.md.
+# ============================================================================
+name: deepsphere_default
+
+training:
+  n_steps: auto  # bounded by wall_budget_seconds alone; the step count reached is an OUTPUT, recorded
+                 # in throughput.json. At the observed ~1.35 it/s this is ~107 k -- reference, not a cap.
+  wall_budget_seconds: 79200  # TRAINING seconds for the WHOLE run, summed across the 2-job chain.
+                              # The cosine spans all of it and anneals to zero when it is spent.
+  job_budget_seconds: 39600  # this job's share (11 h of 12 h; ~1 h left for the eval tail). Job 1
+                             # stops here and checkpoints cleanly rather than being killed at the wall.
+  output_every: Null
+  checkpoint_every: 5000  # job 2 restores the last checkpoint -- smaller = less lost handoff work
+  vali_every: 1000
+  eval_every: Null
+
+optimization:
+  optimizer: adam
+  gradient_clipping:
+    clip_by_value: null
+    clip_by_norm: null
+    clip_by_global_norm: 1.0
+  mutual_info_loss:
+    learning_rate: 1.0e-4
+    optimizer_kwargs:
+      beta_1: 0.9
+      beta_2: 0.999
+    scheduler: cosine
+    warmup_steps: 5000
+    warmup_init_learning_rate: 1.0e-5
+    decay_alpha: 0.0
+    ema_momentum: null
+
+network:
+  name: resnet
+  spmm_backend: csr
+  n_neighbors: 60
+  max_checkpoints: 50
+  save_second_to_last_layer: False
+  z_bank_size: Null
+  input_norm: true
+  # Multi-resolution: clustering (fwhm >= 57') is smoothed and injected at nside 256; lensing stays
+  # native. The pooling stack must still reach 256 exactly or split_layers_at_nside raises -- with
+  # pool_layers 2 the first stage still lands on 256, so the seam is unchanged in POSITION (though its
+  # width doubles to 128 with base_channels; see the confound note in the header).
+  smooth_nside:
+    clustering: 256
+  map_pool: mean  # the winning readout: +32.1% paired over flatten at base 64, on 95% of mocks
+  map_feature_dim: null  # no projection: the 512-d pooled map goes straight to map_norm + concat
+  cls:
+    n_bins: 16
+    transform: asinh_per_feature
+    asinh_default_scale: null
+    embedding_layers: [512, 512, 512, 512]  # last entry 512 balances the 512-d pooled map; fused = 1024
+    embedding_dropout_rate: 0.1
+  kwargs:
+    base_channels: 128  # knob 1 of 3: doubled ONLY to hold the trunk at 128 * 2^2 = 512 (see header)
+    pool_layers: 2  # knob 2 of 3: one fewer pure pooling stage
+    conv_layers: 3  # knob 3 of 3: one more graph-conv pooling stage -> first real conv at nside 128
+    residual_layers: 5
+    residual_block_type: convnext
+    mlp_ratio: 4
+    layer_scale_init: 1.0e-6
+    drop_path_rate: 0.1
+    poly_degree: 5
+    head_type: "dense"
+    dense_layers: []
+    dropout_rate: 0.1
+    residual_attention_every: 2  # body is nside 16 (~448 tokens)
+    residual_attention:
+      num_heads: 8          # body is 512 ch -> key_dim = 512/8 = 64, matching the transformer
+      n_layers: 1
+      mlp_ratio: 2.0        # attention-block MLP ratio (distinct from the ConvNeXt mlp_ratio above)
+      dropout_rate: 0.1
+      positional_embedding: true   # learnable per-token pos-emb over the fixed nside-16 footprint
+      layer_scale_init: 1.0e-4     # near-identity init
+
+dset:
+  training:
+    common:
+      is_eval: False
+      n_readers: 32
+      n_prefetch: 4
+      n_workers: Null
+    grid:
+      local_batch_size: 16
+      file_name_shuffle_buffer: 64
+      examples_shuffle_buffer: 256
+  validation:
+    n_batches: 50
+    common:
+      is_eval: True
+      n_readers: 8
+      n_prefetch: 2
+      n_workers: 16
+    grid:
+      local_batch_size: 16
+  eval:
+    common:
+      is_eval: True
+      n_readers: 64
+      n_prefetch: 2
+      n_workers: Null
+    grid:
+      local_batch_size: 16

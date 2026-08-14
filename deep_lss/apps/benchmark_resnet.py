@@ -172,6 +172,9 @@ def run_single(args):
                         "poly_degree": net_conf["network"]["kwargs"].get("poly_degree", 5),
                         "conv_type": net_conf["network"]["kwargs"].get("conv_type", "cheby"),
                     },
+                    # also a top-level network key, for the same reason as injection_conv_layers
+                    fusion_width=net_conf["network"].get("fusion_width", None),
+                    fuse_act=net_conf["network"].get("fuse_act", None),
                 )
             network = ResNetMapsPlusCLSNetwork(
                 conv_layers=None if is_multires_gcnn else net_spec.get_conv_layers(),
@@ -194,6 +197,7 @@ def run_single(args):
                 map_feature_dim=net_conf["network"].get("map_feature_dim", None),
                 map_encoder=map_encoder,
                 map_pool=net_conf["network"].get("map_pool", None),
+                map_pool_multiscale=net_conf["network"].get("map_pool_multiscale", False),
             )
             if network.gcnn is not None:
                 network.gcnn.build((batch_size, len(smooth_indices), n_z_bins))
@@ -217,6 +221,9 @@ def run_single(args):
                         "poly_degree": net_conf["network"]["kwargs"].get("poly_degree", 5),
                         "conv_type": net_conf["network"]["kwargs"].get("conv_type", "cheby"),
                     },
+                    # also a top-level network key, for the same reason as injection_conv_layers
+                    fusion_width=net_conf["network"].get("fusion_width", None),
+                    fuse_act=net_conf["network"].get("fuse_act", None),
                 )
                 network(tf.zeros((2, len(smooth_indices), n_z_bins)), training=False)
                 dynamic_input = True

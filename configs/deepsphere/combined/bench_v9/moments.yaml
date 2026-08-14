@@ -1,0 +1,200 @@
+# ============================================================================
+# bench_v9 — COMBINED, "moments": climb the MOMENT LADDER at the readout.
+#
+# PARENT: bench_v8/mean_std.yaml. THE ONLY KNOB: map_pool "mean_std" -> "moments".
+#
+# WHY THIS ARM. The readout is the only lever in this programme that has ever paid twice, and it is
+# the cheapest place in the network to work -- it acts on the trunk's final nside-16 feature map, so
+# it adds no depth, no spatial operator and negligible FLOPs. The two measured rungs:
+#     flatten -> mean        1.321  (+32.1%, bench_v5, on 95% of mocks)
+#     mean    -> mean_std    1.053  (+5.3%,  bench_v8, CI [1.044, 1.065])
+# Meanwhile every bench_v8 arm that added machinery to the TRUNK lost: injection_conv 0.836,
+# poolsplit 0.887, fuse_act 0.905, unet_k8 0.933. The empirical prior in this recipe is that trunk
+# complexity does not pay and readout richness does. This arm follows that prior.
+#
+# WHAT IT COMPUTES. mean_std keeps the first two moments per channel. This keeps four:
+#     m1 = mean(x)
+#     m2 = std(x)                               = sqrt(E[(x-m1)^2] + eps)
+#     m3 = E[(x-m1)^3] / m2^3                   standardized skewness
+#     m4 = E[(x-m1)^4] / m2^4                   standardized kurtosis
+#     x_flat = concat([m1, m2, m3, m4])         (B, 512) -> (B, 2048)
+# STANDARDIZE m3/m4, do not use raw central moments: the raw third and fourth moments of a
+# LayerNorm'd feature map span orders of magnitude across channels and would arrive at map_norm with
+# a conditioning problem the mean/std pair does not have. Reuse mean_std's guard -- m2 is
+# sqrt(var + 1.0e-6) already, and dividing by m2^3 / m2^4 inherits it, so a dead channel gives 0/eps^k
+# rather than a NaN.
+#
+# WHY MOMENTS AND NOT SOMETHING MORE GENERAL. A learned Deep-Sets phi (pointwise MLP then mean)
+# subsumes this and every fixed statistic, and GeM / soft quantiles are the order-statistic cousins.
+# All three were considered and DEFERRED, deliberately: the seed floor on this comparison is 1.5%, so
+# an arm has to clear ~2% to be real and, given that adopting it raises the permanent complexity of
+# the default network, ~4-5% to be worth keeping. mean_std cleared that at +5.3%. A learned phi whose
+# plausible payoff is low single digits does not justify the mechanism it adds, and the fixed moment
+# ladder is in any case the well-conditioned, physically-motivated initialization of exactly that
+# family. If this arm wins big, `learned_phi` is the follow-up; if it is null, the family is closed.
+#
+# THE PHYSICS, WHICH IS WHY THE THIRD MOMENT SPECIFICALLY. The moments of the convergence field are
+# the classical non-Gaussian statistic in weak lensing, and the THIRD moment is the one that breaks
+# the Om-sigma8 degeneracy that the variance alone leaves. Read literally, mean_std's +5.3% is "the
+# network gained the ability to form a variance at readout". Skewness is the next term in the same
+# expansion, not an arbitrary extension. This is the one place in the round where the extra capacity
+# has a named statistic behind it rather than a capacity argument.
+#
+# WHAT IT COSTS. Two more reductions over the pixel axis. Compute is negligible -- like mean_std and
+# unlike injection_conv, this arm buys very nearly as many steps as its parent within the same wall,
+# so it is not paying for the test in budget and a null here is interpretable.
+#
+# !! THE CONFOUND, INHERITED FROM mean_std AND TWICE AS LARGE. !!
+# The map readout goes 1024 -> 2048, so the fused vector goes 1536 -> 2560 and the map branch's share
+# of it goes from 2/3 to 4/5 against the 512-d Cls embedding. mean_std already moved that balance and
+# could not separate "second moment" from "wider concat"; this arm moves it further in the same
+# direction, so the two remain entangled and a win still cannot be attributed cleanly between the
+# statistic and the width. The control that separates them (`mean_wide`: map_pool mean at a matched
+# fused width) was designed for this round and CUT before launch -- so if this arm wins, that control
+# becomes the required follow-up before either result is quoted as being about moments at all.
+# Noted, not corrected: pinning the width with map_feature_dim would confound differently, by
+# inserting a projection the pooled-readout lineage deliberately has no
+# (the 59M-param flatten projection is exactly what map_feature_dim was removed to avoid).
+#
+# !! ROBUSTNESS GATE, AND THIS ARM HAS A SPECIFIC PRIOR, NOT A GENERIC ONE. !!
+# Measured on v18 2026-08-14, posterior shift in units of the fiducial width, worst over the eight
+# contaminated mocks and (Om, S8, w0):
+#     every GCNN arm      0.58 - 0.78 sigma      (all on dmo/S8)
+#     bench_v8_mean_std   0.72 sigma             vs the anchor bench_v7_full at 0.70 -- NO COST
+#     bench_v7_transformer 1.65 sigma            (source_clustering_in_place/S8; sc_gatti 1.32)
+#     bench_v7 (Cls)      1.66 sigma             (source_clustering_gatti/S8)
+# So the readout change to mean_std cost nothing in robustness, which is the precedent for this arm.
+# But higher moments weight the TAILS of the feature distribution, and tails are where baryons and
+# source clustering live -- so this arm is more exposed than its parent by construction, and the
+# prior is genuinely weaker than mean_std's was.
+# GATE ON source_clustering_in_place AND source_clustering_gatti, NOT on the worst-overall number:
+# dmo biases every architecture by +0.58 to +0.97 sigma regardless of compression (it is a baryon
+# marginalization property, not an architecture one) and will always win a max, while source
+# clustering spreads 0.0 -> 1.66 across runs and is the axis that actually discriminates.
+#
+# CODE -- REQUIRED BEFORE THIS CAN LAUNCH, DOES NOT EXIST YET.
+# nets/composite/resnet_maps_plus_cls.py currently validates `map_pool not in (None, "mean",
+# "mean_std")` (:126) and branches on it in call() (:197-210). This arm needs a third branch plus the
+# validation tuple. Plumb it through ALL THREE entry points that build the network --
+# apps/run_training.py:977, apps/run_evaluation.py:409, apps/benchmark_resnet.py:199 -- which all
+# read `net_conf["network"].get("map_pool", None)` today and so already carry the string, but VERIFY
+# rather than assume: bench_v8 found run_evaluation.py silently not forwarding injection_conv_layers,
+# which would have TRAINED WITH the conv and EVALUATED WITHOUT it. That class of failure does not
+# raise -- expect_partial() swallows it.
+# Keep the key at network.* level, NOT under kwargs: -- kwargs is a bare ** splat and silently
+# swallows unknown names, which is the commonest way an arm ends up secretly running the control.
+# NEW CHECKPOINT LINEAGE -- the readout width changes 1024 -> 2048, so this neither restores from a
+# mean_std checkpoint nor donates to one. Launch RUN_NUM=1 into its own MODEL_DIR.
+#
+# SIZING: WALL-CLOCK BUDGET -- 79.2 ks of training over a 2-job chain, matched to bench_v8_mean_std
+# and to every bench_v8 arm, so the comparison is like-for-like on wall. n_steps: auto +
+# wall_budget_seconds (throughput.WallClockBudget, f98facf): the cosine is parameterised by wall
+# clock, anneals to zero exactly when the budget is spent, and the eval tail is guaranteed whatever
+# rate the run achieves. n_steps is an OUTPUT (throughput.json). No rate probe needed -- the readout
+# is nearly free, so this arm's step count should land within a few percent of mean_std's 260000.
+#
+# Launch: 2-job afterany chain, MODEL_DIR=bench_v9_moments, RUN_NUM=1. See README.md.
+# ============================================================================
+name: deepsphere_default
+
+training:
+  n_steps: auto  # bounded by wall_budget_seconds alone; the step count reached is an OUTPUT, recorded
+                 # in throughput.json next to the model.
+  wall_budget_seconds: 79200  # TRAINING seconds for the WHOLE run, summed across the 2-job chain.
+                              # The cosine spans all of it and anneals to zero when it is spent.
+  job_budget_seconds: 39600  # this job's share (11 h of 12 h; ~1 h left for the eval tail). Job 1
+                             # stops here and checkpoints cleanly rather than being killed at the wall.
+  output_every: Null
+  checkpoint_every: 5000  # job 2 restores the last checkpoint -- smaller = less lost handoff work
+  vali_every: 1000
+  eval_every: Null
+
+optimization:
+  optimizer: adam
+  gradient_clipping:
+    clip_by_value: null
+    clip_by_norm: null
+    clip_by_global_norm: 1.0
+  mutual_info_loss:
+    learning_rate: 1.0e-4
+    optimizer_kwargs:
+      beta_1: 0.9
+      beta_2: 0.999
+    scheduler: cosine
+    warmup_steps: 5000
+    warmup_init_learning_rate: 1.0e-5
+    decay_alpha: 0.0
+    ema_momentum: null
+
+network:
+  name: resnet
+  spmm_backend: csr
+  n_neighbors: 60
+  max_checkpoints: 50
+  save_second_to_last_layer: False
+  z_bank_size: Null
+  input_norm: true
+  # Multi-resolution: clustering (fwhm >= 57') is smoothed and injected at nside 256; lensing stays
+  # native. Needs scale_cuts.clustering.theta_fwhm_base in the scales config (8wl,32gc has it).
+  smooth_nside:
+    clustering: 256
+  # <-- THE ONLY KNOB vs bench_v8/mean_std.yaml: [mean, std] -> [mean, std, skew, kurt] with the
+  # third and fourth STANDARDIZED by m2^3 / m2^4. (B,1024) -> (B,2048). NEW CODE, see the header.
+  map_pool: moments
+  map_feature_dim: null  # no projection: the 2048-d pooled map goes straight to map_norm + concat
+  cls:
+    n_bins: 16
+    transform: asinh_per_feature
+    asinh_default_scale: null
+    embedding_layers: [512, 512, 512, 512]  # NOTE: 512 against a 2048-d map -- see the confound block
+    embedding_dropout_rate: 0.1
+  kwargs:
+    base_channels: 64  # pool_widen doubles per pool stage -> trunk 64 * 2^3 = 512 (pinned across probes)
+    pool_layers: 3
+    conv_layers: 2
+    residual_layers: 5
+    residual_block_type: convnext
+    mlp_ratio: 4
+    layer_scale_init: 1.0e-6
+    drop_path_rate: 0.1
+    poly_degree: 5
+    head_type: "dense"
+    dense_layers: []
+    dropout_rate: 0.1
+    residual_attention_every: 2  # body is nside 16 (~448 tokens)
+    residual_attention:
+      num_heads: 8          # body is 512 ch -> key_dim = 512/8 = 64, matching the transformer
+      n_layers: 1
+      mlp_ratio: 2.0        # attention-block MLP ratio (distinct from the ConvNeXt mlp_ratio above)
+      dropout_rate: 0.1
+      positional_embedding: true   # learnable per-token pos-emb over the fixed nside-16 footprint
+      layer_scale_init: 1.0e-4     # near-identity init
+
+dset:
+  training:
+    common:
+      is_eval: False
+      n_readers: 32
+      n_prefetch: 4
+      n_workers: Null
+    grid:
+      local_batch_size: 16
+      file_name_shuffle_buffer: 64
+      examples_shuffle_buffer: 256
+  validation:
+    n_batches: 50
+    common:
+      is_eval: True
+      n_readers: 8
+      n_prefetch: 2
+      n_workers: 16
+    grid:
+      local_batch_size: 16
+  eval:
+    common:
+      is_eval: True
+      n_readers: 64
+      n_prefetch: 2
+      n_workers: Null
+    grid:
+      local_batch_size: 16

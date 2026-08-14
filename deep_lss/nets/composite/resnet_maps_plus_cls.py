@@ -26,6 +26,12 @@ from deepsphere import HealpyGCNN
 from msfm.utils import logger
 
 from deep_lss.nets.layers.cls.binning import ClsBinningAndTransformLayer
+from deep_lss.nets.layers.maps.readout import (
+    assemble_scale_taps,
+    count_scale_taps,
+    forward_with_pool_taps,
+    moment_pool,
+)
 
 LOGGER = logger.get_logger(__file__)
 
@@ -58,6 +64,7 @@ class ResNetMapsPlusCLSNetwork(tf.keras.Model):
         map_feature_dim=None,
         map_encoder=None,
         map_pool=None,
+        map_pool_multiscale=False,
         spmm_backend="csr",
     ):
         """
@@ -105,6 +112,41 @@ class ResNetMapsPlusCLSNetwork(tf.keras.Model):
                 trunk runs on footprint pixels only (no padding), so the plain mean is the footprint mean.
                 Separate checkpoint lineage (changes ``map_projection``'s input width): restore only with
                 the same ``map_pool``.
+
+                ``"mean_std"`` concatenates the per-channel standard deviation ACROSS the pixel axis
+                onto the mean, giving ``(B, 2*n_ch)``. Motivation: ``"mean"`` keeps only the first
+                moment, so it discards all across-sky variance — and since the GCNN trunk is a stack of
+                LOCAL graph convolutions, a plain mean readout is approximately "the average of local
+                statistics". For a field whose cosmological information is largely non-Gaussian that
+                variance is signal, and a per-channel spatial variance is a direct second-moment
+                statistic the head would otherwise have to do without. Compute is negligible (one extra
+                reduction); the cost is that the fused width doubles, so it also rebalances the map
+                branch against the Cls embedding — see ``map_feature_dim`` if that needs pinning back.
+                Separate checkpoint lineage from ``"mean"`` (different readout width).
+
+                ``"moments"`` appends the STANDARDIZED third and fourth central moments on top of
+                ``"mean_std"``, giving ``(B, 4*n_ch)``. The moments of the convergence field are the
+                classical non-Gaussian statistic in weak lensing and the third is the one that breaks
+                the Om-sigma8 degeneracy the variance alone leaves, so this is the next term in the
+                same expansion rather than an arbitrary extension. See ``moment_pool``.
+            map_pool_multiscale (bool): apply ``map_pool``'s reduction at EVERY resolution of the map
+                branch instead of only at the trunk output, concatenating the results. Requires a
+                pooled ``map_pool`` (the flatten readout has no scale structure to tap).
+
+                Taps are the output of each downsampling stage plus the trunk output — for the
+                multi-res encoder the fused seam is included as the finest tap, since that is where
+                both probes first meet. Each tap is reduced independently and gets its OWN
+                LayerNorm before the concatenation: the taps have very unequal widths (the trunk is
+                typically 8-16x the seam), and a single LayerNorm over the concatenated vector would
+                take its statistics almost entirely from the widest tap and squash the fine scales —
+                which are exactly the ones carrying the non-Gaussian signal this readout exists to
+                keep. Per-tap normalization costs ~2*sum(widths) parameters, i.e. nothing.
+
+                Only meaningful on an encoder that actually convolves at several resolutions (the
+                U-net schedule: ``pool_layers`` 1, ``conv_layers`` 4, ``conv_widen``). On the default
+                trunk the first stages are pure strided pseudo-convs with no graph convolution until
+                nside 64, so the fine taps would pool barely-processed downsampled maps.
+                Separate checkpoint lineage (readout width, and the per-tap norms are new variables).
         """
         super().__init__()
 
@@ -112,9 +154,15 @@ class ResNetMapsPlusCLSNetwork(tf.keras.Model):
             raise ValueError("pass exactly one of conv_layers (single-res GCNN) or map_encoder (multi-res)")
         if map_encoder is not None and any(a is not None for a in (n_side, indices, initial_Fin)):
             raise ValueError("map_encoder owns the map branch — n_side/indices/initial_Fin must be None")
-        if map_pool not in (None, "mean"):
-            raise ValueError(f"map_pool must be None (flatten) or 'mean', got {map_pool!r}")
+        if map_pool not in (None, "mean", "mean_std", "moments"):
+            raise ValueError(f"map_pool must be None (flatten), 'mean', 'mean_std' or 'moments', got {map_pool!r}")
+        if map_pool_multiscale and map_pool is None:
+            raise ValueError(
+                "map_pool_multiscale requires a pooled map_pool ('mean', 'mean_std' or 'moments'); "
+                "the flatten readout has no scale structure to tap"
+            )
         self.map_pool = map_pool
+        self.map_pool_multiscale = map_pool_multiscale
 
         # keep the single-res attribute creation order unchanged (object-based checkpointing is
         # structure-sensitive; a None attribute is untracked, so the map_encoder path adds no
@@ -148,6 +196,21 @@ class ResNetMapsPlusCLSNetwork(tf.keras.Model):
             tf.keras.layers.Dense(map_feature_dim, name="map_projection") if map_feature_dim is not None else None
         )
 
+        # Per-tap LayerNorm for the multi-scale readout, one per scale, applied BEFORE the taps are
+        # concatenated. The taps have very unequal widths (trunk typically 8-16x the seam), so a
+        # single norm over the concatenation would draw its statistics almost entirely from the
+        # widest tap. Left as None when multiscale is off, which keeps it untracked and leaves every
+        # existing checkpoint lineage's object graph unchanged.
+        if map_pool_multiscale:
+            n_taps = (
+                1 + count_scale_taps(map_encoder.gcnn_post) if map_encoder is not None else count_scale_taps(self.gcnn)
+            )
+            self.scale_norms = [
+                tf.keras.layers.LayerNormalization(axis=-1, name=f"scale_norm_{i}") for i in range(n_taps)
+            ]
+        else:
+            self.scale_norms = None
+
         # Separate LayerNorm per branch so the high-dimensional map features and the
         # compact Cls features are independently normalised before the embedding / concatenation.
         self.map_norm = tf.keras.layers.LayerNormalization(axis=-1, name="map_norm")
@@ -159,7 +222,9 @@ class ResNetMapsPlusCLSNetwork(tf.keras.Model):
         dense_widths = [layer.units for layer in cls_embedding_layers if hasattr(layer, "units")]
         cls_out_dim = dense_widths[-1] if dense_widths else self.cls_layer.n_cls_flat
         LOGGER.warning(
-            f"ResNetMapsPlusCLSNetwork: map_pool={map_pool or 'None (flatten)'}, map_feature_dim="
+            f"ResNetMapsPlusCLSNetwork: map_pool={map_pool or 'None (flatten)'}, "
+            f"map_pool_multiscale={map_pool_multiscale}"
+            f"{f' ({len(self.scale_norms)} scale taps)' if map_pool_multiscale else ''}, map_feature_dim="
             f"{map_feature_dim if map_feature_dim is not None else 'None (raw flattened GCNN features)'}, "
             f"n_cls_bins={n_cls_bins}, n_z_cross={len(l_max_per_pair)}, "
             f"cls_flat_dim={self.cls_layer.n_cls_flat}, "
@@ -182,13 +247,38 @@ class ResNetMapsPlusCLSNetwork(tf.keras.Model):
 
         # Map branch: GCNN (or multi-res encoder) → pool/flatten → (project) → normalise
         map_branch = self.map_encoder if self.map_encoder is not None else self.gcnn
-        x = map_branch(maps, training=training)  # (batch, n_pix_reduced, n_ch)
-        if self.map_pool == "mean":
-            # permutation-invariant readout mirroring the transformer's masked-mean token pool:
-            # average over the (footprint-only) pixel axis instead of flattening + linear-crushing.
-            x_flat = tf.reduce_mean(x, axis=1)  # (B, n_ch)
+        if self.map_pool_multiscale:
+            # Multi-scale readout: reduce at every resolution, not just the trunk. The multi-res
+            # encoder assembles its own taps (it owns the seam, the finest point at which both probes
+            # are present); the single-res branch is walked here.
+            if self.map_encoder is not None:
+                x, scale_taps = self.map_encoder(maps, training=training, return_taps=True)
+            else:
+                x, pool_taps = forward_with_pool_taps(self.gcnn, maps, training=training)
+                scale_taps = assemble_scale_taps(pool_taps, x)
+            # zip truncates silently, and a dropped tap is a smaller readout that still trains and
+            # still scores -- exactly the kind of mislabelled result that is unrecoverable later.
+            if len(scale_taps) != len(self.scale_norms):
+                raise ValueError(
+                    f"multi-scale readout got {len(scale_taps)} taps but {len(self.scale_norms)} norms were "
+                    "built at construction; count_scale_taps disagrees with the forward pass"
+                )
+            # each scale normalised on its own before the concat -- see __init__ for why
+            x_flat = tf.concat(
+                [
+                    norm(moment_pool(t, self.map_pool), training=training)
+                    for norm, t in zip(self.scale_norms, scale_taps)
+                ],
+                axis=-1,
+            )
         else:
-            x_flat = tf.reshape(x, (tf.shape(x)[0], -1))  # (B, n_map_flat)
+            x = map_branch(maps, training=training)  # (batch, n_pix_reduced, n_ch)
+            if self.map_pool is not None:
+                # permutation-invariant readout mirroring the transformer's masked-mean token pool:
+                # reduce over the (footprint-only) pixel axis instead of flattening + linear-crushing.
+                x_flat = moment_pool(x, self.map_pool)  # (B, n_ch), (B, 2*n_ch) or (B, 4*n_ch)
+            else:
+                x_flat = tf.reshape(x, (tf.shape(x)[0], -1))  # (B, n_map_flat)
         if self.map_projection is not None:
             x_flat = self.map_projection(x_flat)  # (B, map_feature_dim); small n_ch->dim Dense when pooled
         x_flat = self.map_norm(x_flat, training=training)

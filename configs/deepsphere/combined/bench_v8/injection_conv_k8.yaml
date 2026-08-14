@@ -1,0 +1,209 @@
+# ============================================================================
+# bench_v8 — COMBINED, "injection_conv_k8": the SAME nside-256 fused conv, on a SPARSE graph.
+#
+# PARENT: bench_v8/injection_conv.yaml. THE ONLY KNOB: network.n_neighbors 60 -> 8.
+# Everything else -- injection_conv_layers 1, ConvNeXt + DropPath 0.1, trunk 512, poly_degree 5,
+# the 79.2 ks wall budget -- is byte-identical to the parent.
+#
+# WHY THIS KNOB HAS NEVER BEEN TOUCHED, AND WHY IT SHOULD HAVE BEEN.
+# `n_neighbors: 60` appears in ALL 40 deepsphere configs in this repo and has not been varied in a
+# single round from bench_v4 through bench_v8. 60 is the MAXIMUM of the four supported values
+# ({8, 20, 40, 60}, enforced in healpy_networks.py:43); deepsphere's own HealpyGCNN default is 8 and
+# the deep_lss model classes default to 20. So the whole architecture programme has been run at the
+# most expensive graph available, by inheritance rather than by measurement.
+#
+# THE COST MODEL -- WHY 60 IS NEARLY FREE IN THE TRUNK AND EXPENSIVE AT THE INJECTION.
+# k enters ONLY the sparse `L @ x` term of a Chebyshev conv, whose cost is (K-1) * nnz * Fin with
+# nnz = N_pix * (k+1). The dense term, N_pix * K * Fin * Fout, does not depend on k at all. So the
+# spmm share -- the only part k can shrink -- is set by how NARROW the stream is:
+#
+#   downsampling convs, nside 64/32, 256-512 ch   ~9%  of that layer
+#   ConvNeXt body, nside 16, 512 ch               ~6%  (depthwise, but the 8*C^2 MLP dominates)
+#   THE INJECTION CONV, nside 256, 64 -> 64 ch    ~43%   <-- this arm's target
+#
+# At nside 256 the Laplacian carries nnz ~= 786432 * 61 ~= 4.8e7 non-zeros against a 64-channel
+# stream; at k=8 that falls to ~7.1e6. Predicted effect on the layer: ~1.6x cheaper. Network-wide, by
+# contrast, k=8 would buy only ~6% on the PARENT-of-the-parent (bench_v7/full.yaml, whose every graph
+# conv runs at nside <= 64 because three pure strided HealpyPseudoConv stages take 512 -> 64 first) --
+# which is inside the 24% node-to-node rate variation already measured on combined, i.e. invisible.
+# THAT IS THE POINT: this knob is not a general economy measure, it is what makes a HIGH-RESOLUTION
+# conv affordable, and it is only worth spending where the stream is narrow.
+#
+# TREAT 1.6x AS AN UPPER BOUND. FLOPs badly under-predict this layer: they say the parent's conv adds
+# ~+21% to the network, while the parent is MEASURED at 1.27 it/s against ~3.43 for this round's
+# cheap arms (job 3072314 vs 3072303/3072307/3072310, 2026-08-13) -- 2.7x, so the layer is
+# bandwidth-bound, not FLOP-bound. The saving should still be largely real, because the spmm's gather
+# traffic scales with nnz, but the K-fold Chebyshev activation stack (K * N * Fin * batch ~= 16 GB at
+# nside 256) is UNCHANGED by k. Do not promise 1.6x; read throughput.json.
+#
+# WHY THIS ARM EXISTS AT ALL: THE PARENT'S HANDICAP IS BIGGER THAN ITS README ASSUMED.
+# injection_conv.yaml sized its bet on "~1.7-2.1x fewer optimizer steps". The measured figure is
+# 2.7x. At ~+7% per 2x of budget on this recipe (the `long` arm's measured value) the parent now
+# carries roughly a -11% step handicap that has NOTHING to do with the mechanism it is testing. Per
+# the bench-config rule, a WIN under equal wall would still be strong, but a NULL OR LOSS from an arm
+# that slow is uninterpretable. This arm's job is to shrink the handicap until the mechanism itself is
+# what is being measured.
+#
+# THE RECEPTIVE-FIELD TRADE -- THE ONE WAY THIS CAN LOSE ON PHYSICS RATHER THAN PRICE.
+# k and K both buy reach, and cutting k shortens it. On HEALPix k=8 is the immediate neighbour ring, a
+# one-pixel hop = 13.7' at nside 256, so K=5 reaches ~1 deg. At k=60 the hop is ~4 px (k neighbours
+# ~ pi r^2 -> r ~ sqrt(k/pi)), so K=5 reaches ~4 deg. For clustering, smoothed to fwhm >= 57', a 4 deg
+# kernel is largely averaging over its own beam, and for lensing the non-Gaussian signal lives at the
+# small scales -- so ~1 deg is arguably the BETTER-matched kernel here, not merely the cheaper one.
+# That is the substantive hypothesis, and it is falsifiable: if the 4 deg reach was doing real work,
+# this arm loses beyond the seed floor.
+#
+# Note the scaling, for later: cost ~ K*k while reach ~ K*sqrt(k), so at FIXED reach cost ~ sqrt(k) --
+# a small graph with a higher polynomial order is strictly cheaper than a wide graph with a low one.
+# THIS ARM DOES NOT EXERCISE THAT (K stays 5): raising poly_degree alongside k would be a second knob.
+# `poly_degree: 8` measured 0.970 (loses) in bench_v4, but at k=60, where it bought cost without
+# shrinking the graph -- so that result is NOT a test of the small-k/high-K direction. If this arm
+# lands well, (k=8, poly_degree 8-13) at the injection is the natural follow-up, and it is cheap in
+# the depthwise ConvNeXt blocks whose kernel is [C, K] with no C^2 term.
+#
+# HOW TO READ THE RESULT -- four outcomes, all informative:
+#   k8 ~= injection_conv, both > parent : the conv pays; the 4 deg graph was waste. Keep k=8.
+#   k8 >  injection_conv                : the step budget was binding. The mechanism is real and the
+#                                         cheap version is the one that goes into the recipe.
+#   k8 <  injection_conv beyond 1.5%    : the 4 deg reach was load-bearing. The lever is receptive
+#                                         field, not cost -- revisit via poly_degree at k=8.
+#   both < bench_v7_full                : high-resolution cross-probe convolution does not pay on this
+#                                         recipe at any price. With `poolsplit`, that closes it.
+#
+# !! SILENT LINEAGE TRAP -- NO SHAPE GUARD EXISTS FOR THIS KNOB. !!
+# n_neighbors changes the graph Laplacian but NOT any weight shape: the Chebyshev kernel is
+# [K*Fin, Fout] and the depthwise kernel [C, K], neither of which depends on k. A checkpoint from a
+# k=60 run therefore restores into a k=8 network with NO error and silently meaningless filters, and
+# run_training.py's restore uses expect_partial(). NEVER restore across this knob. This arm is a fresh
+# lineage: launch with RUN_NUM=1 into its own MODEL_DIR.
+#
+# !! ROBUSTNESS GATE -- INHERITED, AND IT MAY CUT THE OTHER WAY. !!
+# The parent must be gated on Q2 posterior shift over the systematics mocks, not FoM alone, because
+# source clustering IS a high-resolution cross-probe coupling and the injection conv adds capacity to
+# exploit it (v17: every GCNN <= 0.27 sigma vs t2_cls 0.44, driven by source_clustering at 1.12 where
+# every GCNN is <= 0.25). This arm inherits that gate. But a TIGHTER kernel has LESS reach to exploit a
+# ~arcmin-scale coupling, so k=8 may be both cheaper AND more robust than its parent. That is a
+# prediction to test, not a result -- and note nobody has measured robustness for ANY bench_v7 or
+# bench_v8 arm on v18, where source clustering moved into the shape noise.
+#
+# Minor side benefit: HealpyGCNN builds the PyGSP sphere graph and its sparse matrices on the CPU at
+# construction time, a one-time cost scaling with n_neighbors x nside, so startup shortens too.
+#
+# SIZING: unchanged from the parent -- 79.2 ks of TRAINING over a 2-job chain, the same allocation
+# every other arm in this round and bench_v7_full received. `n_steps: auto` means the step count is an
+# OUTPUT: this arm should reach MORE steps than the parent, and that difference is the thing being
+# bought. Read throughput.json in BOTH run dirs before quoting any ratio.
+#
+# Launch: 2-job afterany chain, MODEL_DIR=bench_v8_injection_conv_k8, RUN_NUM=1.
+# ============================================================================
+name: deepsphere_default
+
+training:
+  n_steps: auto  # bounded by wall_budget_seconds alone; the step count reached is an OUTPUT, recorded
+                 # in throughput.json. Expected ABOVE the parent's ~1.27 it/s -- that is the point.
+  wall_budget_seconds: 79200  # TRAINING seconds for the WHOLE run, summed across the 2-job chain.
+                              # The cosine spans all of it and anneals to zero when it is spent.
+  job_budget_seconds: 39600  # this job's share (11 h of 12 h; ~1 h left for the eval tail). Job 1
+                             # stops here and checkpoints cleanly rather than being killed at the wall.
+  output_every: Null
+  checkpoint_every: 5000  # job 2 restores the last checkpoint -- smaller = less lost handoff work
+  vali_every: 1000
+  eval_every: Null
+
+optimization:
+  optimizer: adam
+  gradient_clipping:
+    clip_by_value: null
+    clip_by_norm: null
+    clip_by_global_norm: 1.0
+  mutual_info_loss:
+    learning_rate: 1.0e-4
+    optimizer_kwargs:
+      beta_1: 0.9
+      beta_2: 0.999
+    scheduler: cosine
+    warmup_steps: 5000
+    warmup_init_learning_rate: 1.0e-5
+    decay_alpha: 0.0
+    ema_momentum: null
+
+network:
+  name: resnet
+  spmm_backend: csr
+  # <-- THE ONLY KNOB vs bench_v8/injection_conv.yaml. 60 (the max) -> 8 (the immediate HEALPix
+  # neighbour ring, and deepsphere's own default). Allowed values are {8, 20, 40, 60} only. This
+  # shrinks nnz(L) at nside 256 from ~4.8e7 to ~7.1e6, cutting the injection conv's spmm term ~6.8x
+  # while leaving every dense term, every weight SHAPE and the K-fold activation stack untouched.
+  # 20 was considered and rejected: it buys only ~1.35x on the injection, not enough to move the
+  # step-budget handicap that motivates the arm.
+  n_neighbors: 8
+  max_checkpoints: 50
+  save_second_to_last_layer: False
+  z_bank_size: Null
+  input_norm: true
+  # Multi-resolution: clustering (fwhm >= 57') is smoothed and injected at nside 256; lensing stays
+  # native. Needs scale_cuts.clustering.theta_fwhm_base in the scales config (8wl,32gc has it).
+  smooth_nside:
+    clustering: 256
+  # Inherited from the parent, NOT a knob here: one channel-preserving graph conv (+LayerNorm) at the
+  # injection nside on the fused stream. Top-level network key on purpose -- `kwargs` below is a bare
+  # ** splat into ResNetLayers and would silently absorb it, leaving the conv off.
+  injection_conv_layers: 1
+  map_pool: mean  # the winning readout: +32.1% paired over flatten at base 64, on 95% of mocks
+  map_feature_dim: null  # no projection: the 512-d pooled map goes straight to map_norm + concat
+  cls:
+    n_bins: 16
+    transform: asinh_per_feature
+    asinh_default_scale: null
+    embedding_layers: [512, 512, 512, 512]  # last entry 512 balances the 512-d pooled map; fused = 1024
+    embedding_dropout_rate: 0.1
+  kwargs:
+    base_channels: 64  # pool_widen doubles per pool stage -> trunk 64 * 2^3 = 512 (pinned across probes)
+    pool_layers: 3
+    conv_layers: 2
+    residual_layers: 5
+    residual_block_type: convnext
+    mlp_ratio: 4
+    layer_scale_init: 1.0e-6
+    drop_path_rate: 0.1
+    poly_degree: 5  # also the injection conv's Chebyshev order K -- unchanged from the parent on purpose
+    head_type: "dense"
+    dense_layers: []
+    dropout_rate: 0.1
+    residual_attention_every: 2  # body is nside 16 (~448 tokens)
+    residual_attention:
+      num_heads: 8          # body is 512 ch -> key_dim = 512/8 = 64, matching the transformer
+      n_layers: 1
+      mlp_ratio: 2.0        # attention-block MLP ratio (distinct from the ConvNeXt mlp_ratio above)
+      dropout_rate: 0.1
+      positional_embedding: true   # learnable per-token pos-emb over the fixed nside-16 footprint
+      layer_scale_init: 1.0e-4     # near-identity init
+
+dset:
+  training:
+    common:
+      is_eval: False
+      n_readers: 32
+      n_prefetch: 4
+      n_workers: Null
+    grid:
+      local_batch_size: 16
+      file_name_shuffle_buffer: 64
+      examples_shuffle_buffer: 256
+  validation:
+    n_batches: 50
+    common:
+      is_eval: True
+      n_readers: 8
+      n_prefetch: 2
+      n_workers: 16
+    grid:
+      local_batch_size: 16
+  eval:
+    common:
+      is_eval: True
+      n_readers: 64
+      n_prefetch: 2
+      n_workers: Null
+    grid:
+      local_batch_size: 16
