@@ -1,16 +1,16 @@
-# Nested hierarchical local-window transformer — lensing, maps + Cls.
+# Nested hierarchical local-window transformer — clustering, maps + Cls.
 # The map transformer and the binned angular power spectra are embedded separately and fused before
-# the regression head. Architecture is the benchmarked winning base, bench_t8/default.yaml.
+# the regression head. Architecture is the benchmarked winning base, bench_t8/default.yaml, same as
+# lensing/maps+cls.yaml; the map branch runs at nside 256 (clustering-only, so smooth_nside 256 is
+# the finest smoothing resolution — no upsample back).
 name: nested_transformer
 
 training:
-  # Unified cross-probe recipe (dev/notes/transformer_v17_unified_recipe_2026-07-19.md): batch 20,
-  # cosine. 150k = ~11 h at the measured 3.85 it/s -> one 12 h job; 150k is this probe's optimum
-  # (250k regressed on all FoM variants). Batch is capped by the ~85 GB NCCL-deadlock band
-  # (24 -> 95 GB), not the OOM ceiling. Step time assumes the 8wl,32gc cut (eager smoothing ~theta_fwhm^2).
-  n_steps: 150000
+  n_steps: auto  # an OUTPUT of the wall-clock budget; see throughput.json
+  wall_budget_seconds: 39600  # TRAINING seconds for the WHOLE run -- 1 x 12 h job
+  job_budget_seconds: 39600  # this job's share (11 h of 12 h; ~1 h for the eval tail)
   output_every: Null
-  checkpoint_every: 10000
+  checkpoint_every: 5000
   vali_every: 1000
   eval_every: Null
 
@@ -33,18 +33,20 @@ optimization:
 
 network:
   name: nested_transformer
-  # sparse-matmul backend for the Gaussian smoothing front-end (the transformer body has no
-  # graph convs): coo / csr (cuSPARSE) / gather (XLA). See deepsphere.utils.make_spmm_operator.
-  # csr is numerically equivalent to coo up to fp32 tolerance and measured faster (-46..-54%).
+  # coo / csr (cuSPARSE) / gather (XLA); csr is numerically equivalent and faster
   spmm_backend: csr
+  # clustering-only, so nside 256 is the finest active smooth_nside and becomes the network's working
+  # resolution (resolve_smooth_nside): the pipeline downsamples the native-res maps to 256 and the
+  # transformer runs on those ~4x fewer pixels (no upsample back to native, unlike combined).
+  smooth_nside:
+    clustering: 256
   token_nside: 16
   z_bank_size: Null
   max_checkpoints: 50
   jit_compile_body: true
   precision: bfloat16
   input_norm: true
-  # exclude footprint-masked pixels from attention/merges/pooling (static mask constants only —
-  # no checkpoint variables, toggling keeps the checkpoint lineage)
+  # exclude footprint-masked pixels from attention/merges/pooling (keeps checkpoint lineage)
   masked_attention: false
   map_feature_dim: 512
   head:
@@ -65,13 +67,10 @@ network:
     mlp_ratio: 4
     layerscale_init: null
     fp32_softmax: true
-    # residual-branch dropout inside every local and global block (variable-free)
     block_dropout_rate: null
-    # positional encoding for the local window attention: null (position-free) or geodesic
-    # (distance-kernel attention bias, zero-init so it starts at the baseline)
+    # null (position-free) or geodesic (distance-kernel attention bias)
     pos_encoding: null
-    # patch merge: concat (order-sensitive concat+Dense) or deepsets (child-permutation-invariant,
-    # requires a pos_encoding)
+    # concat (order-sensitive concat+Dense) or deepsets (needs a pos_encoding)
     merge_op: concat
 
 dset:
@@ -82,7 +81,9 @@ dset:
       n_prefetch: 4
       n_workers: 128
     grid:
-      local_batch_size: 20  # capped by the NCCL band, not by the OOM ceiling — see the n_steps note
+      # I/O-bound (step time tracks bytes/step), so the smaller batch buys nearly free updates
+      # (48 -> 3.3 it/s, 20 -> 7.34 it/s); b20/250k beat every b48/120k variant of the bench_t2 sweep
+      local_batch_size: 16  # matched to the DeepSphere prod batch; inside the ~85 GB NCCL-safe band
       file_name_shuffle_buffer: 64
       examples_shuffle_buffer: 1024
   validation:

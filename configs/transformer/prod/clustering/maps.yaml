@@ -1,17 +1,16 @@
-# Nested hierarchical local-window transformer — clustering, maps + Cls.
-# The map transformer and the binned angular power spectra are embedded separately and fused before
-# the regression head. Architecture is the benchmarked winning base, bench_t8/default.yaml, same as
-# lensing/maps+cls.yaml; the map branch runs at nside 256 (clustering-only, so smooth_nside 256 is
-# the finest smoothing resolution — no upsample back).
+# Nested hierarchical local-window transformer — clustering, maps only.
+# No Cls branch (no `cls:` block, no map_feature_dim): the transformer output is the summary
+# statistic directly. Otherwise identical to clustering/maps+cls.yaml — the benchmarked winning base,
+# bench_t8/default.yaml — with the whole network running at nside 256: clustering is the only active
+# probe, so its smooth_nside 256 is the finest smoothing resolution and sets the input geometry.
 name: nested_transformer
 
 training:
-  # Unified cross-probe recipe (dev/notes/transformer_v17_unified_recipe_2026-07-19.md): batch 20,
-  # cosine. 250k = ~9.5 h at the measured 7.34 it/s + eval+inference tail -> one 12 h job. Step time
-  # assumes the 8wl,32gc cut.
-  n_steps: 250000
+  n_steps: auto  # an OUTPUT of the wall-clock budget; see throughput.json
+  wall_budget_seconds: 39600  # TRAINING seconds for the WHOLE run -- 1 x 12 h job
+  job_budget_seconds: 39600  # this job's share (11 h of 12 h; ~1 h for the eval tail)
   output_every: Null
-  checkpoint_every: 10000
+  checkpoint_every: 5000
   vali_every: 1000
   eval_every: Null
 
@@ -34,13 +33,12 @@ optimization:
 
 network:
   name: nested_transformer
-  # sparse-matmul backend for the Gaussian smoothing front-end (the transformer body has no
-  # graph convs): coo / csr (cuSPARSE) / gather (XLA). See deepsphere.utils.make_spmm_operator.
-  # csr is numerically equivalent to coo up to fp32 tolerance and measured faster (-46..-54%).
+  # coo / csr (cuSPARSE) / gather (XLA); csr is numerically equivalent and faster
   spmm_backend: csr
   # clustering-only, so nside 256 is the finest active smooth_nside and becomes the network's working
   # resolution (resolve_smooth_nside): the pipeline downsamples the native-res maps to 256 and the
   # transformer runs on those ~4x fewer pixels (no upsample back to native, unlike combined).
+  # Raw tfrecord I/O stays at native res (identical to lensing), so the dataloader values transfer.
   smooth_nside:
     clustering: 256
   token_nside: 16
@@ -49,18 +47,10 @@ network:
   jit_compile_body: true
   precision: bfloat16
   input_norm: true
-  # exclude footprint-masked pixels from attention/merges/pooling (static mask constants only —
-  # no checkpoint variables, toggling keeps the checkpoint lineage)
+  # exclude footprint-masked pixels from attention/merges/pooling (keeps checkpoint lineage)
   masked_attention: false
-  map_feature_dim: 512
   head:
     dropout_rate: 0.1
-  cls:
-    n_bins: 16
-    transform: asinh_per_feature
-    asinh_default_scale: null
-    embedding_layers: [512, 512, 512, 512]
-    embedding_dropout_rate: 0.1
   kwargs: # -> HealpixNestedHierarchicalLocalWindowTransformer
     base_embed_dim: 32
     growth: double
@@ -71,13 +61,10 @@ network:
     mlp_ratio: 4
     layerscale_init: null
     fp32_softmax: true
-    # residual-branch dropout inside every local and global block (variable-free)
     block_dropout_rate: null
-    # positional encoding for the local window attention: null (position-free) or geodesic
-    # (distance-kernel attention bias, zero-init so it starts at the baseline)
+    # null (position-free) or geodesic (distance-kernel attention bias)
     pos_encoding: null
-    # patch merge: concat (order-sensitive concat+Dense) or deepsets (child-permutation-invariant,
-    # requires a pos_encoding)
+    # concat (order-sensitive concat+Dense) or deepsets (needs a pos_encoding)
     merge_op: concat
 
 dset:
@@ -90,7 +77,7 @@ dset:
     grid:
       # I/O-bound (step time tracks bytes/step), so the smaller batch buys nearly free updates
       # (48 -> 3.3 it/s, 20 -> 7.34 it/s); b20/250k beat every b48/120k variant of the bench_t2 sweep
-      local_batch_size: 20
+      local_batch_size: 16  # matched to the DeepSphere prod batch; inside the ~85 GB NCCL-safe band
       file_name_shuffle_buffer: 64
       examples_shuffle_buffer: 1024
   validation:

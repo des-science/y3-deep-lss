@@ -29,7 +29,7 @@
 #
 # Usage -- one job per config, submit them in parallel:
 #   PROBE=lensing ARCH=transformer \
-#   NET_CONFIG=$PWD/configs/transformer/lensing/bench_v7/t1_cls.yaml \
+#   NET_CONFIG=$PWD/configs/transformer/dev/lensing/bench_v7/t1_cls.yaml \
 #   sbatch --job-name=rate_lensing submissions/clariden/maps/benchmarks/rate_probe.sh
 #
 # Then size from the reported rate:
@@ -65,7 +65,7 @@ PROBE="${PROBE:-lensing}"
 # Set NET_CONFIG together with PROBE -- the per-probe configs differ in n_steps, smooth_nside and
 # local_batch_size, and the default here is the lensing one. ARCH only names the output dir.
 ARCH="${ARCH:-deepsphere}"
-NET_CONFIG="${NET_CONFIG:-$DEEP_LSS/configs/deepsphere/lensing/maps+cls.yaml}"
+NET_CONFIG="${NET_CONFIG:-$DEEP_LSS/configs/deepsphere/prod/lensing/maps+cls.yaml}"
 
 # How many steps to time. Must clear XLA compilation and the dataloader ramp, span at least one
 # validation pass (vali_every is typically 1000), AND cross `checkpoint_every` -- a probe that never

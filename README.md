@@ -85,7 +85,7 @@ python deep_lss/apps/run_training.py \
     --scales_config=configs/scales/8wl,32gc.yaml \
     --loss_config=configs/loss/vmim.yaml \
     --data_config=configs/data/default.yaml \
-    --net_config=configs/deepsphere/lensing/maps.yaml \
+    --net_config=configs/deepsphere/prod/lensing/maps.yaml \
     --dist_strategy=mirrored
 
 # 2. evaluate over the cosmology grid and the observations

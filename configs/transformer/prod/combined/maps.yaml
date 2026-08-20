@@ -1,7 +1,7 @@
-# Nested hierarchical local-window transformer — combined probes, maps + Cls.
-# The map transformer and the binned angular power spectra (lensing + clustering + cross pairs) are
-# embedded separately and fused before the regression head. Architecture is the benchmarked winning
-# base, bench_t8/default.yaml, same as lensing/maps+cls.yaml.
+# Nested hierarchical local-window transformer — combined probes, maps only.
+# No Cls branch (no `cls:` block, no map_feature_dim): the transformer output is the summary
+# statistic directly. Otherwise identical to combined/maps+cls.yaml — the benchmarked winning base,
+# bench_t8/default.yaml.
 # Multi-resolution map branch: clustering is smoothed at nside 256 and INJECTED into the transformer
 # hierarchy at the level already running at nside 256 (one merge below the nside-512 lensing input)
 # rather than upsampled, so the network is one level deeper for lensing than for clustering (see
@@ -13,13 +13,11 @@
 name: nested_transformer
 
 training:
-  # Unified cross-probe recipe (dev/notes/transformer_v17_unified_recipe_2026-07-19.md): batch 20,
-  # cosine. 250k = ~20 h at the measured ~3.5 it/s -> two chained 12 h jobs (job 1 TIMEOUTs
-  # mid-training, resubmit RUN_NUM=2; n_steps is the total budget). Batch capped by the ~85 GB NCCL
-  # band (24 -> 96 GB). Step time assumes the 8wl,32gc cut (both probes smoothed; eager ~theta_fwhm^2).
-  n_steps: 250000
+  n_steps: auto  # an OUTPUT of the wall-clock budget; see throughput.json
+  wall_budget_seconds: 79200  # TRAINING seconds for the WHOLE run -- 2 x 12 h chain
+  job_budget_seconds: 39600  # this job's share (11 h of 12 h; ~1 h for the eval tail)
   output_every: Null
-  checkpoint_every: 10000
+  checkpoint_every: 5000
   vali_every: 1000
   eval_every: Null
 
@@ -42,9 +40,7 @@ optimization:
 
 network:
   name: nested_transformer
-  # sparse-matmul backend for the Gaussian smoothing front-end (the transformer body has no
-  # graph convs): coo / csr (cuSPARSE) / gather (XLA). See deepsphere.utils.make_spmm_operator.
-  # csr is numerically equivalent to coo up to fp32 tolerance and measured faster (-46..-54%).
+  # coo / csr (cuSPARSE) / gather (XLA); csr is numerically equivalent and faster
   spmm_backend: csr
   # per-probe smoothing resolution: clustering (fwhm >= 57') is smoothed at nside 256 and injected
   # into the hierarchy at its native scale (see HealpixMultiResMapEncoder); lensing stays at the
@@ -58,15 +54,8 @@ network:
   jit_compile_body: true
   precision: bfloat16
   input_norm: true
-  map_feature_dim: 512
   head:
     dropout_rate: 0.1
-  cls:
-    n_bins: 16
-    transform: asinh_per_feature
-    asinh_default_scale: null
-    embedding_layers: [512, 512, 512, 512]
-    embedding_dropout_rate: 0.1
   kwargs: # -> HealpixNestedHierarchicalLocalWindowTransformer
     base_embed_dim: 32
     growth: double
@@ -77,13 +66,10 @@ network:
     mlp_ratio: 4
     layerscale_init: null
     fp32_softmax: true
-    # residual-branch dropout inside every local and global block (variable-free)
     block_dropout_rate: null
-    # positional encoding for the local window attention: null (position-free) or geodesic
-    # (distance-kernel attention bias, zero-init so it starts at the baseline)
+    # null (position-free) or geodesic (distance-kernel attention bias)
     pos_encoding: null
-    # patch merge: concat (order-sensitive concat+Dense) or deepsets (child-permutation-invariant,
-    # requires a pos_encoding)
+    # concat (order-sensitive concat+Dense) or deepsets (needs a pos_encoding)
     merge_op: concat
 
 dset:
@@ -94,7 +80,7 @@ dset:
       n_prefetch: 4
       n_workers: 128
     grid:
-      local_batch_size: 20  # capped by the NCCL band, not by the OOM ceiling — see the n_steps note
+      local_batch_size: 16  # matched to the DeepSphere prod batch; inside the ~85 GB NCCL-safe band
       file_name_shuffle_buffer: 64
       examples_shuffle_buffer: 1024
   validation:

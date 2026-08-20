@@ -1,13 +1,15 @@
-# DeepSphere ResNet GCNN — lensing, maps only.
+# DeepSphere ResNet GCNN -- clustering (GCNN runs at nside 256), maps only.
+# Architecture: bench_v7 `full` -- see ../../dev/clustering/bench_v7/ for the rationale.
+# NOTE: the pooled map readout (map_pool) exists only on the maps+Cls path
+# (ResNetMapsPlusCLSNetwork); this config keeps the flatten head.
 name: deepsphere_default
 
 training:
-  # Unified cross-probe recipe: batch 20, cosine (matches the transformer's per-probe sizing).
-  # n_steps sized to the measured ~4.45 it/s (16k/h) to fill ~10.6 h training + the eval+inference
-  # tail in one 12 h job.
-  n_steps: 170000
+  n_steps: auto  # an OUTPUT of the wall-clock budget; see throughput.json
+  wall_budget_seconds: 39600  # TRAINING seconds for the WHOLE run -- 1 x 12 h
+  job_budget_seconds: 39600  # this job's share (11 h of 12 h; ~1 h for the eval tail)
   output_every: Null
-  checkpoint_every: 10000
+  checkpoint_every: 5000
   vali_every: 1000
   eval_every: Null
 
@@ -26,30 +28,35 @@ optimization:
     warmup_steps: 5000
     warmup_init_learning_rate: 1.0e-5
     decay_alpha: 0.0
-    ema_momentum: null  # optional EMA weight averaging
+    ema_momentum: null
 
 network:
   name: resnet
   n_neighbors: 60
-  # sparse-matmul backend for the graph convolutions AND per-probe smoothing kernels:
-  # coo (generic TF kernel) / csr (cuSPARSE csrmm) / gather (XLA). See
-  # deepsphere.utils.make_spmm_operator. csr is numerically equivalent to coo up to fp32
-  # tolerance (no model/lineage change) and measured faster on this k=60 Laplacian
-  # (convs -9..-17%, smoothing -46..-54%); n_steps unchanged, so training finishes early.
   spmm_backend: csr
+  smooth_nside:
+    clustering: 256
   max_checkpoints: 50
   save_second_to_last_layer: False
   z_bank_size: Null
-  # EmpiricalInputNormalization: standardize the smoothed maps with per-channel training statistics
-  # (restored from the checkpoint on resume). Adds checkpoint variables — its own lineage.
   input_norm: true
   kwargs:
-    base_channels: 32
-    # depth
-    pool_layers: 3
+    base_channels: 128  # trunk = base_channels * 2^pool_layers = 512, pinned across probes
+    pool_layers: 2
     conv_layers: 2
     residual_layers: 5
-    # misc
+    residual_block_type: convnext
+    mlp_ratio: 4
+    layer_scale_init: 1.0e-6
+    drop_path_rate: 0.1
+    residual_attention_every: 2
+    residual_attention:
+      num_heads: 8
+      n_layers: 1
+      mlp_ratio: 2.0
+      dropout_rate: 0.1
+      positional_embedding: true
+      layer_scale_init: 1.0e-4
     poly_degree: 5
     head_type: "dense"
     dense_layers: []
@@ -63,7 +70,7 @@ dset:
       n_prefetch: 8
       n_workers: Null
     grid:
-      local_batch_size: 20
+      local_batch_size: 16
       file_name_shuffle_buffer: 64
       examples_shuffle_buffer: 256
   validation:
@@ -74,7 +81,7 @@ dset:
       n_prefetch: 2
       n_workers: 16
     grid:
-      local_batch_size: 20
+      local_batch_size: 16
   eval:
     common:
       is_eval: True
@@ -82,4 +89,4 @@ dset:
       n_prefetch: 2
       n_workers: Null
     grid:
-      local_batch_size: 20
+      local_batch_size: 16

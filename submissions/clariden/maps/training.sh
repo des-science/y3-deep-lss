@@ -51,7 +51,7 @@ CLS_PROBES_CONFIG="${CLS_PROBES_CONFIG:-$DEEP_LSS/configs/probes/combined.yaml}"
 # The per-probe net configs differ in n_steps, smooth_nside and local_batch_size, so set NET_CONFIG
 # together with PROBE. ARCH only tags the run in wandb -- keep it in step with NET_CONFIG.
 ARCH="${ARCH:-deepsphere}"
-NET_CONFIG="${NET_CONFIG:-$DEEP_LSS/configs/deepsphere/lensing/maps+cls.yaml}"
+NET_CONFIG="${NET_CONFIG:-$DEEP_LSS/configs/deepsphere/prod/lensing/maps+cls.yaml}"
 
 # Run dir under maps/<probe>/; set it explicitly for anything worth keeping, e.g. MODEL_DIR=t2_cls.
 NET_NAME="$(basename "${NET_CONFIG%.yaml}")"

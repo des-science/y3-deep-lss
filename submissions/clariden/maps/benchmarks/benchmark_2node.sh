@@ -66,7 +66,7 @@ GPU_BIND="${GPU_BIND:-single:1}"
 
 # --- Derived paths, configs and flags ----------------------------------------------------------
 
-NET_CONFIG="$DEEP_LSS/configs/transformer/clustering/bench_2node/${CFG}.yaml"
+NET_CONFIG="$DEEP_LSS/configs/transformer/dev/clustering/bench_2node/${CFG}.yaml"
 
 INPUT="$MYSCRATCH/deep_lss/data/$VERSION/$SUBVERSION"
 OUTPUT="$MYSCRATCH/deep_lss/runs/$VERSION/$SUBVERSION/maps/$PROBE"

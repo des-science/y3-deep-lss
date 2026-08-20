@@ -5,7 +5,7 @@
 # ../training.sh / ../training_chainer.sh) -- lives under maps/experiments/ for that reason.
 #
 # Usage:
-#   ARCH=deepsphere PROBE=combined CONFIGS_GLOB="configs/deepsphere/combined/bench_v7/*.yaml" \
+#   ARCH=deepsphere PROBE=combined CONFIGS_GLOB="configs/deepsphere/dev/combined/bench_v7/*.yaml" \
 #       MODEL_PREFIX=bench_v7 ./sweep_configs.sh
 #   CHAIN=1 MAX_RUNS=2 ... ./sweep_configs.sh        # each config becomes a chained N-job run
 #
@@ -19,7 +19,7 @@ MAPS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/.."  # resolved from her
 
 # --- Overridable defaults ----------------------------------------------------------------------
 
-: "${CONFIGS_GLOB:?set CONFIGS_GLOB, e.g. configs/deepsphere/combined/bench_v7/*.yaml}"
+: "${CONFIGS_GLOB:?set CONFIGS_GLOB, e.g. configs/deepsphere/dev/combined/bench_v7/*.yaml}"
 : "${MODEL_PREFIX:?set MODEL_PREFIX, e.g. bench_v7}"
 CHAIN="${CHAIN:-0}"  # 1 submits a training_chainer.sh chain per config instead of a single job
 

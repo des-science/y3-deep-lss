@@ -61,11 +61,11 @@ run_probe () {
     local PROBES_CONFIG NET_CONFIG
     case "$PROBE" in
         lensing)    PROBES_CONFIG="$DEEP_LSS/configs/probes/lensing.yaml"
-                    NET_CONFIG="$DEEP_LSS/configs/transformer/lensing/maps.yaml" ;;
+                    NET_CONFIG="$DEEP_LSS/configs/transformer/prod/lensing/maps.yaml" ;;
         clustering) PROBES_CONFIG="$DEEP_LSS/configs/probes/clustering.yaml"
-                    NET_CONFIG="$DEEP_LSS/configs/transformer/lensing/maps.yaml" ;;
+                    NET_CONFIG="$DEEP_LSS/configs/transformer/prod/lensing/maps.yaml" ;;
         combined)   PROBES_CONFIG="$DEEP_LSS/configs/probes/combined.yaml"
-                    NET_CONFIG="$DEEP_LSS/configs/transformer/combined/maps.yaml" ;;
+                    NET_CONFIG="$DEEP_LSS/configs/transformer/prod/combined/maps.yaml" ;;
         *) echo "unknown probe $PROBE"; return 1 ;;
     esac
 
