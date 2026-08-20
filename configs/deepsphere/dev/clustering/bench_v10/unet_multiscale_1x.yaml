@@ -1,0 +1,153 @@
+# ============================================================================
+# bench_v10 — CLUSTERING, "unet_multiscale", 1 x 12 h.
+#
+# PARENT: combined/bench_v9/unet_multiscale.yaml, transplanted to the clustering probe. Same U-net
+# idea (pool 1 / conv_widen / k=20 / mean_std at every tap); the STAGE COUNT AND WIDTH ARE RESCALED
+# because clustering enters at nside 256, not 512 -- see the geometry block below.
+#
+# WHY IT IS IN THE ROUND AT ALL, AND WHY ONLY AT 1x. unet_multiscale produced the largest single-knob
+# gain since flatten -> mean (0.870 -> 1.031 within its lineage, +18.5%) but never beat the champion
+# in absolute terms (bench_v8_mean_std, 1.053, same mocks, same wall). The deflationary reading that
+# fits every number is that the U-net trunk is HALF WIDTH at every level except the last and
+# multi-scale merely returns the channels the schedule threw away -- a width patch, not a mechanism.
+# Cheap to settle, expensive to leave open: one job per single probe, no 1x/2x pair.
+#
+# WHY CLUSTERING IS THE HARDEST CASE, AND THEREFORE THE INFORMATIVE ONE. The density field is
+# smoothed with a >= 57' kernel and enters at nside 256, so it has the least small-scale structure of
+# the three inputs and the fewest scales left to resolve (four downsampling stages against lensing's
+# five). If moments-across-scales is a real mechanism it should be WEAKEST here; if it is a width
+# patch it should transfer exactly as well here as anywhere. The two readings predict opposite
+# orderings against the lensing arm, which is what makes running both worth the two jobs.
+#
+# !! GEOMETRY -- THIS FILE MAKES A SIZING DECISION ON ITS OWN AUTHORITY, AS bench_v7 DID FOR base 128.
+# The trunk must land on nside 16 (~448 tokens) and be 512 wide, on every probe. From 256 that is FOUR
+# downsampling stages, not five, and trunk = base_channels * 2^(pool_layers + conv_layers - 1):
+#     pool_layers 1 + conv_layers 3, base 64  ->  64 * 2^3 = 512   <- this file
+#     (the combined/lensing arm is pool 1 + conv 4, base 32 -> 32 * 2^4 = 512)
+# Keeping base 32 here would give a 256-wide trunk and a correspondingly narrower readout, silently
+# unbalancing the concat against the fixed 512-d Cls embedding and breaking comparability with the
+# other two probes. Same reasoning, same failure mode, as clustering/bench_v7/README.md's base 128.
+#
+# TAP CONTRACT (verify against the log line before trusting any result). No multires encoder here, so
+# the composite takes count_scale_taps(self.gcnn): 4 downsampling layers -> 4 taps, and
+# assemble_scale_taps drops the last pool tap and appends the trunk:
+#     64 @ nside 128, 128 @ 64, 256 @ 32, 512 @ 16  = 960 ch -> 1920-d under mean_std
+# The training log must print `map_pool_multiscale=True (4 scale taps)` -- FOUR here, five on lensing.
+# A silently dropped tap is a narrower readout that still trains and still scores; the composite now
+# raises on a tap/norm count mismatch, but check the number anyway.
+#
+# !! THE CONFOUND. !! The Cls embedding stays pinned at 512 against a 1920-d map -- a 3.75:1 split
+# where mean_std is 2:1. Across bench_v8/v9 the FoM falls monotonically as that ratio grows
+# (2:1 -> 1.053, 3.9:1 -> 1.031, 4:1 -> 0.928), so a LOSS here is equally consistent with the balance
+# and with the readout; only a WIN is unambiguous.
+#
+# NEW CHECKPOINT LINEAGE, twice over: the readout width changes AND n_neighbors changes the Laplacian
+# without changing any weight shape, so a k=60 checkpoint would load with no error and meaningless
+# filters. RUN_NUM=1, own MODEL_DIR.
+#
+# SIZING: wall-clock budget, 39.6 ks over ONE job -- the same wall as the mean_std_1x and
+# mean_std_k20_1x arms, which is the comparison that matters. n_steps is an OUTPUT (throughput.json).
+# See combined/bench_v10/README.md.
+# ============================================================================
+name: deepsphere_default
+
+training:
+  n_steps: auto  # bounded by wall_budget_seconds alone; the step count reached is an OUTPUT
+  wall_budget_seconds: 39600  # TRAINING seconds for the WHOLE run -- ONE 12 h job, no chain.
+                              # Matched to the other 1x arms so the three-way contrast is equal-wall.
+  job_budget_seconds: 39600  # the single job's share (11 h of 12 h; ~1 h left for the eval tail)
+  output_every: Null
+  checkpoint_every: 5000
+  vali_every: 1000
+  eval_every: Null
+
+optimization:
+  optimizer: adam
+  gradient_clipping:
+    clip_by_value: null
+    clip_by_norm: null
+    clip_by_global_norm: 1.0
+  mutual_info_loss:
+    learning_rate: 1.0e-4
+    optimizer_kwargs:
+      beta_1: 0.9
+      beta_2: 0.999
+    scheduler: cosine
+    warmup_steps: 5000
+    warmup_init_learning_rate: 1.0e-5
+    decay_alpha: 0.0
+    ema_momentum: null
+
+network:
+  name: resnet
+  spmm_backend: csr  # csr has no 2^31 output-size ceiling (that is coo-only)
+  n_neighbors: 20  # INHERITED from bench_v9/unet_multiscale.yaml, not a knob here
+  max_checkpoints: 50
+  save_second_to_last_layer: False
+  z_bank_size: Null
+  input_norm: true
+  # Clustering (fwhm >= 57') gets its own smoothing kernel at nside 256 rather than at native nside.
+  # Single probe, so there is no injection seam: every tap below is one probe at one resolution.
+  smooth_nside:
+    clustering: 256
+  map_pool: mean_std
+  map_pool_multiscale: true  # apply the reduction at EVERY tap, not just the trunk -> (B,1920)
+  map_feature_dim: null  # no projection: the 1920-d pooled map goes straight to map_norm + concat
+  cls:
+    n_bins: 16
+    transform: asinh_per_feature
+    asinh_default_scale: null
+    embedding_layers: [512, 512, 512, 512]  # 512 against a 1920-d map -- see the confound block
+    embedding_dropout_rate: 0.1
+  kwargs:
+    # See the GEOMETRY block: four stages from nside 256, so base 64 (not 32) holds the 512 trunk pin.
+    base_channels: 64  # trunk = 64 * 2^(1+3-1) = 512
+    pool_layers: 1  # only the top pool (256 -> 128) stays pure strided pseudo-conv
+    conv_layers: 3  # real graph convs at nside 128 / 64 / 32
+    conv_widen: true  # widen by channel_multiplier at each graph-conv stage (U-net schedule)
+    residual_layers: 5
+    residual_block_type: convnext  # body only -- the three downsampling convs are plain Chebyshev
+    mlp_ratio: 4
+    layer_scale_init: 1.0e-6
+    drop_path_rate: 0.1
+    poly_degree: 5  # Chebyshev order K in every graph conv, unchanged from the anchor
+    head_type: "dense"
+    dense_layers: []
+    dropout_rate: 0.1
+    residual_attention_every: 2  # body is nside 16 (~448 tokens)
+    residual_attention:
+      num_heads: 8          # body is 512 ch -> key_dim = 512/8 = 64, matching the transformer
+      n_layers: 1
+      mlp_ratio: 2.0        # attention-block MLP ratio (distinct from the ConvNeXt mlp_ratio above)
+      dropout_rate: 0.1
+      positional_embedding: true   # learnable per-token pos-emb over the fixed nside-16 footprint
+      layer_scale_init: 1.0e-4     # near-identity init
+
+dset:
+  training:
+    common:
+      is_eval: False
+      n_readers: 64
+      n_prefetch: 8
+      n_workers: Null
+    grid:
+      local_batch_size: 16
+      file_name_shuffle_buffer: 64
+      examples_shuffle_buffer: 256
+  validation:
+    n_batches: 50
+    common:
+      is_eval: True
+      n_readers: 8
+      n_prefetch: 2
+      n_workers: 16
+    grid:
+      local_batch_size: 16
+  eval:
+    common:
+      is_eval: True
+      n_readers: 64
+      n_prefetch: 2
+      n_workers: Null
+    grid:
+      local_batch_size: 16

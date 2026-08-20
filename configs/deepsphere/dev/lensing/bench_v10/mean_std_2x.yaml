@@ -1,0 +1,128 @@
+# ============================================================================
+# bench_v10 — LENSING, "mean_std", 2 x 12 h.
+#
+# PARENT: lensing/bench_v7/full.yaml. THE ONLY ARCHITECTURE KNOB: map_pool "mean" -> "mean_std".
+# The budget also changes (fixed n_steps: 130000 -> wall-clock 79.2 ks over a 2-job chain); that is
+# the round's convention for every file in it, and the 1x sibling is what isolates it.
+#
+# WHY. bench_v8/v9 ran eleven arms on COMBINED and the readout was the only lever that ever paid:
+# flatten -> mean +32.1%, mean -> mean_std +5.3% (bench_v8_mean_std, 1.053, the programme champion).
+# Every trunk change lost, and moments -- one rung further up the ladder -- lost 12.2%. bench_v10 asks
+# whether that single surviving knob transfers to the single probes, so that ONE architecture can be
+# the default everywhere. Nothing about mean_std is combined-specific: it is a reduction over the
+# ~448 nside-16 footprint tokens of the 512-channel trunk, and the trunk is pinned to 512 on all
+# three probes.
+#
+# The lensing prior is if anything stronger than combined's. Lensing convergence is the most
+# non-Gaussian of the three inputs, and `mean` keeps only the monopole of each of the 512 feature maps
+# -- the across-sky scatter of a nonlinear local feature is precisely the non-Gaussian signal the map
+# analysis exists to capture, and the head cannot reconstruct it from the mean at any width.
+#
+# ROBUSTNESS GATE. Lensing is where source clustering acts, so THIS is the probe whose Q2 numbers
+# decide whether mean_std becomes the default. On combined it cost nothing (0.72 sigma worst vs the
+# anchor's 0.70), but the pattern across bench_v8/v9 is that sc_gatti S8 bias rises with FoM ratio
+# (-0.26 -> +0.73), i.e. more informative compressions are more exposed. Gate on
+# source_clustering_{gatti,in_place}, NOT on the worst-overall number -- dmo biases every architecture
+# by +0.58 to +0.97 sigma regardless of compression and always wins a max.
+#
+# NEW CHECKPOINT LINEAGE (the readout width changes 512 -> 1024). RUN_NUM=1 into its own MODEL_DIR.
+#
+# SIZING: wall-clock budget, 79.2 ks over a 2-job chain -- EXACTLY 2x the 1x sibling, so the pair
+# measures the step budget and nothing else. n_steps is an OUTPUT (throughput.json); at bench_v7's
+# measured 3.50 it/s expect ~275 k. See README.md.
+# ============================================================================
+name: deepsphere_default
+
+training:
+  n_steps: auto  # bounded by wall_budget_seconds alone; the step count reached is an OUTPUT
+  wall_budget_seconds: 79200  # TRAINING seconds for the WHOLE run, summed across the 2-job chain
+  job_budget_seconds: 39600  # this job's share (11 h of 12 h; ~1 h left for the eval tail)
+  output_every: Null
+  checkpoint_every: 5000  # job 2 restores the last checkpoint -- smaller = less lost handoff work
+  vali_every: 1000
+  eval_every: Null
+
+optimization:
+  optimizer: adam
+  gradient_clipping:
+    clip_by_value: null
+    clip_by_norm: null
+    clip_by_global_norm: 1.0
+  mutual_info_loss:
+    learning_rate: 1.0e-4
+    optimizer_kwargs:
+      beta_1: 0.9
+      beta_2: 0.999
+    scheduler: cosine
+    warmup_steps: 5000
+    warmup_init_learning_rate: 1.0e-5
+    decay_alpha: 0.0
+    ema_momentum: null
+
+network:
+  name: resnet
+  spmm_backend: csr
+  n_neighbors: 60
+  max_checkpoints: 50
+  save_second_to_last_layer: False
+  z_bank_size: Null
+  input_norm: true
+  # No smooth_nside: lensing is the only active probe and stays at its native nside throughout.
+  map_pool: mean_std  # <-- THE ONLY ARCHITECTURE KNOB vs bench_v7/full.yaml: (B,512) -> (B,1024)
+  map_feature_dim: null  # no projection: the 1024-d pooled map goes straight to map_norm + concat
+  cls:
+    n_bins: 16
+    transform: asinh_per_feature
+    asinh_default_scale: null
+    embedding_layers: [512, 512, 512, 512]  # 512 against a 1024-d map -- the inherited balance confound
+    embedding_dropout_rate: 0.1
+  kwargs:
+    base_channels: 64  # pool_widen doubles per pool stage -> trunk 64 * 2^3 = 512 (pinned across probes)
+    pool_layers: 3
+    conv_layers: 2
+    residual_layers: 5
+    residual_block_type: convnext
+    mlp_ratio: 4
+    layer_scale_init: 1.0e-6
+    drop_path_rate: 0.1
+    poly_degree: 5
+    head_type: "dense"
+    dense_layers: []
+    dropout_rate: 0.1
+    residual_attention_every: 2  # body is nside 16 (~448 tokens)
+    residual_attention:
+      num_heads: 8          # body is 512 ch -> key_dim = 512/8 = 64, matching the transformer
+      n_layers: 1
+      mlp_ratio: 2.0        # attention-block MLP ratio (distinct from the ConvNeXt mlp_ratio above)
+      dropout_rate: 0.1
+      positional_embedding: true   # learnable per-token pos-emb over the fixed nside-16 footprint
+      layer_scale_init: 1.0e-4     # near-identity init
+
+dset:
+  training:
+    common:
+      is_eval: False
+      n_readers: 64
+      n_prefetch: 8
+      n_workers: Null
+    grid:
+      local_batch_size: 16
+      file_name_shuffle_buffer: 64
+      examples_shuffle_buffer: 256
+  validation:
+    n_batches: 50
+    common:
+      is_eval: True
+      n_readers: 8
+      n_prefetch: 2
+      n_workers: 16
+    grid:
+      local_batch_size: 16
+  eval:
+    common:
+      is_eval: True
+      n_readers: 64
+      n_prefetch: 2
+      n_workers: Null
+    grid:
+      local_batch_size: 16

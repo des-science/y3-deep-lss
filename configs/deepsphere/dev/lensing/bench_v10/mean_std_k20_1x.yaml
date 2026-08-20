@@ -1,0 +1,114 @@
+# ==========================================================================
+# bench_v10 — LENSING, "mean_std_k20", 1 x 12 h.
+#
+# PARENT: the 2x mean_std sibling in this directory, itself one knob off bench_v7/full.yaml.
+# KNOBS vs bench_v7/full.yaml: map_pool mean -> mean_std, AND n_neighbors 60 -> 20.
+# Both are the only two knobs in the whole programme that have never lost an arm.
+#
+# BUDGET: ONE 12 h job. Paired against the 2x sibling, which is byte-identical except
+# for wall_budget_seconds, this measures what a second job is worth on a single probe.
+# On combined the answer was +2.3% (bench_v8_long), barely over the 1.5% seed floor.
+#
+# NEW CHECKPOINT LINEAGE. mean_std changes the readout width 512 -> 1024, and n_neighbors changes
+# the Laplacian with NO weight shape change -- so a k=60 checkpoint loads into a k=20 network with
+# no error and meaningless filters, and expect_partial() will not raise. RUN_NUM=1, own MODEL_DIR.
+#
+# SIZING: wall-clock budget, 39.6 ks of training over 1 job(s). n_steps is an OUTPUT
+# (throughput.json). The full rationale for the round is in combined/bench_v10/README.md.
+# ==========================================================================
+name: deepsphere_default
+
+training:
+  n_steps: auto  # bounded by wall_budget_seconds alone; the step count reached is an OUTPUT
+  wall_budget_seconds: 39600  # TRAINING seconds for the WHOLE run -- ONE 12 h job, no chain.
+                              # Exactly half the 2x sibling, so the pair isolates the budget.
+  job_budget_seconds: 39600  # the single job's share (11 h of 12 h; ~1 h left for the eval tail)
+  output_every: Null
+  checkpoint_every: 5000  # job 2 restores the last checkpoint -- smaller = less lost handoff work
+  vali_every: 1000
+  eval_every: Null
+
+optimization:
+  optimizer: adam
+  gradient_clipping:
+    clip_by_value: null
+    clip_by_norm: null
+    clip_by_global_norm: 1.0
+  mutual_info_loss:
+    learning_rate: 1.0e-4
+    optimizer_kwargs:
+      beta_1: 0.9
+      beta_2: 0.999
+    scheduler: cosine
+    warmup_steps: 5000
+    warmup_init_learning_rate: 1.0e-5
+    decay_alpha: 0.0
+    ema_momentum: null
+
+network:
+  name: resnet
+  spmm_backend: csr
+  n_neighbors: 20  # <-- THE SECOND KNOB vs bench_v7/full.yaml: 60 -> 20 (deep_lss's own default)
+  max_checkpoints: 50
+  save_second_to_last_layer: False
+  z_bank_size: Null
+  input_norm: true
+  # No smooth_nside: lensing is the only active probe and stays at its native nside throughout.
+  map_pool: mean_std  # <-- THE ONLY ARCHITECTURE KNOB vs bench_v7/full.yaml: (B,512) -> (B,1024)
+  map_feature_dim: null  # no projection: the 1024-d pooled map goes straight to map_norm + concat
+  cls:
+    n_bins: 16
+    transform: asinh_per_feature
+    asinh_default_scale: null
+    embedding_layers: [512, 512, 512, 512]  # 512 against a 1024-d map -- the inherited balance confound
+    embedding_dropout_rate: 0.1
+  kwargs:
+    base_channels: 64  # pool_widen doubles per pool stage -> trunk 64 * 2^3 = 512 (pinned across probes)
+    pool_layers: 3
+    conv_layers: 2
+    residual_layers: 5
+    residual_block_type: convnext
+    mlp_ratio: 4
+    layer_scale_init: 1.0e-6
+    drop_path_rate: 0.1
+    poly_degree: 5
+    head_type: "dense"
+    dense_layers: []
+    dropout_rate: 0.1
+    residual_attention_every: 2  # body is nside 16 (~448 tokens)
+    residual_attention:
+      num_heads: 8          # body is 512 ch -> key_dim = 512/8 = 64, matching the transformer
+      n_layers: 1
+      mlp_ratio: 2.0        # attention-block MLP ratio (distinct from the ConvNeXt mlp_ratio above)
+      dropout_rate: 0.1
+      positional_embedding: true   # learnable per-token pos-emb over the fixed nside-16 footprint
+      layer_scale_init: 1.0e-4     # near-identity init
+
+dset:
+  training:
+    common:
+      is_eval: False
+      n_readers: 64
+      n_prefetch: 8
+      n_workers: Null
+    grid:
+      local_batch_size: 16
+      file_name_shuffle_buffer: 64
+      examples_shuffle_buffer: 256
+  validation:
+    n_batches: 50
+    common:
+      is_eval: True
+      n_readers: 8
+      n_prefetch: 2
+      n_workers: 16
+    grid:
+      local_batch_size: 16
+  eval:
+    common:
+      is_eval: True
+      n_readers: 64
+      n_prefetch: 2
+      n_workers: Null
+    grid:
+      local_batch_size: 16

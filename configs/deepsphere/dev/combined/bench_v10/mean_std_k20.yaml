@@ -1,0 +1,149 @@
+# ============================================================================
+# bench_v10 — COMBINED, "mean_std_k20": the champion recipe on a SPARSER GRAPH.
+#
+# PARENT: bench_v8/mean_std.yaml (the programme champion, 1.053 vs bench_v7_full on v18/default).
+# THE ONLY KNOB: network.n_neighbors 60 -> 20. Everything else byte-identical: ConvNeXt + DropPath 0.1
+# + interleaved attention, base 64 / pool 3 / conv 2 -> trunk 512 @ nside 16, mean_std readout,
+# clustering injected at nside 256, poly_degree 5, same wall-clock budget.
+#
+# WHY THIS ARM. bench_v10 is the round that picks ONE architecture for all three probes, and after
+# bench_v8/v9 there are exactly two knobs left that have never lost:
+#     map_pool: mean -> mean_std   +5.3%   (bench_v8_mean_std, 1.053)
+#     n_neighbors: 60 -> 20        +2.0%   (bench_v8_k20,      1.020)
+# Every other arm across two rounds -- injection_conv 0.836, poolsplit 0.887, fuse_act 0.905,
+# unet_k8 0.933, moments 0.928, unet_k20 0.870 -- lost. This arm is the only untested combination of
+# the two survivors, and it is the one that would become the default.
+#
+# THE HONEST READING OF k20's +2.0%, WHICH IS WHY THIS IS ABOUT COST, NOT FoM.
+# bench_v8_k20 reached 406500 steps against the anchor's 250000 -- 1.63x -- and bench_v8_long measured
+# +2.3% for a straight 2x step budget on the same recipe. So k20's entire +2.0% is consistent with the
+# extra steps alone, with the sparser kernel itself NEUTRAL. That is the hypothesis this arm tests at
+# the champion readout, and either answer is worth having:
+#   neutral in FoM -> k=20 becomes the default on cost alone. 5.03 it/s vs 3.32 measured on combined
+#                     (throughput.json) is a 1.51x cheaper step for the same result, which on the
+#                     single-probe 1x12h budget converts directly into steps.
+#   loses          -> the 60-neighbour graph is buying kernel quality that the extra steps were
+#                     masking at the `mean` readout, and 60 stays.
+#   wins beyond ~4% -> the wide graph was over-smoothing the kernel; a real receptive-field finding.
+# Seed floor is 1.5%, so |ratio - 1| < 0.015 against bench_v8_mean_std is a wash and, given the cost,
+# a wash is a WIN for k=20.
+#
+# WHY 20 AND NOT 8. It is the deep_lss model-class default (base_model.py:53, delta_model.py:41,
+# grid_model.py:42) -- the value the code considers normal and that every config here silently
+# overrides to 60 -- and on HEALPix it is roughly the second neighbour ring (hop radius ~sqrt(k/pi)
+# ~2.5 px, so ~2 deg reach at K=5, between k=8's ~1 deg and k=60's ~4 deg). k=8 was only ever tested
+# in arms that ALSO changed the architecture (injection_conv_k8, unet_k8), both of which lost.
+#
+# !! SILENT LINEAGE TRAP. !! n_neighbors changes the graph Laplacian but NO weight shape -- the
+# Chebyshev kernel is [K*Fin, Fout] and the depthwise kernel [C, K], neither depending on k -- so a
+# k=60 checkpoint loads into a k=20 network with NO error and meaningless filters, and
+# expect_partial() will not raise. Launch RUN_NUM=1 into its own MODEL_DIR.
+#
+# SIZING: wall-clock budget, 79.2 ks of training over a 2-job chain, IDENTICAL to bench_v8_mean_std so
+# the pairing is like-for-like on wall. n_steps is an OUTPUT (throughput.json); expect ~1.5x the
+# champion's 260000. No rate probe needed -- k enters only the sparse L @ x term and cannot make the
+# step slower.
+#
+# Launch: 2-job afterany chain, MODEL_DIR=bench_v10_mean_std_k20. See README.md.
+# ============================================================================
+name: deepsphere_default
+
+training:
+  n_steps: auto  # bounded by wall_budget_seconds alone; the step count reached is an OUTPUT, recorded
+                 # in throughput.json next to the model.
+  wall_budget_seconds: 79200  # TRAINING seconds for the WHOLE run, summed across the 2-job chain.
+                              # The cosine spans all of it and anneals to zero when it is spent.
+  job_budget_seconds: 39600  # this job's share (11 h of 12 h; ~1 h left for the eval tail). Job 1
+                             # stops here and checkpoints cleanly rather than being killed at the wall.
+  output_every: Null
+  checkpoint_every: 5000  # job 2 restores the last checkpoint -- smaller = less lost handoff work
+  vali_every: 1000
+  eval_every: Null
+
+optimization:
+  optimizer: adam
+  gradient_clipping:
+    clip_by_value: null
+    clip_by_norm: null
+    clip_by_global_norm: 1.0
+  mutual_info_loss:
+    learning_rate: 1.0e-4
+    optimizer_kwargs:
+      beta_1: 0.9
+      beta_2: 0.999
+    scheduler: cosine
+    warmup_steps: 5000
+    warmup_init_learning_rate: 1.0e-5
+    decay_alpha: 0.0
+    ema_momentum: null
+
+network:
+  name: resnet
+  spmm_backend: csr
+  n_neighbors: 20  # <-- THE ONLY KNOB vs bench_v8/mean_std.yaml: 60 -> 20 (deep_lss's own default)
+  max_checkpoints: 50
+  save_second_to_last_layer: False
+  z_bank_size: Null
+  input_norm: true
+  # Multi-resolution: clustering (fwhm >= 57') is smoothed and injected at nside 256; lensing stays
+  # native. Needs scale_cuts.clustering.theta_fwhm_base in the scales config (8wl,32gc has it).
+  smooth_nside:
+    clustering: 256
+  map_pool: mean_std  # the champion readout: mean + per-channel spatial std, (B,512) -> (B,1024)
+  map_feature_dim: null  # no projection: the 1024-d pooled map goes straight to map_norm + concat
+  cls:
+    n_bins: 16
+    transform: asinh_per_feature
+    asinh_default_scale: null
+    embedding_layers: [512, 512, 512, 512]  # 512 against a 1024-d map -- the inherited balance confound
+    embedding_dropout_rate: 0.1
+  kwargs:
+    base_channels: 64  # pool_widen doubles per pool stage -> trunk 64 * 2^3 = 512 (pinned across probes)
+    pool_layers: 3
+    conv_layers: 2
+    residual_layers: 5
+    residual_block_type: convnext
+    mlp_ratio: 4
+    layer_scale_init: 1.0e-6
+    drop_path_rate: 0.1
+    poly_degree: 5
+    head_type: "dense"
+    dense_layers: []
+    dropout_rate: 0.1
+    residual_attention_every: 2  # body is nside 16 (~448 tokens)
+    residual_attention:
+      num_heads: 8          # body is 512 ch -> key_dim = 512/8 = 64, matching the transformer
+      n_layers: 1
+      mlp_ratio: 2.0        # attention-block MLP ratio (distinct from the ConvNeXt mlp_ratio above)
+      dropout_rate: 0.1
+      positional_embedding: true   # learnable per-token pos-emb over the fixed nside-16 footprint
+      layer_scale_init: 1.0e-4     # near-identity init
+
+dset:
+  training:
+    common:
+      is_eval: False
+      n_readers: 32
+      n_prefetch: 4
+      n_workers: Null
+    grid:
+      local_batch_size: 16
+      file_name_shuffle_buffer: 64
+      examples_shuffle_buffer: 256
+  validation:
+    n_batches: 50
+    common:
+      is_eval: True
+      n_readers: 8
+      n_prefetch: 2
+      n_workers: 16
+    grid:
+      local_batch_size: 16
+  eval:
+    common:
+      is_eval: True
+      n_readers: 64
+      n_prefetch: 2
+      n_workers: Null
+    grid:
+      local_batch_size: 16

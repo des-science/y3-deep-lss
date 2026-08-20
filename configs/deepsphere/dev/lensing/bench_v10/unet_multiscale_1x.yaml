@@ -1,0 +1,147 @@
+# ============================================================================
+# bench_v10 — LENSING, "unet_multiscale", 1 x 12 h.
+#
+# PARENT: combined/bench_v9/unet_multiscale.yaml, transplanted to the lensing probe. Architecture
+# byte-identical to that arm (U-net schedule base 32 / pool 1 / conv 4 / conv_widen, k=20, mean_std at
+# every tap); what changes is the probe, the absence of the injection seam, and the budget.
+#
+# WHY IT IS IN THE ROUND AT ALL, AND WHY ONLY AT 1x.
+# unet_multiscale produced the largest single-knob gain since flatten -> mean: 0.870 -> 1.031 within
+# its own lineage (+18.5% over unet_k20). But it did NOT beat the champion in absolute terms --
+# bench_v8_mean_std is 1.053 on the same mocks and the same wall -- and there is a deflationary
+# reading that fits every number: the U-net trunk is HALF WIDTH at every level except the last, and
+# multi-scale simply hands its readout the 1984 channels the schedule threw away. Under that reading
+# the win is a width patch, not evidence for multi-scale as a mechanism, and it would not transfer.
+# That is a cheap question to settle and an expensive one to leave open, so it gets ONE job per single
+# probe rather than a 1x/2x pair.
+#
+# WHAT LENSING ADDS THAT COMBINED CANNOT. On combined the taps are confounded by the injection seam
+# (the coarsest tap IS the fused clustering stream). Lensing has no seam: all five stages are one
+# probe at one resolution ladder, so this is the first clean test of "moments of a convolved field as
+# a function of scale" -- which is the starlet/scattering-transform family, and the classical
+# statistic this readout is the learned analogue of. If multi-scale is real, lensing is where it
+# should show, because lensing convergence is the most non-Gaussian input in the programme.
+#
+# TAP CONTRACT (verify against the log line before trusting any result). No multires encoder here, so
+# the composite takes count_scale_taps(self.gcnn): 5 downsampling layers -> 5 taps, and
+# assemble_scale_taps drops the last pool tap and appends the trunk:
+#     32 @ nside 256, 64 @ 128, 128 @ 64, 256 @ 32, 512 @ 16  = 992 ch -> 1984-d under mean_std
+# The training log must print `map_pool_multiscale=True (5 scale taps)`. A silently dropped tap is a
+# narrower readout that still trains and still scores -- the composite now raises on a tap/norm count
+# mismatch, but check the number anyway.
+#
+# !! THE CONFOUND, WHICH THIS ARM CARRIES AT ITS WORST. !! The Cls embedding stays pinned at 512
+# while the map readout goes to 1984 -- a 3.9:1 map:Cls split against mean_std's 2:1. Across bench_v8
+# and bench_v9 the FoM falls monotonically as that ratio grows (2:1 -> 1.053, 3.9:1 -> 1.031,
+# 4:1 -> 0.928), so a loss here is equally consistent with the balance and with the readout. Only a
+# WIN is unambiguous. Noted, not corrected: pinning it with map_feature_dim inserts the projection
+# the pooled-readout lineage exists to avoid.
+#
+# NEW CHECKPOINT LINEAGE, twice over: the readout width changes AND n_neighbors changes the Laplacian
+# without changing any weight shape (the Chebyshev kernel is [K*Fin, Fout], the depthwise [C, K]), so
+# a k=60 checkpoint would load with no error and meaningless filters. RUN_NUM=1, own MODEL_DIR.
+#
+# SIZING: wall-clock budget, 39.6 ks over ONE job -- the same wall as the mean_std_1x and
+# mean_std_k20_1x arms, which is the comparison that matters. n_steps is an OUTPUT (throughput.json).
+# See combined/bench_v10/README.md.
+# ============================================================================
+name: deepsphere_default
+
+training:
+  n_steps: auto  # bounded by wall_budget_seconds alone; the step count reached is an OUTPUT
+  wall_budget_seconds: 39600  # TRAINING seconds for the WHOLE run -- ONE 12 h job, no chain.
+                              # Matched to the other 1x arms so the three-way contrast is equal-wall.
+  job_budget_seconds: 39600  # the single job's share (11 h of 12 h; ~1 h left for the eval tail)
+  output_every: Null
+  checkpoint_every: 5000
+  vali_every: 1000
+  eval_every: Null
+
+optimization:
+  optimizer: adam
+  gradient_clipping:
+    clip_by_value: null
+    clip_by_norm: null
+    clip_by_global_norm: 1.0
+  mutual_info_loss:
+    learning_rate: 1.0e-4
+    optimizer_kwargs:
+      beta_1: 0.9
+      beta_2: 0.999
+    scheduler: cosine
+    warmup_steps: 5000
+    warmup_init_learning_rate: 1.0e-5
+    decay_alpha: 0.0
+    ema_momentum: null
+
+network:
+  name: resnet
+  spmm_backend: csr  # csr has no 2^31 output-size ceiling (that is coo-only), so the nside-256 conv
+                     # needs no half-width dodge of the kind graph_unet_256 used.
+  n_neighbors: 20  # INHERITED from bench_v9/unet_multiscale.yaml, not a knob here
+  max_checkpoints: 50
+  save_second_to_last_layer: False
+  z_bank_size: Null
+  input_norm: true
+  # No smooth_nside: lensing is the only active probe and stays at its native nside throughout. Unlike
+  # the combined parent there is NO injection seam, so every tap below is one probe at one resolution.
+  map_pool: mean_std
+  map_pool_multiscale: true  # apply the reduction at EVERY tap, not just the trunk -> (B,1984)
+  map_feature_dim: null  # no projection: the 1984-d pooled map goes straight to map_norm + concat
+  cls:
+    n_bins: 16
+    transform: asinh_per_feature
+    asinh_default_scale: null
+    embedding_layers: [512, 512, 512, 512]  # 512 against a 1984-d map -- see the confound block
+    embedding_dropout_rate: 0.1
+  kwargs:
+    base_channels: 32  # FORCED by the U-net schedule: trunk = 32 * 2^(1+4-1) = 512, holding the pin.
+    pool_layers: 1  # only the top pool (512 -> 256) stays pure strided pseudo-conv
+    conv_layers: 4  # real graph convs at nside 256 / 128 / 64 / 32
+    conv_widen: true  # widen by channel_multiplier at each graph-conv stage (U-net schedule)
+    residual_layers: 5
+    residual_block_type: convnext  # body only -- the four downsampling convs are plain Chebyshev
+    mlp_ratio: 4
+    layer_scale_init: 1.0e-6
+    drop_path_rate: 0.1
+    poly_degree: 5  # Chebyshev order K in every graph conv, unchanged from the anchor
+    head_type: "dense"
+    dense_layers: []
+    dropout_rate: 0.1
+    residual_attention_every: 2  # body is nside 16 (~448 tokens)
+    residual_attention:
+      num_heads: 8          # body is 512 ch -> key_dim = 512/8 = 64, matching the transformer
+      n_layers: 1
+      mlp_ratio: 2.0        # attention-block MLP ratio (distinct from the ConvNeXt mlp_ratio above)
+      dropout_rate: 0.1
+      positional_embedding: true   # learnable per-token pos-emb over the fixed nside-16 footprint
+      layer_scale_init: 1.0e-4     # near-identity init
+
+dset:
+  training:
+    common:
+      is_eval: False
+      n_readers: 64
+      n_prefetch: 8
+      n_workers: Null
+    grid:
+      local_batch_size: 16
+      file_name_shuffle_buffer: 64
+      examples_shuffle_buffer: 256
+  validation:
+    n_batches: 50
+    common:
+      is_eval: True
+      n_readers: 8
+      n_prefetch: 2
+      n_workers: 16
+    grid:
+      local_batch_size: 16
+  eval:
+    common:
+      is_eval: True
+      n_readers: 64
+      n_prefetch: 2
+      n_workers: Null
+    grid:
+      local_batch_size: 16
