@@ -29,7 +29,7 @@
 #          BATCH_SIZES="20 32 48" sbatch submissions/clariden/benchmark/benchmark_v4.sh
 
 R="/users/athomsen/dlss/repos"
-SCRIPT="$R/y3-deep-lss/deep_lss/apps/benchmark_resnet.py"
+SCRIPT="$R/y3-deep-lss/deep_lss/apps/benchmark/benchmark_resnet.py"
 OUT_DIR="/iopsstor/scratch/cscs/athomsen/deep_lss/claude/bench/resnet/v4"
 JSONL="$OUT_DIR/benchmark_results.jsonl"
 

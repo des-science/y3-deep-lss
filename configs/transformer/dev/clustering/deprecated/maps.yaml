@@ -57,7 +57,7 @@ network:
 
 dset:
   training:
-    # Dataloader values from the input-pipeline benchmark (deep_lss/apps/benchmark_dataloader.py):
+    # Dataloader values from the input-pipeline benchmark (deep_lss/apps/benchmark/benchmark_dataloader.py):
     # the loader is far from the bottleneck (~10 steps/s at batch 16 on a 4-GPU node), so these are
     # tuned for predictable, low host RAM under the single per-node MirroredStrategy pipeline.
     # Clustering is 4 z-bins (~7.3 MB/example), identical raw dataloading to lensing.

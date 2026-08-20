@@ -119,7 +119,7 @@ Outputs land in `/iopsstor/scratch/cscs/athomsen/deep_lss/runs/v17/baseline/maps
 ## Scoring
 
 ```bash
-.venv/bin/python3 -m deep_lss.utils.run_comparison \
+.venv/bin/python3 -m deep_lss.apps.tuning.run_comparison \
   --root /iopsstor/scratch/cscs/athomsen/deep_lss/runs/v17/baseline/maps/combined \
   --reference t2_cls bench_v6_droppath_classic bench_v5_pool_head_w64   # ... etc
 ```

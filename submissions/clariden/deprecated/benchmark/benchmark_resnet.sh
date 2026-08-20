@@ -26,7 +26,7 @@
 # Tune:    BATCH_SIZES="16 24 32 48 64 96 128" sbatch submissions/clariden/benchmark/benchmark_resnet.sh
 
 R="/users/athomsen/dlss/repos"
-SCRIPT="$R/y3-deep-lss/deep_lss/apps/benchmark_resnet.py"
+SCRIPT="$R/y3-deep-lss/deep_lss/apps/benchmark/benchmark_resnet.py"
 OUT_DIR="/iopsstor/scratch/cscs/athomsen/deep_lss/claude/bench/resnet"
 JSONL="$OUT_DIR/benchmark_results.jsonl"
 # GCNN memory footprint is tiny (batch 24 -> ~2-5 GB, vs the transformer's ~80 GB), so the binding

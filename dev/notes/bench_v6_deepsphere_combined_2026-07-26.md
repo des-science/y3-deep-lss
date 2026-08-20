@@ -13,7 +13,7 @@
 
 An earlier draft of bench_v6 existed (six ConvNeXt configs, all step-matched at 210 k). Its premises came from
 the 16-cosmology `chain_grid_*` median, which has a ~2.4 % floor. Re-running every v17 combined run through
-`deep_lss/utils/run_comparison.py` on the 1000-mock paired route changed two things that matter:
+`deep_lss/apps/tuning/run_comparison.py` on the 1000-mock paired route changed two things that matter:
 
 1. **"2× budget bought ZERO signed gain" is sign-reversed.** `bench_v5_default` → `bench_v5_pool_head` is a
    pure budget test (config diff: `n_steps` 190 k → 380 k, nothing else). Paired FoM **+7.3 %** on **73 %** of

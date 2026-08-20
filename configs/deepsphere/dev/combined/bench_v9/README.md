@@ -18,7 +18,7 @@ and the only arm in that round to beat `bench_v7_full`.
 
 ## Where bench_v8 left the numbers
 
-Paired FoM against `bench_v7_full`, final checkpoints, from `deep_lss.utils.run_comparison`:
+Paired FoM against `bench_v7_full`, final checkpoints, from `deep_lss.apps.tuning.run_comparison`:
 
 | run | steps | ratio | 95% CI |
 |---|---|---|---|

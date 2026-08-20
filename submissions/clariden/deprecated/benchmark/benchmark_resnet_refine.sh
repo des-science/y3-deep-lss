@@ -22,7 +22,7 @@
 # largest reliably-working batch per config before picking one for production.
 
 R="/users/athomsen/dlss/repos"
-SCRIPT="$R/y3-deep-lss/deep_lss/apps/benchmark_resnet.py"
+SCRIPT="$R/y3-deep-lss/deep_lss/apps/benchmark/benchmark_resnet.py"
 OUT_DIR="/iopsstor/scratch/cscs/athomsen/deep_lss/claude/bench/resnet"
 JSONL="$OUT_DIR/benchmark_results_refine.jsonl"
 

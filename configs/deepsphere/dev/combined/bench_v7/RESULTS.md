@@ -1,7 +1,7 @@
 # bench_v7 — results (v18/default, maps)
 
 Nine map-level runs across three probes and three architectures, plus a four-probe Cls baseline.
-All ranked with `deep_lss/utils/run_comparison.py`, paired FoM(Ωm, S8), **1000 mocks**, bootstrap CI
+All ranked with `deep_lss/apps/tuning/run_comparison.py`, paired FoM(Ωm, S8), **1000 mocks**, bootstrap CI
 over mocks only. **Seed floor 1.5%** — treat `|ratio − 1| < 0.015` as a wash regardless of the CI.
 
 Scored 2026-08-11. Round definition and per-lever rationale: `README.md` in this directory and

@@ -28,7 +28,7 @@
 # jit_compile_body (true) come from the config, as in real training.
 
 R="/users/athomsen/dlss/repos"
-SCRIPT="$R/y3-deep-lss/deep_lss/apps/benchmark_transformer.py"
+SCRIPT="$R/y3-deep-lss/deep_lss/apps/benchmark/benchmark_transformer.py"
 CFG_DIR="$R/y3-deep-lss/configs/transformer/clustering"
 OUT_DIR="/iopsstor/scratch/cscs/athomsen/deep_lss/claude/bench/t2"
 JSONL="$OUT_DIR/benchmark_results.jsonl"

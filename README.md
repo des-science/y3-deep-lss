@@ -123,15 +123,36 @@ record of what a run actually did.
 
 ### Entry points
 
-All in [`deep_lss/apps/`](deep_lss/apps/).
+All under [`deep_lss/apps/`](deep_lss/apps/), in three groups: the production scripts at the top
+level, [`apps/benchmark/`](deep_lss/apps/benchmark/) for sizing a network before training it, and
+[`apps/tuning/`](deep_lss/apps/tuning/) for scoring runs after.
+
+**Production** — the release path. Each needs the TensorFlow environment and a GPU.
 
 | App | What it does |
 |---|---|
 | `run_training.py` | The main entry point. Trains a network on the cosmology grid with the selected objective; handles the distribution strategy, checkpointing and restore, mixed precision, XLA, and logging to Weights & Biases or TensorBoard. `--n_steps` sets a step budget; `--wall_budget_seconds` instead trains for a fixed wall-clock time and anneals the learning-rate schedule to land exactly on it. |
 | `run_evaluation.py` | Runs a trained network over the cosmology grid (`--include_grid`), the DES Y3 catalogs (`--include_des`), mock observations (`--include_mocks`) and Buzzard realizations (`--include_buzzard`), writing the predicted summaries. |
 | `run_cls_training+evaluation.py` | The Cls branch: trains and evaluates in one script on binned angular power spectra rather than maps, with `asinh` scaling and PCA whitening as input preprocessing. `--precache_only` builds just the rebinned-Cls cache, which the maps+Cls networks require. |
+
+**`benchmark/`** — what fits and how fast it steps, before a run is launched. Driven by
+[`submissions/clariden/shared/benchmark_sweep.sh`](submissions/clariden/shared/benchmark_sweep.sh),
+which takes any of these by name.
+
+| App | What it does |
+|---|---|
 | `benchmark_resnet.py`, `benchmark_transformer.py` | Sweep architecture configs × batch sizes for GPU memory fit and step time, building through the exact `run_training.py` code path but on synthetic batches. |
 | `benchmark_dataloader.py`, `benchmark_dataloader_summary.py` | Benchmark the `tf.data` input pipeline in isolation (CPU only) and tabulate the resulting JSONL. |
+
+**`tuning/`** — how good a finished run is: the two modules that decide which architecture to keep.
+Unlike everything above they *read* runs rather than producing them, and depend only on
+numpy/h5py/yaml (plus scipy for `run_diagnostics coverage`), so they need neither TensorFlow nor a
+GPU and are run on a login node as `python -m deep_lss.apps.tuning.<module>`.
+
+| App | What it does |
+|---|---|
+| `run_comparison.py` | Ranks trained runs by **paired** figure of merit on the shared coverage mocks, pairing on the full `real_idx` tuple and bootstrapping the CI over mocks. Gates the comparison on the config fields that must agree for it to mean anything, and marks any ratio inside the measured seed scatter as a wash. `--cross_modality` is the neural-summary-vs-two-point comparison. |
+| `run_diagnostics.py` | The three questions the FoM cannot answer, one subcommand each: `robustness` (posterior shift on the systematics-variation mocks), `coverage` (SBC rank and HPD calibration of the density estimator) and `des-fom` (the DES-vs-simulation divergence, unsigned). Reuses `run_comparison`'s helpers so every table names runs and picks checkpoints identically. |
 
 ### Architectures
 
@@ -151,13 +172,15 @@ All in [`deep_lss/apps/`](deep_lss/apps/).
 
 ```
 deep_lss/
-  apps/            the entry points above
+  apps/            the entry points above: the production scripts, plus benchmark/ (pre-training
+                   sizing) and tuning/ (post-training scoring, login-node only)
   models/          one model class per loss function, combining data loading, network and loss
                      base_model.py, delta_model.py, grid_model.py
   nets/            the architecture tree above
   utils/           losses (mutual_info_loss, delta_loss, likelihood_loss), optimization,
-                   multi-GPU distribution (distribute/), evaluation, run_comparison, Cls
-                   preprocessing, configuration
+                   multi-GPU distribution (distribute/), evaluation, throughput, Cls
+                   preprocessing, configuration, config_check (the benchmark-config validator,
+                   with a `python -m` command line of its own)
 configs/           analysis choices (data/ probes/ scales/ loss/) and architectures
                    (deepsphere/ transformer/ cls/, each split by probe)
 submissions/       SLURM scripts, parameterized by environment variable rather than copied

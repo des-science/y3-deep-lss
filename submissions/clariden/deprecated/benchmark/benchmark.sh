@@ -24,7 +24,7 @@
 # Tune:    BATCH_SIZES="16 32 64" sbatch submissions/clariden/benchmark.sh   (space-separated)
 
 R="/users/athomsen/dlss/repos"
-SCRIPT="$R/y3-deep-lss/deep_lss/apps/benchmark_transformer.py"
+SCRIPT="$R/y3-deep-lss/deep_lss/apps/benchmark/benchmark_transformer.py"
 CONFIGS_DIR="$R/y3-deep-lss/configs/transformer/lensing/hyperparameters"
 # outputs go to scratch, not home (the home per-user quota is easily exceeded and silently
 # drops the JSONL/log appends, which corrupts the results table)

@@ -12,7 +12,7 @@ probe-specific notes.
 
 ## What bench_v7 → bench_v9 settled, and why that determines this round
 
-Paired FoM from `deep_lss.utils.run_comparison`, final checkpoints, v18/default, reference
+Paired FoM from `deep_lss.apps.tuning.run_comparison`, final checkpoints, v18/default, reference
 `bench_v7_full` on each probe. Seed floor 1.5%.
 
 | run | combined | lensing | clustering |

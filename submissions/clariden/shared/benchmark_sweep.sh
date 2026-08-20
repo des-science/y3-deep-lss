@@ -15,7 +15,7 @@
 # `srun` step (fresh process -> memory released; OOM/kernel errors classified, not fatal to the
 # sweep), appended to a JSONL, then aggregated into CSV/markdown.
 #
-# Domain-agnostic: BENCH_SCRIPT names any deep_lss/apps/benchmark_*.py, which is why this lives in
+# Domain-agnostic: BENCH_SCRIPT names any deep_lss/apps/benchmark/*.py, which is why this lives in
 # shared/ rather than under maps/ or cls/.
 #
 # Usage:
@@ -37,7 +37,7 @@ DEEP_LSS="$REPOS/y3-deep-lss"
 : "${CONFIGS_GLOB:?set CONFIGS_GLOB, e.g. configs/transformer/dev/lensing/bench_t7/*.yaml}"
 : "${OUT_DIR:?set OUT_DIR, e.g. /iopsstor/scratch/cscs/athomsen/deep_lss/claude/bench/<name>}"
 
-BENCH_SCRIPT="${BENCH_SCRIPT:-benchmark_transformer.py}"  # any deep_lss/apps/benchmark_*.py
+BENCH_SCRIPT="${BENCH_SCRIPT:-benchmark_transformer.py}"  # any deep_lss/apps/benchmark/*.py
 BATCH_SIZES="${BATCH_SIZES:-16}"                          # space-separated, swept per config
 PROBE="${PROBE:-combined}"
 
@@ -51,7 +51,7 @@ PROBES_CONFIG="${PROBES_CONFIG:-$DEEP_LSS/configs/probes/${PROBE}.yaml}"
 
 # --- Derived paths and the config list ---------------------------------------------------------
 
-SCRIPT="$DEEP_LSS/deep_lss/apps/$BENCH_SCRIPT"
+SCRIPT="$DEEP_LSS/deep_lss/apps/benchmark/$BENCH_SCRIPT"
 JSONL="$OUT_DIR/benchmark_results.jsonl"
 
 GLOB_ABS="$CONFIGS_GLOB"

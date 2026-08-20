@@ -1,6 +1,6 @@
 # bench_v5 re-analysis on the 1000-mock paired route (2026-07-26)
 
-**What this is:** every v17 combined-probe run re-ranked with `deep_lss/utils/run_comparison.py` against the
+**What this is:** every v17 combined-probe run re-ranked with `deep_lss/apps/tuning/run_comparison.py` against the
 transformer `t2_cls`, on the **1000-mock `mcmc_samples.h5`** set with **per-mock pairing** on the full
 `(i_sobol, i_signal, i_noise)` tuple.
 
@@ -135,7 +135,7 @@ Reproduce:
 
 ```bash
 cd /users/athomsen/dlss/repos/y3-deep-lss
-.venv/bin/python3 -m deep_lss.utils.run_comparison \
+.venv/bin/python3 -m deep_lss.apps.tuning.run_comparison \
   --root /iopsstor/scratch/cscs/athomsen/deep_lss/runs/v17/baseline/maps/combined \
   --reference t2_cls bench_v5_pool_head_w64 bench_v5_convnext_droppath   # ... etc
 ```

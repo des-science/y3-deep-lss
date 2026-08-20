@@ -28,7 +28,7 @@
 # training.sh uses for PROBE=combined on v17/baseline).
 
 R="/users/athomsen/dlss/repos"
-SCRIPT="$R/y3-deep-lss/deep_lss/apps/benchmark_transformer.py"
+SCRIPT="$R/y3-deep-lss/deep_lss/apps/benchmark/benchmark_transformer.py"
 CFG_DIR="$R/y3-deep-lss/configs/transformer/combined"
 OUT_DIR="/iopsstor/scratch/cscs/athomsen/deep_lss/claude/bench/t2_combined"
 JSONL="$OUT_DIR/benchmark_results.jsonl"

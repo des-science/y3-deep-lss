@@ -29,7 +29,7 @@
 # allocation reproduces the recorded 81.6 GB / 181.6 ms before trusting the combined numbers.
 
 R="/users/athomsen/dlss/repos"
-SCRIPT="$R/y3-deep-lss/deep_lss/apps/benchmark_transformer.py"
+SCRIPT="$R/y3-deep-lss/deep_lss/apps/benchmark/benchmark_transformer.py"
 T6_DIR="$R/y3-deep-lss/configs/transformer/lensing/bench_t6"
 COMBINED="$R/y3-deep-lss/configs/transformer/combined/maps+cls.yaml"
 OUT_DIR="/iopsstor/scratch/cscs/athomsen/deep_lss/claude/bench/combined"

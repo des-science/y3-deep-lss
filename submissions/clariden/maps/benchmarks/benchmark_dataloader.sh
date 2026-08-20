@@ -49,7 +49,7 @@ mkdir -p "$OUTDIR"
 RESULTS="$OUTDIR/results.jsonl"
 echo "Writing results to $RESULTS"
 
-SCRIPT="$DEEP_LSS/deep_lss/apps/benchmark_dataloader.py"
+SCRIPT="$DEEP_LSS/deep_lss/apps/benchmark/benchmark_dataloader.py"
 
 # --- Stage 1: OFAT sweep, one python process per configuration ---------------------------------
 
@@ -111,4 +111,4 @@ for probe in $PROBES; do
 done
 
 echo "Done. Summarize with:"
-echo "  python $DEEP_LSS/deep_lss/apps/benchmark_dataloader_summary.py $RESULTS"
+echo "  python $DEEP_LSS/deep_lss/apps/benchmark/benchmark_dataloader_summary.py $RESULTS"

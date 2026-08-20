@@ -25,7 +25,7 @@
 # contains OOM / kernel-launch crashes, which the loop classifies (OK / OOM / KERNEL / ERROR).
 
 R="/users/athomsen/dlss/repos"
-SCRIPT="$R/y3-deep-lss/deep_lss/apps/benchmark_transformer.py"
+SCRIPT="$R/y3-deep-lss/deep_lss/apps/benchmark/benchmark_transformer.py"
 T3_DIR="$R/y3-deep-lss/configs/transformer/lensing/bench_t3"
 T2_DIR="$R/y3-deep-lss/configs/transformer/lensing/bench_t2"
 OUT_DIR="/iopsstor/scratch/cscs/athomsen/deep_lss/claude/bench/t3"

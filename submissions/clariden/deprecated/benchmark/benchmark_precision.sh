@@ -23,7 +23,7 @@
 # Submit:  sbatch submissions/clariden/benchmark_precision.sh
 
 R="/users/athomsen/dlss/repos"
-SCRIPT="$R/y3-deep-lss/deep_lss/apps/benchmark_transformer.py"
+SCRIPT="$R/y3-deep-lss/deep_lss/apps/benchmark/benchmark_transformer.py"
 CONFIGS_DIR="$R/y3-deep-lss/configs/transformer/lensing/bench"
 OUT_DIR="/iopsstor/scratch/cscs/athomsen/deep_lss/claude/bench/transformer"
 JSONL="$OUT_DIR/bench_results.jsonl"
