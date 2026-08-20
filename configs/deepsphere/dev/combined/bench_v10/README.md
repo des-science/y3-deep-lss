@@ -1,6 +1,6 @@
 # bench_v10 — the CROSS-PROBE CONSOLIDATION round
 
-**Status (2026-08-17): configs written, nothing launched.**
+**Status (2026-08-20): COMPLETE — all 16 jobs ran and were scored. See [Results](#results) at the bottom; the pre-launch text above is left as written, as the record of what was predicted.**
 
 **Goal.** Pick **one** DeepSphere architecture that is the default for lensing, clustering *and*
 combined — robust, and no more complicated than the evidence requires. Every previous round ran on
@@ -164,3 +164,74 @@ that separates them is `mean_wide`, still uncut and still deferred.
 
 Via the `submit` skill — do not write a new submission script. `MAX_RUNS=1` for the 1× arms,
 `MAX_RUNS=2` for the 2× ones; `MODEL_DIR` mirrors the config basename with a `bench_v10_` prefix.
+
+## Results
+
+Paired FoM from `deep_lss.apps.tuning.run_comparison`, v18/default, 1000 mocks over 1000
+cosmologies, each probe against **its own** `bench_v7_full`. **Highest evaluated checkpoint** in
+every case — the 2× arms carry a mid-chain checkpoint as well, and it is at cosine-midpoint with a
+live learning rate, so it is not a 1× result and is not quoted here. Seed floor 0.049; `=` is a wash.
+
+| arm | budget | lensing | clustering | combined |
+|---|---|---|---|---|
+| `bench_v7_full` (anchor, `mean`) | fixed `n_steps` 130k / 130k / 250k | 1.000 | 1.000 | 1.000 |
+| **A** `mean_std` | 1× | 1.031 = | 0.982 = | — |
+| **A** `mean_std` | 2× | **1.153** | **1.056** | **1.053** (`bench_v8_mean_std`) |
+| **B** `mean_std_k20` | 1× | **1.078** | **1.070** | — |
+| **B** `mean_std_k20` | 2× | **1.146** | **1.070** | 0.993 = |
+| **C** `unet_multiscale` | 1× | 0.937 | **1.075** | 1.031 = (`bench_v9_unet_multiscale`) |
+
+Steps as run — lensing 136 900 / 275 200 / 185 500 / 458 700 / 142 300; clustering 140 200 /
+283 100 / 221 000 / 389 000 / 212 300; combined 260 000 / 396 400 / 263 900.
+
+### 1. The 1×/2× prior was wrong, and that is the round's main result
+
+`bench_v8_long` said a doubled budget buys +2.3% on combined, and the round was designed on that
+prior. On the single probes it buys far more: lensing A 1.031 → **1.153** (+11.8%) and B 1.078 →
+1.146 (+6.3%); clustering A 0.982 → 1.056 (+7.5%). This is the branch the 1×/2× section flagged as
+the expensive one — **the bench_v7 single-probe numbers were budget-limited**, and every conclusion
+drawn by comparing a single probe to combined needs re-reading with that in mind.
+
+On lensing the FoM is very nearly monotone in step count across arms of the same family (136 900 →
+1.031, 185 500 → 1.078, 275 200 → 1.153, 458 700 → 1.146), with the gain flattening between 275 k
+and 459 k. **Steps, not the readout and not the kernel, were the binding constraint on lensing.**
+Clustering does not share this: B is 1.070 at both 1× and 2×, i.e. saturated at one job.
+
+### 2. A transfers — but only with the budget to use it
+
+The round's null hypothesis was "if `mean_std` transfers, it is the answer". At 1× it does **not**
+transfer (1.031 and 0.982, both washes); at 2× it does, on both probes. The readout was never the
+thing that failed to transfer.
+
+### 3. k=20 wins the A-vs-B contrast on the single probes, and loses on combined
+
+Lensing at 2×: 1.146 vs 1.153, a dead heat 0.6% apart inside a 4.9% floor — and B is the cheaper
+step, so by this round's own rule (*a wash against A is a win for k=20*) **k=20 wins**. It also wins
+outright at 1× on both probes (1.078 vs 1.031; 1.070 vs 0.982). On **combined** it inverts:
+`bench_v10_mean_std_k20` is 0.993 against `bench_v8_mean_std`'s 1.053, a 6% loss. The sparse graph
+is neutral-to-good on a single ladder and costs something across the injection seam.
+
+The B@1× ≈ A@2× cross-check did not come off as designed: k20 measured 1.36× the rate on lensing,
+not the projected 1.51×, so B@1× reached 185 500 steps against A@2×'s 275 200 — not the matched
+comparison it was meant to be. What it does show is consistent with §1: the arm with more steps won.
+
+### 4. C splits by probe, exactly as predicted, and only one half is interpretable
+
+Lensing 0.937, clustering 1.075 — the opposite orderings the arm was built to produce. Under the
+dimensionality confound the lensing **loss is uninterpretable** (readout or balance, 3.8:1 vs 2:1),
+while the clustering **win is unambiguous** and is the best clustering arm in the round. Multi-scale
+readout is real on the 57′-smoothed field; on lensing it is not, or is masked by the imbalance.
+Settling it still needs the deferred `mean_wide` control.
+
+### What this does not settle
+
+Q1 only. **Q2 (posterior bias on the source-clustering mocks) is what the goal means by "robust" and
+decides the default on lensing**, and the pattern through bench_v8/v9 is that `sc_gatti` S8 bias
+rises monotonically with FoM ratio. These arms are the most informative compressions in the
+programme, so they are the most exposed; none of them is adopted on the strength of the table above.
+
+### Standing against production
+
+`configs/deepsphere/prod/` carries `bench_v7 full` — `map_pool: mean` at 1× on the single probes —
+which this round beats by ~15% on lensing and ~7% on clustering. The prod defaults were written
+before these numbers were paired against the anchor and have **not** been revised to match.
