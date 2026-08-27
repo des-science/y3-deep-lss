@@ -1,0 +1,151 @@
+# ============================================================================
+# bench_v11 — COMBINED, "nodroppath": the champion with STOCHASTIC DEPTH TURNED OFF.
+#
+# PARENT: bench_v8/mean_std.yaml (run on disk: `bench_v8_mean_std`, the programme champion).
+#
+# !! THIS ARM CARRIES TWO KNOBS, NOT ONE, AND CANNOT BE ATTRIBUTED TO EITHER ALONE. !!
+#     drop_path_rate            0.1 -> 0.0
+#     residual_attention_every  2   -> 1      (attention after EVERY residual layer, 2 blocks -> 5)
+# The second is a round-wide recipe decision taken on 2026-08-27 -- "attention after every layer,
+# that is cleaner" -- applied to every arm in bench_v11 that carries attention. This is the only such
+# arm, so it is the only place the recipe change bites. It was offered as its own one-knob arm
+# (`attn1`, champion with every 2 -> 1) and DECLINED in favour of holding the round to 8 jobs.
+#
+# WHAT THAT COSTS, STATED PLAINLY. A wash against the champion is still actionable in the round's
+# own terms -- both knobs point at "simpler and cheaper is not worse", and a tie goes to the simpler
+# network -- but a LOSS is uninterpretable: it could be DropPath mattering, or 5 attention blocks
+# being worse than 2, or the ~5% of steps the extra blocks cost at equal wall. DO NOT quote this arm
+# as a DropPath measurement. If the round needs one, `attn1` is the 2 extra jobs that buys it.
+#
+# WHY DROPPATH IS WORTH DELETING AT ALL. Its only one-knob measurement is v17 bench_v6, 1.050 on the
+# ConvNeXt block -- inside today's 0.049 floor ([[feedback_conservative_decision_floors]]), i.e. the
+# evidence for keeping it has never cleared the bar it would have to clear today. It has never been
+# ablated on v18, and every arm of bench_v8, v9 and v10 inherited it unexamined. Note the sign is
+# BLOCK-DEPENDENT and negative on the classic block (0.946), which is why simple.yaml pins it to 0.0
+# and why this file only tests it on ConvNeXt, where it is the champion's own operating point.
+#
+# WHAT DROPPATH ACTUALLY DOES HERE. gnn_layers.py applies it to the ConvNeXt residual BRANCH after
+# LayerScale and before the skip add, so at rate 0.1 each block's branch is dropped on 10% of samples
+# and the block degrades to the identity. It is regularisation, and bench_v6 found its ConvNeXt gain
+# was informativeness rather than robustness (Q2 moved only 0.25 -> 0.21 sigma). So the prior that it
+# is doing real work here is weak, and the round's preferred outcome is that it comes out.
+#
+# EXPECTED RATE: ~3.3 it/s, roughly the champion's. Removing DropPath is worth ~+4.8% of step time on
+# ConvNeXt at base 64 (3.52 vs 3.35 it/s), while going from 2 to 5 attention blocks costs roughly the
+# same again (attention is ~3% of step time for 2 blocks at base 64). The two nearly cancel, which is
+# a coincidence, not a design. MEASURE IT: read throughput.json against the champion's before quoting
+# any ratio, and if the rates differ by more than a few percent the slower arm carries a handicap that
+# is not either knob.
+#
+# NEW CHECKPOINT LINEAGE. DropPath itself is weight-free, but the extra attention blocks are not, so
+# this network is NOT restore-compatible with a `bench_v8_mean_std` checkpoint. expect_partial() will
+# NOT raise -- it will load the shared layers and silently leave the rest. RUN_NUM=1, own MODEL_DIR.
+#
+# Launch: 2-job afterany chain, MODEL_DIR=bench_v11_nodroppath, RUN_NUM=1. See README.md.
+# ============================================================================
+name: deepsphere_default
+
+training:
+  n_steps: auto  # bounded by wall_budget_seconds alone; the step count reached is an OUTPUT, recorded
+                 # in throughput.json next to the model.
+  wall_budget_seconds: 79200  # TRAINING seconds for the WHOLE run, summed across the 2-job chain.
+                              # The cosine spans all of it and anneals to zero when it is spent.
+  job_budget_seconds: 39600  # this job's share (11 h of 12 h; ~1 h left for the eval tail). Job 1
+                             # stops here and checkpoints cleanly rather than being killed at the wall.
+  output_every: Null
+  checkpoint_every: 5000  # job 2 restores the last checkpoint -- smaller = less lost handoff work
+  vali_every: 1000
+  eval_every: Null
+
+optimization:
+  optimizer: adam
+  gradient_clipping:
+    clip_by_value: null
+    clip_by_norm: null
+    clip_by_global_norm: 1.0
+  mutual_info_loss:
+    learning_rate: 1.0e-4
+    optimizer_kwargs:
+      beta_1: 0.9
+      beta_2: 0.999
+    scheduler: cosine
+    warmup_steps: 5000
+    warmup_init_learning_rate: 1.0e-5
+    decay_alpha: 0.0
+    ema_momentum: null
+
+network:
+  name: resnet
+  spmm_backend: csr
+  n_neighbors: 60
+  max_checkpoints: 50
+  save_second_to_last_layer: False
+  z_bank_size: Null
+  input_norm: true
+  # Multi-resolution: clustering (fwhm >= 57') is smoothed and injected at nside 256; lensing stays
+  # native. Needs scale_cuts.clustering.theta_fwhm_base in the scales config (8wl,32gc has it).
+  smooth_nside:
+    clustering: 256
+  map_pool: mean_std  # UNCHANGED from the champion -- this arm inherits the readout, it does not test it
+
+  map_feature_dim: null  # no projection: the 1024-d pooled map goes straight to map_norm + concat
+  cls:
+    n_bins: 16
+    transform: asinh_per_feature
+    asinh_default_scale: null
+    embedding_layers: [512, 512, 512, 512]  # NOTE: now 512 against a 1024-d map -- see the confound
+    embedding_dropout_rate: 0.1
+  kwargs:
+    base_channels: 64  # pool_widen doubles per pool stage -> trunk 64 * 2^3 = 512 (pinned across probes)
+    pool_layers: 3
+    conv_layers: 2
+    residual_layers: 5
+    residual_block_type: convnext
+    mlp_ratio: 4
+    layer_scale_init: 1.0e-6
+    drop_path_rate: 0.0  # <-- KNOB 1 vs bench_v8/mean_std.yaml (0.1). Stochastic depth OFF: every
+                         # ConvNeXt block now always contributes its branch. Weight-free either way.
+    poly_degree: 5
+    head_type: "dense"
+    dense_layers: []
+    dropout_rate: 0.1
+    residual_attention_every: 1  # <-- KNOB 2 vs bench_v8/mean_std.yaml (2). Round-wide recipe change:
+                                 # attention after EVERY residual layer, so 5 interleaved blocks over
+                                 # the nside-16 body (~448 tokens) instead of 2. See the header --
+                                 # this is why the arm is not a clean DropPath measurement.
+    residual_attention:
+      num_heads: 8          # body is 512 ch -> key_dim = 512/8 = 64, matching the transformer
+      n_layers: 1
+      mlp_ratio: 2.0        # attention-block MLP ratio (distinct from the ConvNeXt mlp_ratio above)
+      dropout_rate: 0.1
+      positional_embedding: true   # learnable per-token pos-emb over the fixed nside-16 footprint
+      layer_scale_init: 1.0e-4     # near-identity init
+
+dset:
+  training:
+    common:
+      is_eval: False
+      n_readers: 32
+      n_prefetch: 4
+      n_workers: Null
+    grid:
+      local_batch_size: 16
+      file_name_shuffle_buffer: 64
+      examples_shuffle_buffer: 256
+  validation:
+    n_batches: 50
+    common:
+      is_eval: True
+      n_readers: 8
+      n_prefetch: 2
+      n_workers: 16
+    grid:
+      local_batch_size: 16
+  eval:
+    common:
+      is_eval: True
+      n_readers: 64
+      n_prefetch: 2
+      n_workers: Null
+    grid:
+      local_batch_size: 16

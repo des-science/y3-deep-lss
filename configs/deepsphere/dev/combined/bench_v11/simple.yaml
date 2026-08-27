@@ -1,0 +1,138 @@
+# ============================================================================
+# bench_v11 — COMBINED, "simple": the ROUND'S FLOOR. bench_v7/simple.yaml, re-sized onto the
+# wall-clock budget so it sits on the same wall as every other arm in the round.
+#
+# PARENT: bench_v7/simple.yaml (run on disk: `bench_v7_simple`). THE ONLY KNOB: the SIZING MODE —
+# fixed `n_steps: 220000` -> `n_steps: auto` + `wall_budget_seconds` / `job_budget_seconds`.
+# THE ARCHITECTURE IS UNTOUCHED, key for key: classic residual body, drop_path 0.0, no attention,
+# base 64 / trunk 512, map_pool mean, the same Cls branch, the same optimization block.
+#
+# WHY RE-RUN SOMETHING THAT IS ALREADY ON DISK.
+# `bench_v7_simple` trained 230 000 steps over ~23.8 h of wall (fixed n_steps, sized off a v17 rate;
+# see that file's !! PROVENANCE !! block). Every arm in this round gets 79 200 s = 22.0 h. So the
+# existing run holds ~8% more wall than anything it would be compared against, worth roughly +0.8% of
+# FoM at the measured ~+7%-per-2x-budget lever. That is small, but it points the WRONG WAY for this
+# round: the floor is the thing every arm has to clear, so a handicapped-upward floor makes the
+# machinery look more necessary than it is, and this round exists to DELETE machinery. Refreshing it
+# costs 2 jobs and removes the one confound that would otherwise have to be argued around in every
+# row of the results table.
+#
+# WHAT THIS ARM IS FOR. Two jobs, three uses:
+#   1. THE FLOOR. "As simple as possible while meaningfully better" needs a `simple` that is measured,
+#      not inherited. Everything in the round is quoted as a ratio against the champion, but the
+#      question the round answers is whether anything beats THIS.
+#   2. THE WHOLE-STACK CONTRAST. simple vs `bench_v8_mean_std` is the total value of all four things
+#      the champion adds (ConvNeXt, DropPath, attention, mean_std), at equal wall for the first time.
+#   3. THE map_pool CONTROL at the simple operating point. simple vs simple_mean_std.yaml is a clean
+#      one-knob mean -> mean_std, the mirror of `bench_v7_full` -> `bench_v8_mean_std` at the full
+#      operating point. Two independent measurements of the programme's only surviving lever.
+#
+# EXPECTED RATE: ~3.00 it/s (base 64, classic, drop_path 0.0 — see the bench-config reference table).
+# The classic block is SLOWER than ConvNeXt at base 64 (3.00 vs 3.35 with DropPath), so at equal wall
+# this arm buys ~10% FEWER steps than the ConvNeXt arms. That is inherent to holding the wall fixed
+# and is stated, not corrected: it is a handicap against the floor, i.e. AGAINST the round's
+# preferred conclusion, so a `simple` win is conservative and a `simple` loss of <~1% is not
+# architectural. Read the realised counts out of each run's throughput.json before quoting a ratio.
+#
+# NEW CHECKPOINT LINEAGE is not strictly required (the network is identical to `bench_v7_simple`),
+# but launch RUN_NUM=1 with its own MODEL_DIR anyway: restoring a fixed-n_steps checkpoint into a
+# wall-budget run would resume a cosine that was parameterised in STEPS from a schedule now
+# parameterised in SECONDS, and nothing raises on that.
+#
+# Launch: 2-job afterany chain, MODEL_DIR=bench_v11_simple, RUN_NUM=1. See README.md.
+# ============================================================================
+name: deepsphere_default
+
+training:
+  n_steps: auto  # <-- THE ONLY KNOB vs bench_v7/simple.yaml (which fixes 220000). The step count
+                 # reached is an OUTPUT, recorded in throughput.json next to the model.
+  wall_budget_seconds: 79200  # TRAINING seconds for the WHOLE run, summed across the 2-job chain.
+                              # The cosine spans all of it and anneals to zero when it is spent.
+  job_budget_seconds: 39600  # this job's share (11 h of 12 h; ~1 h left for the eval tail). Job 1
+                             # stops here and checkpoints cleanly rather than being killed at the wall.
+  output_every: Null
+  checkpoint_every: 5000  # job 2 restores the last checkpoint -- smaller = less lost handoff work
+  vali_every: 1000
+  eval_every: Null
+
+optimization:
+  optimizer: adam
+  gradient_clipping:
+    clip_by_value: null
+    clip_by_norm: null
+    clip_by_global_norm: 1.0
+  mutual_info_loss:
+    learning_rate: 1.0e-4
+    optimizer_kwargs:
+      beta_1: 0.9
+      beta_2: 0.999
+    scheduler: cosine
+    warmup_steps: 5000
+    warmup_init_learning_rate: 1.0e-5
+    decay_alpha: 0.0
+    ema_momentum: null
+
+network:
+  name: resnet
+  spmm_backend: csr
+  n_neighbors: 60
+  max_checkpoints: 50
+  save_second_to_last_layer: False
+  z_bank_size: Null
+  input_norm: true
+  # Multi-resolution: clustering (fwhm >= 57') is smoothed and injected at nside 256; lensing stays
+  # native. Needs scale_cuts.clustering.theta_fwhm_base in the scales config (8wl,32gc has it).
+  smooth_nside:
+    clustering: 256
+  map_pool: mean  # KEEP: the winning readout, +32.1% paired over flatten. simple_mean_std.yaml is
+                  # this file with the second moment added -- that is the round's one-knob readout test.
+  map_feature_dim: null  # no projection: the 512-d pooled map goes straight to map_norm + concat
+  cls:
+    n_bins: 16
+    transform: asinh_per_feature
+    asinh_default_scale: null
+    embedding_layers: [512, 512, 512, 512]  # last entry 512 balances the 512-d pooled map; fused = 1024
+    embedding_dropout_rate: 0.1
+  kwargs:
+    # CLASSIC residual body -- no residual_block_type key at all (default "residual"), and no
+    # residual_attention key, exactly as bench_v7/simple.yaml has it. Not "forgotten": this arm's
+    # whole point is the architecture with none of the three blocks on it, and mlp_ratio /
+    # layer_scale_init are ConvNeXt-only kwargs that resnet.py never reads on this branch.
+    base_channels: 64  # pool_widen doubles per pool stage -> trunk 64 * 2^3 = 512 (pinned across probes)
+    pool_layers: 3
+    conv_layers: 2
+    residual_layers: 5
+    drop_path_rate: 0.0  # EXPLICITLY OFF: DropPath measured 0.946 on the classic block -- it hurts here
+    poly_degree: 5
+    head_type: "dense"
+    dense_layers: []
+    dropout_rate: 0.1
+
+dset:
+  training:
+    common:
+      is_eval: False
+      n_readers: 32
+      n_prefetch: 4
+      n_workers: Null
+    grid:
+      local_batch_size: 16
+      file_name_shuffle_buffer: 64
+      examples_shuffle_buffer: 256
+  validation:
+    n_batches: 50
+    common:
+      is_eval: True
+      n_readers: 8
+      n_prefetch: 2
+      n_workers: 16
+    grid:
+      local_batch_size: 16
+  eval:
+    common:
+      is_eval: True
+      n_readers: 64
+      n_prefetch: 2
+      n_workers: Null
+    grid:
+      local_batch_size: 16

@@ -1,0 +1,169 @@
+# ============================================================================
+# bench_v11 — COMBINED, "noattn": the champion with the INTERLEAVED GLOBAL ATTENTION REMOVED.
+#
+# PARENT: bench_v8/mean_std.yaml (run on disk: `bench_v8_mean_std`, the programme champion).
+# THE ONLY KNOB: the `residual_attention` dict -> null, i.e. the HealpyGlobalAttention blocks
+# interleaved through the residual body are gone. Everything else -- ConvNeXt block, DropPath 0.1,
+# base 64 / trunk 512, map_pool mean_std, the Cls branch, the whole optimization block -- is
+# byte-identical to the champion.
+#
+# WHY THIS ARM EXISTS: attention is the only lever in the stack that has NEVER been ablated on v18.
+# bench_v7's `full` vs `simple` contrast moves THREE knobs at once (block, DropPath, attention) and
+# its README says in as many words not to read it as evidence about any single lever. The one-knob
+# attention measurements are both on v17 and both at the OLD 1.5% floor:
+#
+#   bench_v5  convnext            -> convnext_attn             1.005-1.056
+#   bench_v6  convnext_droppath   -> convnext_droppath_attn    (the same band)
+#
+# Against today's conservative Q1 floor of **0.049** ([[feedback_conservative_decision_floors]]) that
+# entire band is a wash, i.e. the evidence for keeping attention has never cleared the bar it would
+# have to clear today. Meanwhile every arm of bench_v8, v9 and v10 inherited it unexamined, so the
+# programme's current champion carries a block nothing has justified on v18.
+#
+# THE DECISION RULE IS ASYMMETRIC, AND THAT IS THE POINT OF THE ROUND.
+# A tie goes to the simpler network. So:
+#
+#   noattn / bench_v8_mean_std  >= 0.951 (a wash or better)  ->  DROP attention from the recipe
+#   noattn / bench_v8_mean_std  <  0.951                     ->  attention is real on v18; keep it
+#
+# This is a REMOVAL test, not a search for a gain. It cannot "fail" expensively: the null result is
+# the actionable one, and it retires a block from every future GCNN config in the programme.
+#
+# WHY COMBINED IS THE RIGHT PROBE AND THE ONLY DEFENSIBLE ONE. Attention's stated mechanism here is
+# long-range CROSS-PROBE mixing -- bench_v4 fingered cross-probe mixing as the source of the combined
+# gap, and bench_v7's own results say the transformer's 12.3% margin is combined-only (0.989 lensing,
+# 0.996 clustering, both washes). There is no cross-probe mixing in a single-probe run, so combined is
+# where the block has a rationale at all. If it does not pay HERE it does not pay anywhere.
+#
+# RE-BASED 2026-08-27 FROM bench_v7/full.yaml ONTO THE CHAMPION, AND THAT REMOVED A CONFOUND.
+# The first draft of this file hung off bench_v7/full.yaml and scored against `bench_v7_full`, which
+# trained 250 k steps over 23.81 h of WALL under fixed n_steps -- ~8% more wall than the 79 200 s any
+# new arm gets, worth ~+0.8% of FoM to the anchor, and three paragraphs of argument about which way
+# the handicap ran. `bench_v8_mean_std` is on the SAME 79 200 s / 39 600 s budget as this file, so the
+# comparison is equal-wall by construction and none of that argument is needed. The knob is unchanged;
+# only the parent and the readout it inherits moved (map_pool mean -> mean_std, from the champion).
+#
+# EXPECTED RATE: ~3.35 it/s vs the champion's ~3.25 -- attention is ~3% of step time at base 64 (it was
+# ~13% at base 32; the cost shrinks as the body widens). So expect roughly 3% more steps than the
+# champion at equal wall. That is not a confound to correct: it IS part of what removing the block
+# buys, and equal wall is this programme's fair axis. Verify against throughput.json before scoring.
+#
+# NEW CHECKPOINT LINEAGE. The attention blocks carry weights, so this network is NOT restore-compatible
+# with a `bench_v8_mean_std` checkpoint. expect_partial() will not raise on the mismatch -- it will load
+# the shared layers and silently leave the rest -- so launch with RUN_NUM=1 and its own MODEL_DIR.
+#
+# THE DIFF PRINTS MORE THAN ONE KEY, AND THAT IS EXPECTED. config_check flattens nested dicts to dotted
+# keys, so nulling a 6-key subtree reads as 7 changes (6 sub-keys -> <absent>, plus the new null).
+# It is ONE knob: the attention gate.
+#
+# Launch: 2-job afterany chain, MODEL_DIR=bench_v11_noattn, RUN_NUM=1. See README.md.
+# ============================================================================
+name: deepsphere_default
+
+training:
+  n_steps: auto  # bounded by wall_budget_seconds alone; the step count reached is an OUTPUT, recorded
+                 # in throughput.json next to the model.
+  wall_budget_seconds: 79200  # TRAINING seconds for the WHOLE run, summed across the 2-job chain.
+                              # The cosine spans all of it and anneals to zero when it is spent.
+  job_budget_seconds: 39600  # this job's share (11 h of 12 h; ~1 h left for the eval tail). Job 1
+                             # stops here and checkpoints cleanly rather than being killed at the wall.
+  output_every: Null
+  checkpoint_every: 5000  # job 2 restores the last checkpoint -- smaller = less lost handoff work
+  vali_every: 1000
+  eval_every: Null
+
+optimization:
+  optimizer: adam
+  gradient_clipping:
+    clip_by_value: null
+    clip_by_norm: null
+    clip_by_global_norm: 1.0
+  mutual_info_loss:
+    learning_rate: 1.0e-4
+    optimizer_kwargs:
+      beta_1: 0.9
+      beta_2: 0.999
+    scheduler: cosine
+    warmup_steps: 5000
+    warmup_init_learning_rate: 1.0e-5
+    decay_alpha: 0.0
+    ema_momentum: null
+
+network:
+  name: resnet
+  spmm_backend: csr
+  n_neighbors: 60
+  max_checkpoints: 50
+  save_second_to_last_layer: False
+  z_bank_size: Null
+  input_norm: true
+  # Multi-resolution: clustering (fwhm >= 57') is smoothed and injected at nside 256; lensing stays
+  # native. Needs scale_cuts.clustering.theta_fwhm_base in the scales config (8wl,32gc has it).
+  smooth_nside:
+    clustering: 256
+  map_pool: mean_std  # UNCHANGED from the champion -- this arm inherits the readout, it does not test it
+
+  map_feature_dim: null  # no projection: the 1024-d pooled map goes straight to map_norm + concat
+  cls:
+    n_bins: 16
+    transform: asinh_per_feature
+    asinh_default_scale: null
+    embedding_layers: [512, 512, 512, 512]  # NOTE: now 512 against a 1024-d map -- see the confound
+    embedding_dropout_rate: 0.1
+  kwargs:
+    base_channels: 64  # pool_widen doubles per pool stage -> trunk 64 * 2^3 = 512 (pinned across probes)
+    pool_layers: 3
+    conv_layers: 2
+    residual_layers: 5
+    residual_block_type: convnext
+    mlp_ratio: 4
+    layer_scale_init: 1.0e-6
+    drop_path_rate: 0.1
+    poly_degree: 5
+    head_type: "dense"
+    dense_layers: []
+    dropout_rate: 0.1
+    # !! THE ONLY KNOB vs bench_v8/mean_std.yaml: the interleaved global-attention blocks are OFF. !!
+    # The gate is `residual_attention`, NOT `residual_attention_every`. The body loop in
+    # ResNetLayers.__init__ appends a HealpyGlobalAttention block only under
+    #     if residual_attention is not None and (i + 1) % residual_attention_every == 0:
+    # so nulling the dict is what removes the layers; `residual_attention_every` is then INERT, and
+    # the arg validation a hundred lines up stops looking at it too. It is kept below rather than
+    # deleted so this file's key SET matches the champion's everywhere except the one gate -- delete
+    # it and a later reader cannot tell whether the arm turned attention off or merely forgot to
+    # configure it.
+    residual_attention: null  # <-- THE ONLY KNOB. bench_v8/mean_std.yaml has the 6-key dict here:
+                              #     num_heads 8, n_layers 1, mlp_ratio 2.0, dropout_rate 0.1,
+                              #     positional_embedding true, layer_scale_init 1.0e-4
+    residual_attention_every: 1  # INERT while residual_attention is null. Set to 1 rather than the
+                                 # champion's 2 to match bench_v11's round-wide "attention after every
+                                 # layer" recipe; it changes nothing here and is NOT a second knob.
+
+dset:
+  training:
+    common:
+      is_eval: False
+      n_readers: 32
+      n_prefetch: 4
+      n_workers: Null
+    grid:
+      local_batch_size: 16
+      file_name_shuffle_buffer: 64
+      examples_shuffle_buffer: 256
+  validation:
+    n_batches: 50
+    common:
+      is_eval: True
+      n_readers: 8
+      n_prefetch: 2
+      n_workers: 16
+    grid:
+      local_batch_size: 16
+  eval:
+    common:
+      is_eval: True
+      n_readers: 64
+      n_prefetch: 2
+      n_workers: Null
+    grid:
+      local_batch_size: 16

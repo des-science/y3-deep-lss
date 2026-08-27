@@ -1,0 +1,177 @@
+# ============================================================================
+# !! DEFERRED 2026-08-27, NEVER RUN. NOT PART OF bench_v11. !!
+#
+# bench_v11 was re-scoped on 2026-08-27 to a single maps+Cls contrast -- a leave-one-out ablation of
+# the champion `bench_v8_mean_std`, on combined only. The user's instruction was that EVERY network in
+# the round carries the Cls branch, and this pair is maps-ONLY, so it no longer belongs to the round.
+# It was shelved rather than deleted: the contrast is still well-posed and the rationale below is
+# still correct.
+#
+# WHAT IS STILL TRUE AND STILL WORTH RUNNING LATER:
+#   * `map_pool` became readable on the maps-only path on 2026-08-27, when both paths were unified
+#     onto ResNetSummaryNetwork. Before that, setting it in a maps-only config was a SILENT NO-OP.
+#   * No maps-only GCNN run exists on v18/default at all, so BOTH arms are new; there is nothing on
+#     disk to score either against.
+#   * `mean.yaml` is byte-identical to configs/deepsphere/prod/combined/maps.yaml.
+#
+# !! THE OPEN CONSEQUENCE OF SHELVING THIS. !!
+# The three prod `maps.yaml` files were switched to `map_pool: mean` ON REQUEST, AHEAD OF THE
+# EVIDENCE, in the same commit that unified the two paths. This pair was the contrast that would have
+# validated that switch. With it shelved, the prod maps-only default stands on the maps+Cls
+# +32.1% flatten->mean result transplanted across paths, and on nothing measured on the maps-only
+# path itself. That is a known gap, not an oversight. The revert, if it is ever wanted, is deleting
+# one `map_pool` line from each of the three prod maps.yaml files.
+#
+# Original header follows unchanged.
+# ============================================================================
+# ============================================================================
+# bench_v11 -- COMBINED, the MAPS-ONLY READOUT contrast: flatten vs mean-pool.
+#
+# THE PAIR IS flatten.yaml vs mean.yaml AND IT IS ONE KNOB: `map_pool` absent vs "mean".
+# Both are MAPS-ONLY (no `cls:` block). They are a self-contained contrast inside this round and
+# have NOTHING to do with the `noattn` arm, which is maps+Cls and is scored against `bench_v7_full`;
+# the two contrasts share only the round number. See README.md.
+#
+# WHY BOTH ARMS ARE NEW RUNS. There is no maps-only GCNN run to score against: all 58 DeepSphere
+# runs under runs/v18/default/maps/ carry a `cls:` block, on all three probes. (Older v16/v17 maps
+# runs include maps-only ones, but they saved no configs.yaml, so run_evaluation cannot rebuild them
+# at all and they are not scoreable either.) The maps-only prod configs have never been trained on
+# this dataset, so flatten.yaml is not a re-run of anything -- it is the control this round has to
+# produce.
+#
+# WHAT THE KNOB ACTUALLY MOVES. The trunk ends at nside 16 with 512 channels over ~448 footprint
+# pixels, and the two arms differ only in how that becomes the vector the dense head consumes:
+#   flatten  ->  (B, 229376), then LayerNorm(229376) [458 752 params] -> Dropout -> Dense(n_out)
+#   mean     ->  (B, 512),    then LayerNorm(512)    [1 024 params]   -> Dropout -> Dense(n_out)
+# The trunk is byte-identical; only the head changes, and it shrinks by ~1.8 M parameters.
+#
+# INHERENT, NOT A SECOND KNOB: `dropout_rate: 0.1` in the head now drops units of a 512-d vector
+# instead of a 229376-d one, which is a much stronger regularizer at the same nominal rate. That is
+# what shrinking the readout MEANS -- it cannot be held fixed while the knob moves -- so it is stated
+# here rather than silently corrected. Same class as the wall-clock/step-count coupling elsewhere.
+#
+# THE +32.1% IS NOT EVIDENCE FOR THIS ARM. `flatten -> mean` was measured on the maps+Cls path
+# (bench_v4 `pool_head`), where flatten fed a linear Dense(map_feature_dim=64) that crushed 114688
+# features to 64 before the fusion. There is no such projection here: flatten feeds the head
+# directly. Different head, different question -- and bench_v6's `budget_classic` header records the
+# opposite sign in a neighbouring case ("on the FLATTEN readout it is actively harmful"). Treat the
+# maps+Cls result as motivation for asking, not as a prior on the answer.
+#
+# SIZING: WALL-CLOCK BUDGET, no rate probe -- n_steps: auto + wall_budget_seconds 79200 across a
+# 2-job chain, the combined convention. The usual equal-wall handicap is unusually small here: both
+# heads are a rounding error against an nside-512 GCNN trunk, so the arms should sustain nearly the
+# same it/s and equal wall should be near-equal samples. VERIFY, do not assume -- compare
+# throughput.json between the two runs before reading the FoM, and if the rates differ by more than
+# a few percent the slow arm carries a handicap that is not the knob.
+#
+# WHY THIS COULD NOT BE ASKED BEFORE (2026-08-27). `map_pool` used to be read only by the maps+Cls
+# composite, so setting it in a maps-only config was a SILENT NO-OP -- the key rode along into
+# configs.yaml, reached no reader and changed no architecture. Both paths now build the same
+# ResNetSummaryNetwork, which owns the readout whether or not a Cls branch is concatenated, so
+# `map_pool` means the same thing in every config that sets it. Note this is NOT a new code path in
+# the risky sense: the reduction is the same `moment_pool()` call that every bench_v8/v9/v10 combined
+# arm already ran -- only the branch that reaches it is new.
+# PRE-LAUNCH CHECK: the training log of mean.yaml must contain
+#     "ResNetSummaryNetwork: map_pool=mean, ... NO Cls branch (maps only)"
+# and flatten.yaml's must say `map_pool=None (flatten)`. That line is the only positive evidence the
+# knob engaged -- a config key that reaches no reader looks exactly like one that does.
+#
+# NEW CHECKPOINT LINEAGE, both arms. The head's first Dense changes input width (229376 vs 512), and
+# no maps-only checkpoint on this dataset exists anyway. RUN_NUM=1 and its own MODEL_DIR, each arm.
+#
+# THIS ARM: the CONTROL -- no `map_pool`, i.e. the flatten head, which is what every maps-only
+# DeepSphere config in the repo did until 2026-08-27 and what the prod maps configs shipped.
+# `map_feature_dim: null` is kept (not deleted) so the two arms' key SET differs in exactly one
+# place: a later reader can tell this arm chose flatten rather than forgot to configure a readout.
+#
+# Launch: 2-job afterany chain, MODEL_DIR=bench_v11_flatten, RUN_NUM=1. See README.md.
+# ============================================================================
+name: deepsphere_default
+
+training:
+  n_steps: auto  # an OUTPUT of the wall-clock budget; see throughput.json
+  wall_budget_seconds: 79200  # TRAINING seconds for the WHOLE run -- 2 x 12 h chain
+  job_budget_seconds: 39600  # this job's share (11 h of 12 h; ~1 h for the eval tail)
+  output_every: Null
+  checkpoint_every: 5000
+  vali_every: 1000
+  eval_every: Null
+
+optimization:
+  optimizer: adam
+  gradient_clipping:
+    clip_by_value: null
+    clip_by_norm: null
+    clip_by_global_norm: 1.0
+  mutual_info_loss:
+    learning_rate: 1.0e-4
+    optimizer_kwargs:
+      beta_1: 0.9
+      beta_2: 0.999
+    scheduler: cosine
+    warmup_steps: 5000
+    warmup_init_learning_rate: 1.0e-5
+    decay_alpha: 0.0
+    ema_momentum: null
+
+network:
+  name: resnet
+  n_neighbors: 60
+  spmm_backend: csr
+  smooth_nside:
+    clustering: 256
+  max_checkpoints: 50
+  save_second_to_last_layer: False
+  z_bank_size: Null
+  input_norm: true
+  map_feature_dim: null  # the pooled map is already trunk-wide; no projection
+  kwargs:
+    base_channels: 64  # trunk = base_channels * 2^pool_layers = 512, pinned across probes
+    pool_layers: 3
+    conv_layers: 2
+    residual_layers: 5
+    residual_block_type: convnext
+    mlp_ratio: 4
+    layer_scale_init: 1.0e-6
+    drop_path_rate: 0.1
+    residual_attention_every: 2
+    residual_attention:
+      num_heads: 8
+      n_layers: 1
+      mlp_ratio: 2.0
+      dropout_rate: 0.1
+      positional_embedding: true
+      layer_scale_init: 1.0e-4
+    poly_degree: 5
+    head_type: "dense"
+    dense_layers: []
+    dropout_rate: 0.1
+
+dset:
+  training:
+    common:
+      is_eval: False
+      n_readers: 32
+      n_prefetch: 4
+      n_workers: Null
+    grid:
+      local_batch_size: 16
+      file_name_shuffle_buffer: 64
+      examples_shuffle_buffer: 256
+  validation:
+    n_batches: 50
+    common:
+      is_eval: True
+      n_readers: 8
+      n_prefetch: 2
+      n_workers: 16
+    grid:
+      local_batch_size: 16
+  eval:
+    common:
+      is_eval: True
+      n_readers: 64
+      n_prefetch: 2
+      n_workers: Null
+    grid:
+      local_batch_size: 16

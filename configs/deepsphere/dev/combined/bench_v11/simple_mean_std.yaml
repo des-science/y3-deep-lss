@@ -1,0 +1,148 @@
+# ============================================================================
+# bench_v11 — COMBINED, "simple_mean_std": the ROUND'S CANDIDATE. bench_v7/simple.yaml plus the one
+# lever in the whole programme that has ever paid, and nothing else.
+#
+# PARENT: simple.yaml (this directory). THE ONLY KNOB: map_pool "mean" -> "mean_std", i.e. the readout
+# keeps the per-channel spatial standard deviation alongside the mean, (B,512) -> (B,1024). The body
+# is the plain classic residual stack: NO ConvNeXt block, NO DropPath, NO interleaved attention.
+#
+# WHY THIS IS THE MOST IMPORTANT ARM IN THE ROUND.
+# The champion `bench_v8_mean_std` stacks FOUR things over bench_v7/simple.yaml -- ConvNeXt block,
+# DropPath 0.1, interleaved attention, and the mean_std readout. Of those four, exactly one has a
+# one-knob measurement that clears today's 0.049 floor anywhere: the readout (mean -> mean_std,
+# +5.3% on combined; flatten -> mean, +32.1%). The other three have never been ablated on v18 at all,
+# and their v17 one-knob numbers (block 1.024, DropPath-on-convnext 1.050, attention 1.005-1.056) are
+# ALL inside 0.049. bench_v7's own README says in as many words that its full-vs-simple contrast moves
+# three knobs at once and must not be read as evidence about any single one.
+#
+# So this arm asks the round's actual question directly: KEEP ONLY THE LEVER THAT PAID. If it ties the
+# champion, three blocks leave the recipe in one step and the paper's architecture becomes a plain
+# ResNet GCNN with a two-moment pooled readout.
+#
+# THE DECISION RULE IS ASYMMETRIC, AND THAT IS THE POINT.
+# A tie goes to the simpler network ([[feedback_conservative_decision_floors]]). So:
+#
+#   simple_mean_std / bench_v8_mean_std  >= 0.951 (a wash or better)  ->  ADOPT THIS. Drop ConvNeXt,
+#                                                                        DropPath and attention.
+#   simple_mean_std / bench_v8_mean_std  <  0.951                     ->  the stack is real on v18;
+#                                                                        noattn/nodroppath say which
+#                                                                        part of it.
+#
+# The three other arms in the round exist to answer the second branch. This one can settle it outright.
+#
+# !! THE CONFOUND, INHERITED FROM bench_v8/mean_std.yaml AND NOT CORRECTED. !!
+# mean_std DOUBLES the map readout 512 -> 1024, so the fused vector goes 1024 -> 1536 and the map
+# branch's share of it goes from 1/2 to 2/3 against the 512-d Cls embedding. This arm therefore moves
+# the maps/Cls dimensionality balance as well as adding the moment, and a win cannot be cleanly
+# attributed between them. Deliberate, for the reason mean_std.yaml gives: pinning the width back with
+# map_feature_dim: 512 inserts exactly the projection the pooled-readout lineage was built to remove.
+# The confound is IDENTICAL to the one the champion already carries, so the simple_mean_std / champion
+# ratio -- the one this arm is for -- is unaffected by it. It only clouds simple -> simple_mean_std.
+#
+# EXPECTED RATE: ~3.00 it/s, i.e. the same as simple.yaml. The extra reduction over the pixel axis and
+# the wider head are a rounding error against an nside-512 GCNN trunk, so unlike most arms in this
+# programme this one is very nearly step-matched to its parent within the same wall and is NOT paying
+# for its knob in budget. Against the ConvNeXt-bodied champion it is ~10% down on steps -- a handicap
+# against adopting it, so a wash here is conservative. Verify with throughput.json before quoting.
+#
+# NEW CHECKPOINT LINEAGE: the readout width changes, so this does not restore from a `mean` checkpoint
+# and vice versa. expect_partial() will NOT raise on the mismatch. RUN_NUM=1, own MODEL_DIR.
+#
+# Launch: 2-job afterany chain, MODEL_DIR=bench_v11_simple_mean_std, RUN_NUM=1. See README.md.
+# ============================================================================
+name: deepsphere_default
+
+training:
+  n_steps: auto  # <-- THE ONLY KNOB vs bench_v7/simple.yaml (which fixes 220000). The step count
+                 # reached is an OUTPUT, recorded in throughput.json next to the model.
+  wall_budget_seconds: 79200  # TRAINING seconds for the WHOLE run, summed across the 2-job chain.
+                              # The cosine spans all of it and anneals to zero when it is spent.
+  job_budget_seconds: 39600  # this job's share (11 h of 12 h; ~1 h left for the eval tail). Job 1
+                             # stops here and checkpoints cleanly rather than being killed at the wall.
+  output_every: Null
+  checkpoint_every: 5000  # job 2 restores the last checkpoint -- smaller = less lost handoff work
+  vali_every: 1000
+  eval_every: Null
+
+optimization:
+  optimizer: adam
+  gradient_clipping:
+    clip_by_value: null
+    clip_by_norm: null
+    clip_by_global_norm: 1.0
+  mutual_info_loss:
+    learning_rate: 1.0e-4
+    optimizer_kwargs:
+      beta_1: 0.9
+      beta_2: 0.999
+    scheduler: cosine
+    warmup_steps: 5000
+    warmup_init_learning_rate: 1.0e-5
+    decay_alpha: 0.0
+    ema_momentum: null
+
+network:
+  name: resnet
+  spmm_backend: csr
+  n_neighbors: 60
+  max_checkpoints: 50
+  save_second_to_last_layer: False
+  z_bank_size: Null
+  input_norm: true
+  # Multi-resolution: clustering (fwhm >= 57') is smoothed and injected at nside 256; lensing stays
+  # native. Needs scale_cuts.clustering.theta_fwhm_base in the scales config (8wl,32gc has it).
+  smooth_nside:
+    clustering: 256
+  # <-- THE ONLY KNOB vs simple.yaml: mean -> mean + per-channel spatial std, (B,512) -> (B,1024).
+  map_pool: mean_std
+  map_feature_dim: null  # no projection: the 1024-d pooled map goes straight to map_norm + concat
+  cls:
+    n_bins: 16
+    transform: asinh_per_feature
+    asinh_default_scale: null
+    embedding_layers: [512, 512, 512, 512]  # NOTE: still 512, now against a 1024-d map -- see the
+                                            # confound in the header. Identical to the champion's.
+    embedding_dropout_rate: 0.1
+  kwargs:
+    # CLASSIC residual body -- no residual_block_type key at all (default "residual"), and no
+    # residual_attention key, exactly as simple.yaml and bench_v7/simple.yaml have it. Not
+    # "forgotten": this arm's whole point is the champion's readout on a body with NONE of the three
+    # blocks on it. mlp_ratio / layer_scale_init are ConvNeXt-only kwargs resnet.py never reads here.
+    base_channels: 64  # pool_widen doubles per pool stage -> trunk 64 * 2^3 = 512 (pinned across probes)
+    pool_layers: 3
+    conv_layers: 2
+    residual_layers: 5
+    drop_path_rate: 0.0  # EXPLICITLY OFF: DropPath measured 0.946 on the classic block -- it hurts here
+    poly_degree: 5
+    head_type: "dense"
+    dense_layers: []
+    dropout_rate: 0.1
+
+dset:
+  training:
+    common:
+      is_eval: False
+      n_readers: 32
+      n_prefetch: 4
+      n_workers: Null
+    grid:
+      local_batch_size: 16
+      file_name_shuffle_buffer: 64
+      examples_shuffle_buffer: 256
+  validation:
+    n_batches: 50
+    common:
+      is_eval: True
+      n_readers: 8
+      n_prefetch: 2
+      n_workers: 16
+    grid:
+      local_batch_size: 16
+  eval:
+    common:
+      is_eval: True
+      n_readers: 64
+      n_prefetch: 2
+      n_workers: Null
+    grid:
+      local_batch_size: 16

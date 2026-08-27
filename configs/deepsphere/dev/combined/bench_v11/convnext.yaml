@@ -1,0 +1,160 @@
+# ============================================================================
+# bench_v11 — COMBINED, "convnext": the CLEAN BLOCK TEST. simple.yaml with the ConvNeXt residual block
+# and nothing else on — no DropPath, no attention, mean readout.
+#
+# PARENT: simple.yaml (this directory). THE ONLY KNOB: residual_block_type "residual" -> "convnext".
+# DropPath stays 0.0 on BOTH sides, attention stays off on BOTH sides, the readout stays `mean` on
+# BOTH sides. Base 64 / trunk 512, the Cls branch and the optimization block are untouched.
+#
+# WHY THIS IS WORTH A ROUND SLOT: THE BLOCK HAS NEVER BEEN MEASURED ON ITS OWN, ANYWHERE.
+# The programme has exactly one one-knob block number, bench_v6 on v17: **1.024** — inside today's
+# 0.049 floor ([[feedback_conservative_decision_floors]]), i.e. a wash. Worse, bench_v6's own reading
+# was that the block does nothing by itself and only pays through its INTERACTION with DropPath:
+# block + budget together bought **0.998**, a dead wash, while block + DropPath was the entire gain of
+# that round's champion. That claim has never been checked on v18, and every arm of bench_v8, v9 and
+# v10 has carried the block bundled with DropPath and attention, so no run on this dataset isolates it.
+#
+# This arm isolates it. Read against simple.yaml it answers: does the ConvNeXt block pay ANYTHING on
+# its own, stripped of the DropPath it is usually bundled with?
+#
+#   convnext / simple  >= 1.049   ->  the block pays on its own; it survives the round on its own merit
+#   convnext / simple  inside the floor  ->  bench_v6's reading holds on v18: the block is a wash alone,
+#                                            and it only earns its place if noattn/nodroppath show the
+#                                            interaction is real. A tie goes to the SIMPLER net.
+#
+# !! THE CONFOUND, AND IT IS THE BIG ONE FOR THIS PARTICULAR CONTRAST. !!
+# ConvNeXt is FASTER than the classic block at base 64 — ~3.52 it/s against ~3.00 — so under this
+# round's fixed wall this arm buys roughly **17% MORE optimizer steps** than simple.yaml. At the
+# measured ~+7%-per-2x-budget lever that is worth about **+1.7% of FoM on its own**, before the block
+# does anything. So:
+#
+#   * a convnext WIN of less than ~2% is fully consistent with the extra steps alone and is NOT
+#     evidence for the block. This is exactly the trap bench_v6 fell into ("block + budget bought
+#     0.998" was only visible once budget was separated out).
+#   * a convnext LOSS is unambiguous and strong — it lost DESPITE 17% more steps.
+#
+# Equal wall is this programme's fair axis and the coupling is inherent to it, so this is stated, not
+# corrected. READ THE REALISED STEP COUNTS from both runs' throughput.json before quoting any ratio,
+# and quote the step counts next to the ratio in the results table.
+#
+# THE KNOB PRINTS AS THREE KEYS AND IS STILL ONE KNOB. `mlp_ratio` and `layer_scale_init` are
+# ConvNeXt-ONLY kwargs — resnet.py never reads them on the classic branch, so they do not exist in
+# simple.yaml and appear here as '<absent>' -> value. Both are at their upstream defaults (ConvNeXt /
+# CaiT), never varied anywhere in configs/, and are not being tested. `drop_path_rate` is unchanged at
+# 0.0 and is NOT part of the knob.
+#
+# WHAT THIS ARM IS NOT. It is not comparable one-knob to simple_mean_std.yaml (block AND readout
+# differ) nor to noattn.yaml (DropPath AND readout differ). Its only clean pairing is simple.yaml.
+# The fourth cell of the block x readout square — ConvNeXt, DropPath 0, no attention, mean_std — is
+# NOT in this round; if the block wins here it is the obvious follow-up and the natural merge of this
+# arm with simple_mean_std.yaml.
+#
+# EXPECTED RATE: ~3.52 it/s (base 64, convnext, drop_path 0.0 — bench-config reference table). That is
+# the fastest arm in the round; see the confound above, which is the whole reason it is fast.
+#
+# NEW CHECKPOINT LINEAGE. The ConvNeXt block has a completely different weight set from the classic
+# two-ChebK residual block, so this does not restore from a simple.yaml checkpoint. expect_partial()
+# will NOT raise -- it loads what matches and silently leaves the rest. RUN_NUM=1, own MODEL_DIR.
+#
+# Launch: 2-job afterany chain, MODEL_DIR=bench_v11_convnext, RUN_NUM=1. See README.md.
+# ============================================================================
+name: deepsphere_default
+
+training:
+  n_steps: auto  # <-- THE ONLY KNOB vs bench_v7/simple.yaml (which fixes 220000). The step count
+                 # reached is an OUTPUT, recorded in throughput.json next to the model.
+  wall_budget_seconds: 79200  # TRAINING seconds for the WHOLE run, summed across the 2-job chain.
+                              # The cosine spans all of it and anneals to zero when it is spent.
+  job_budget_seconds: 39600  # this job's share (11 h of 12 h; ~1 h left for the eval tail). Job 1
+                             # stops here and checkpoints cleanly rather than being killed at the wall.
+  output_every: Null
+  checkpoint_every: 5000  # job 2 restores the last checkpoint -- smaller = less lost handoff work
+  vali_every: 1000
+  eval_every: Null
+
+optimization:
+  optimizer: adam
+  gradient_clipping:
+    clip_by_value: null
+    clip_by_norm: null
+    clip_by_global_norm: 1.0
+  mutual_info_loss:
+    learning_rate: 1.0e-4
+    optimizer_kwargs:
+      beta_1: 0.9
+      beta_2: 0.999
+    scheduler: cosine
+    warmup_steps: 5000
+    warmup_init_learning_rate: 1.0e-5
+    decay_alpha: 0.0
+    ema_momentum: null
+
+network:
+  name: resnet
+  spmm_backend: csr
+  n_neighbors: 60
+  max_checkpoints: 50
+  save_second_to_last_layer: False
+  z_bank_size: Null
+  input_norm: true
+  # Multi-resolution: clustering (fwhm >= 57') is smoothed and injected at nside 256; lensing stays
+  # native. Needs scale_cuts.clustering.theta_fwhm_base in the scales config (8wl,32gc has it).
+  smooth_nside:
+    clustering: 256
+  map_pool: mean  # UNCHANGED from simple.yaml -- this arm tests the BLOCK, not the readout. Holding
+                  # the readout fixed is what makes the block contrast clean.
+  map_feature_dim: null  # no projection: the 512-d pooled map goes straight to map_norm + concat
+  cls:
+    n_bins: 16
+    transform: asinh_per_feature
+    asinh_default_scale: null
+    embedding_layers: [512, 512, 512, 512]  # last entry 512 balances the 512-d pooled map; fused = 1024
+    embedding_dropout_rate: 0.1
+  kwargs:
+    # CONVNEXT residual body with NOTHING else on: no DropPath, and no residual_attention key at all
+    # (so attention is off, exactly as in simple.yaml). This is the block, alone.
+    base_channels: 64  # pool_widen doubles per pool stage -> trunk 64 * 2^3 = 512 (pinned across probes)
+    pool_layers: 3
+    conv_layers: 2
+    residual_layers: 5
+    residual_block_type: convnext  # <-- THE ONLY KNOB vs simple.yaml (which omits this key and takes
+                                   # the "residual" default -- the classic two-ChebK residual block).
+    mlp_ratio: 4  # ConvNeXt-only, upstream default. Comes WITH the block; not a second knob.
+    layer_scale_init: 1.0e-6  # ConvNeXt-only, upstream default (ConvNeXt/CaiT LayerScale). Trainable
+                              # per-channel gate on the residual branch, so each block starts as the
+                              # identity and the optimizer grows it only where the branch earns it.
+    drop_path_rate: 0.0  # EXPLICITLY OFF, and HELD EQUAL TO simple.yaml -- that is what makes this a
+                         # clean block test. DropPath on ConvNeXt is nodroppath.yaml's business.
+    poly_degree: 5
+    head_type: "dense"
+    dense_layers: []
+    dropout_rate: 0.1
+
+dset:
+  training:
+    common:
+      is_eval: False
+      n_readers: 32
+      n_prefetch: 4
+      n_workers: Null
+    grid:
+      local_batch_size: 16
+      file_name_shuffle_buffer: 64
+      examples_shuffle_buffer: 256
+  validation:
+    n_batches: 50
+    common:
+      is_eval: True
+      n_readers: 8
+      n_prefetch: 2
+      n_workers: 16
+    grid:
+      local_batch_size: 16
+  eval:
+    common:
+      is_eval: True
+      n_readers: 64
+      n_prefetch: 2
+      n_workers: Null
+    grid:
+      local_batch_size: 16
