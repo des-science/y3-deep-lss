@@ -319,7 +319,8 @@ class ResNetLayers:
             poly_degree=poly_degree,
             norm_kwargs=norm_kwargs,
         )
-        # head without the leading Flatten — used when Cls are concatenated after flattening
+        # head without the leading Flatten — ResNetSummaryNetwork owns the readout on BOTH paths
+        self._head_type = head_type
         self._head_layers_no_flatten = regression_head_layers[1:] if head_type == "dense" else regression_head_layers
         self.layers.extend(regression_head_layers)
 
@@ -350,9 +351,20 @@ class ResNetLayers:
         return self._conv_layers
 
     def get_head_layers_no_flatten(self):
-        """Return the regression head layers without the leading Flatten layer.
+        """Return the regression head layers without the leading readout (Flatten/pool) layer.
 
-        Used by ResNetMapsPlusCLSNetwork which performs its own flatten-and-concat step before the head.
-        Only meaningful for head_type='dense'; for 'conv' heads the full head is returned.
+        Used by ResNetSummaryNetwork, which owns the readout — flatten or ``map_pool`` — on both
+        the maps-only and the maps+Cls path and hands this list a ``(B, d)`` vector.
+
+        Raises:
+            ValueError: for ``head_type='conv'``. That head is a graph convolution followed by a
+                mean over the pixel axis, i.e. it IS a readout, so it cannot follow one; it only
+                composes with the layer-list path (``get_layers()``), which no live config uses.
         """
+        if self._head_type != "dense":
+            raise ValueError(
+                f"head_type={self._head_type!r} has no readout-free form: the conv head ends in its own "
+                "mean over the pixel axis and cannot run on the already-reduced (B, d) vector that "
+                "ResNetSummaryNetwork produces. Use head_type='dense'."
+            )
         return self._head_layers_no_flatten

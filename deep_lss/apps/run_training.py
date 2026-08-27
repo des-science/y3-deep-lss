@@ -71,13 +71,12 @@ from deep_lss.models.delta_model import DeltaLossModel
 from deep_lss.models.grid_model import GridLossModel
 from deep_lss.utils.distribute import HorovodStrategy
 from deep_lss.nets import NETWORKS, TRANSFORMER_NETWORKS
-from deep_lss.nets.composite.resnet_maps_plus_cls import ResNetMapsPlusCLSNetwork
+from deep_lss.nets.composite.resnet_summary import ResNetSummaryNetwork
+from deep_lss.nets.composite.transformer_summary import TransformerSummaryNetwork
 from deep_lss.nets.encoders.maps.gcnn.resnet_multires import ResNetMultiResEncoder
-from deep_lss.nets.encoders.maps.transformer.network import HealpixTransformerNetwork
-from deep_lss.nets.composite.transformer_maps_plus_cls import TransformerMapsPlusCLSNetwork
 from deep_lss.nets.layers.maps.input_normalization import compute_input_norm_stats
 from deep_lss.nets.heads.regression_head import get_regression_head
-from deep_lss.nets.layers.cls.embedding import get_cls_embedding_layers
+from deep_lss.nets.layers.cls.embedding import get_cls_branch_kwargs
 
 LOGGER = logger.get_logger(__file__)
 
@@ -611,8 +610,8 @@ def training(args=None):
         )
     if return_cls:
         LOGGER.warning(
-            f"cls block detected in net_conf['network'] — will build ResNetMapsPlusCLSNetwork "
-            f"(cls_transform={cls_transform})"
+            f"cls block detected in net_conf['network'] — the summary network will concatenate a "
+            f"Cls branch onto the map features (cls_transform={cls_transform})"
         )
 
     # constants: network
@@ -805,87 +804,69 @@ def training(args=None):
                     "head.fused_layers is set but there is no cls: block — a maps-only run has "
                     "nothing to fuse. Remove head.fused_layers or add a cls: block."
                 )
+            # map_feature_dim is the width the map feature is projected to FOR the concatenation,
+            # so it is fusion configuration: required with a `cls:` block, meaningless without one.
+            # Maps-only it defaults to None (no projection), which is the only defensible value
+            # there — the regression head opens with LayerNorm and ends in Dense(n_output), so a
+            # projection would be a second linear layer with no nonlinearity between the two. That
+            # default is what lets the prod pair differ by the `cls:` block and nothing else.
+            if return_cls and "map_feature_dim" not in net_conf["network"]:
+                raise ValueError(
+                    "network.map_feature_dim is required alongside a `cls:` block — it is the map "
+                    "branch's width AT the concatenation, and silently defaulting it to None would "
+                    "change the balance between the two branches. Set it explicitly (e.g. 512, "
+                    "matching the Cls embedding width)."
+                )
+            map_feature_dim = net_conf["network"].get("map_feature_dim", None)
 
             # `masked_attention: true` excludes footprint-masked pixels from the transformer's
             # attention/merges/pooling (static mask constants, no checkpoint variables).
             masked_attention = bool(net_conf["network"].get("masked_attention", False))
 
-            if return_cls:
-                _, l_min_per_pair, l_max_per_pair = configuration.get_cls_bounds_per_pair(msfm_conf, dlss_conf)
-                n_cls_bins = cls_conf.get("n_bins", 16)
-                cls_emb_widths = cls_conf.get("embedding_layers", [512, 512, 512, 512])
-                cls_emb_dropout = cls_conf.get("embedding_dropout_rate", None)
-                # dense regression head minus the leading Flatten (the fused vector is already 2-D)
-                regression_head_layers = get_regression_head(
-                    out_features=n_output,
-                    head_type="dense",
-                    dense_layers=fused_head_layers,
-                    dropout_rate=head_dropout,
-                )[1:]
-                network = TransformerMapsPlusCLSNetwork(
-                    smoothing_kwargs=smoothing_kwargs,
-                    smooth_indices=smooth_indices,
-                    nside=smooth_nside,
-                    token_nside=token_nside,
-                    in_channels=n_z_bins,
-                    map_feature_dim=net_conf["network"]["map_feature_dim"],
-                    transformer_kwargs=transformer_kwargs,
-                    tfr_n_side=n_side,
-                    n_cls_bins=n_cls_bins,
-                    l_min_per_pair=l_min_per_pair,
-                    l_max_per_pair=l_max_per_pair,
-                    cls_embedding_layers=get_cls_embedding_layers(
-                        cls_emb_widths,
-                        dropout_rate=cls_emb_dropout,
-                        dropout_per_layer=cls_conf.get("embedding_dropout_per_layer", True),
-                    ),
-                    regression_head_layers=regression_head_layers,
-                    jit_compile_body=jit_compile_body,
-                    cls_transform=cls_transform,
-                    input_norm=input_norm,
-                    masked_attention=masked_attention,
-                    spmm_backend=spmm_backend,
-                )
+            # The Cls block decides the only structural difference between the two paths: with it
+            # the network concatenates the Cls branch onto the map features, without it there is
+            # nothing to fuse. One constructor, one code path; the encoder and the head are built
+            # identically either way, and map_feature_dim sizes the map branch for the concat.
+            cls_kwargs = get_cls_branch_kwargs(cls_conf, msfm_conf, dlss_conf, n_side, cls_transform)
+            # dense regression head minus the leading readout (the map feature is already 2-D)
+            regression_head_layers = get_regression_head(
+                out_features=n_output,
+                head_type="dense",
+                dense_layers=fused_head_layers,
+                dropout_rate=head_dropout,
+            )[1:]
+            network = TransformerSummaryNetwork(
+                smoothing_kwargs=smoothing_kwargs,
+                smooth_indices=smooth_indices,
+                nside=smooth_nside,
+                token_nside=token_nside,
+                in_channels=n_z_bins,
+                map_feature_dim=map_feature_dim,
+                transformer_kwargs=transformer_kwargs,
+                regression_head_layers=regression_head_layers,
+                **cls_kwargs,
+                jit_compile_body=jit_compile_body,
+                input_norm=input_norm,
+                masked_attention=masked_attention,
+                spmm_backend=spmm_backend,
+            )
 
-                # trace so network.built=True before BaseModel.summary(). Under
-                # MultiWorkerMirroredStrategy the eager call runs in the /job:localhost context
-                # while the in-scope variables live on /job:worker/.../GPU:0, which the
-                # jit-compiled body cannot bridge (XLA cross-device resource access) — route the
-                # trace through strategy.run there.
-                def _build_trace():
-                    return network(
-                        (tf.zeros((2, len(smooth_indices), n_z_bins)), tf.zeros((2, 3 * n_side, len(l_min_per_pair)))),
-                        training=False,
-                    )
+            # trace so network.built=True before BaseModel.summary(). Under
+            # MultiWorkerMirroredStrategy the eager call runs in the /job:localhost context
+            # while the in-scope variables live on /job:worker/.../GPU:0, which the
+            # jit-compiled body cannot bridge (XLA cross-device resource access) — route the
+            # trace through strategy.run there.
+            def _build_trace():
+                maps_in = tf.zeros((2, len(smooth_indices), n_z_bins))
+                if not return_cls:
+                    return network(maps_in, training=False)
+                cls_in = tf.zeros((2, 3 * n_side, len(cls_kwargs["l_min_per_pair"])))
+                return network((maps_in, cls_in), training=False)
 
-                if isinstance(strategy, tf.distribute.MultiWorkerMirroredStrategy):
-                    strategy.run(_build_trace)
-                else:
-                    _build_trace()
+            if isinstance(strategy, tf.distribute.MultiWorkerMirroredStrategy):
+                strategy.run(_build_trace)
             else:
-                network = HealpixTransformerNetwork(
-                    smoothing_kwargs=smoothing_kwargs,
-                    smooth_indices=smooth_indices,
-                    nside=smooth_nside,
-                    token_nside=token_nside,
-                    in_channels=n_z_bins,
-                    num_outputs=n_output,
-                    transformer_kwargs=transformer_kwargs,
-                    jit_compile_body=jit_compile_body,
-                    head_dropout_rate=head_dropout,
-                    input_norm=input_norm,
-                    masked_attention=masked_attention,
-                    spmm_backend=spmm_backend,
-                )
-
-                # same MultiWorkerMirroredStrategy trace routing as the maps+cls branch above
-                def _build_trace():
-                    return network(tf.zeros((2, len(smooth_indices), n_z_bins)), training=False)
-
-                if isinstance(strategy, tf.distribute.MultiWorkerMirroredStrategy):
-                    strategy.run(_build_trace)
-                else:
-                    _build_trace()
+                _build_trace()
 
             LOGGER.info(f"Built transformer network {net_conf['network']['name']} (return_cls={return_cls})")
             model = Model(
@@ -906,7 +887,7 @@ def training(args=None):
                 summary_every=args.summary_every,
             )
 
-        elif return_cls:
+        elif net_name == "resnet":
             net_spec = NETWORKS[net_conf["network"]["name"]](
                 out_features=n_output,
                 # multi-res: smoothing and input norm move into ResNetMultiResEncoder, which
@@ -922,12 +903,12 @@ def training(args=None):
             norm_owner = net_spec
             LOGGER.info(f"Loaded a network specification of type {NETWORKS[net_conf['network']['name']]}")
             LOGGER.info(f"Network kwargs including regularization: {net_conf['network']['kwargs']}")
-            # Build a ResNetMapsPlusCLSNetwork: HealpyGCNN for maps + binned log-Cls concatenated.
-            # The model is passed pre-built so BaseModel uses it directly without re-wrapping in HealpyGCNN.
-            _, l_min_per_pair, l_max_per_pair = configuration.get_cls_bounds_per_pair(msfm_conf, dlss_conf)
-            n_cls_bins = cls_conf.get("n_bins", 16)
-            cls_emb_widths = cls_conf.get("embedding_layers", [512, 512, 512, 512])
-            cls_emb_dropout = cls_conf.get("embedding_dropout_rate", None)
+            # Build a ResNetSummaryNetwork: the HealpyGCNN map branch, with the binned log-Cls
+            # branch concatenated onto it when -- and only when -- the config carries a cls: block.
+            # That concatenation is the ONLY difference between the two paths; the map branch, the
+            # readout and the head are built identically either way. The network is passed to
+            # BaseModel pre-built, so it is used directly without re-wrapping in a HealpyGCNN.
+            cls_kwargs = get_cls_branch_kwargs(cls_conf, msfm_conf, dlss_conf, n_side, cls_transform)
             map_encoder = None
             if is_multires_gcnn:
                 map_encoder = ResNetMultiResEncoder(
@@ -951,26 +932,18 @@ def training(args=None):
                     fuse_act=net_conf["network"].get("fuse_act", None),
                 )
                 norm_owner = map_encoder
-            network = ResNetMapsPlusCLSNetwork(
+            network = ResNetSummaryNetwork(
                 conv_layers=None if is_multires_gcnn else net_spec.get_conv_layers(),
-                cls_embedding_layers=get_cls_embedding_layers(
-                    cls_emb_widths,
-                    dropout_rate=cls_emb_dropout,
-                    dropout_per_layer=cls_conf.get("embedding_dropout_per_layer", True),
-                ),
                 regression_head_layers=net_spec.get_head_layers_no_flatten(),
                 n_side=None if is_multires_gcnn else smooth_nside,
-                tfr_n_side=n_side,
                 indices=None if is_multires_gcnn else smooth_indices,
                 n_neighbors=net_conf["network"]["n_neighbors"],
                 max_batch_size=effective_local_batch_size,
                 initial_Fin=None if is_multires_gcnn else n_z_bins,
-                n_cls_bins=n_cls_bins,
-                l_min_per_pair=l_min_per_pair,
-                l_max_per_pair=l_max_per_pair,
-                cls_transform=cls_transform,
-                # optional map-branch bottleneck before fusion, mirroring the transformer
-                # composite; None = legacy raw flattened GCNN features (old checkpoint lineage)
+                # the Cls branch, or {} for a maps-only network -- the one difference between the paths
+                **cls_kwargs,
+                # optional map-branch bottleneck, mirroring the transformer; None = raw flattened
+                # GCNN features (old checkpoint lineage)
                 map_feature_dim=net_conf["network"].get("map_feature_dim", None),
                 map_encoder=map_encoder,
                 # map-branch readout: None=flatten (legacy), "mean"=mean-pool over pixels,
@@ -978,23 +951,25 @@ def training(args=None):
                 map_pool=net_conf["network"].get("map_pool", None),
                 # apply that readout at every resolution of the map branch, not just the trunk
                 map_pool_multiscale=net_conf["network"].get("map_pool_multiscale", False),
-                # single-res composite builds its own HealpyGCNN; multi-res owns it in map_encoder
+                # single-res network builds its own HealpyGCNN; multi-res owns it in map_encoder
                 # (which already carries spmm_backend), so this is inert there
                 spmm_backend=spmm_backend,
             )
             # HealpySmoothing is a tf.keras.Model whose build() must be called before
             # setup_grid_loss_step accesses trainable_variables. BaseModel skips this
-            # because input_shape=None is passed below (tuple inputs can't use the
-            # standard build path). Build the inner GCNN directly with the map shape.
+            # because input_shape=None is passed below (a pre-built subclassed Model can't use
+            # the standard build path). Build the inner GCNN directly with the map shape.
             # (multi-res: the encoder is a subclassed Model built by the trace below instead)
             if network.gcnn is not None:
                 network.gcnn.build((effective_local_batch_size, len(smooth_indices), n_z_bins))
-            # Trace the full ResNetMapsPlusCLSNetwork so that network.built=True and BaseModel
+            # Trace the full ResNetSummaryNetwork so that network.built=True and BaseModel
             # can call network.summary(). gcnn.build() only builds the map branch.
-            network(
-                (tf.zeros((2, len(smooth_indices), n_z_bins)), tf.zeros((2, 3 * n_side, len(l_min_per_pair)))),
-                training=False,
-            )
+            maps_trace = tf.zeros((2, len(smooth_indices), n_z_bins))
+            if return_cls:
+                cls_trace = tf.zeros((2, 3 * n_side, len(cls_kwargs["l_min_per_pair"])))
+                network((maps_trace, cls_trace), training=False)
+            else:
+                network(maps_trace, training=False)
             model = Model(
                 network=network,
                 n_side=None,
@@ -1013,60 +988,40 @@ def training(args=None):
                 summary_every=args.summary_every,
             )
         else:
-            net_spec = NETWORKS[net_conf["network"]["name"]](
+            # Legacy layer-list specs: vision_transformer, graph_transformer, one_d_conv. They
+            # expose neither get_conv_layers() nor get_head_layers_no_flatten(), so they cannot be
+            # wrapped by ResNetSummaryNetwork and keep BaseModel's HealpyGCNN-wrapping path, in
+            # which the regression head (readout included) is the tail of the layer list. That also
+            # means they have no fusion point and therefore no Cls branch. Don't reach for these
+            # for new work.
+            if return_cls:
+                raise ValueError(
+                    f"network.name={net_name!r} is a legacy layer-list spec and has no Cls branch; "
+                    "remove the cls: block, or use name=resnet / nested_transformer."
+                )
+            net_spec = NETWORKS[net_name](
                 out_features=n_output,
-                # multi-res: smoothing and input norm move into ResNetMultiResEncoder (see the
-                # maps+cls branch above)
-                smoothing_kwargs=None if is_multires_gcnn else smoothing_kwargs,
-                # only passed when enabled: input_norm is a ResNetLayers feature, and the other
-                # NETWORKS specs keep their signatures (they fail loudly if it is requested)
-                **({"input_norm": True} if input_norm and not is_multires_gcnn else {}),
-                **({"smoothing_external": True} if is_multires_gcnn else {}),
+                smoothing_kwargs=smoothing_kwargs,
+                # only passed when enabled: the legacy specs keep their signatures and fail loudly
+                # if input_norm is requested
+                **({"input_norm": True} if input_norm else {}),
                 spmm_backend=spmm_backend,
                 **net_conf["network"]["kwargs"],
             )
             norm_owner = net_spec
-            LOGGER.info(f"Loaded a network specification of type {NETWORKS[net_conf['network']['name']]}")
+            LOGGER.info(f"Loaded a legacy network specification of type {NETWORKS[net_name]}")
             LOGGER.info(f"Network kwargs including regularization: {net_conf['network']['kwargs']}")
-            if is_multires_gcnn:
-                # prebuilt keras.Model (encoder incl. the regression head, which HealpyGCNN passes
-                # through) — BaseModel uses it directly, like the transformer maps-only path
-                network = ResNetMultiResEncoder(
-                    smoothing_kwargs=smoothing_kwargs,
-                    layers=net_spec.get_layers(),
-                    nside=smooth_nside,
-                    n_neighbors=net_conf["network"]["n_neighbors"],
-                    max_batch_size=effective_local_batch_size,
-                    input_norm=input_norm,
-                    spmm_backend=spmm_backend,
-                    fusion=net_conf["network"].get("fusion", "concat"),
-                    # see the maps+cls branch above
-                    injection_conv_layers=net_conf["network"].get("injection_conv_layers", 0),
-                    injection_conv_kwargs={
-                        "poly_degree": net_conf["network"]["kwargs"].get("poly_degree", 5),
-                        "conv_type": net_conf["network"]["kwargs"].get("conv_type", "cheby"),
-                    },
-                    # also a top-level network key, for the same reason as injection_conv_layers
-                    fusion_width=net_conf["network"].get("fusion_width", None),
-                    fuse_act=net_conf["network"].get("fuse_act", None),
-                )
-                norm_owner = network
-                # trace so network.built=True before BaseModel.summary()
-                network(tf.zeros((2, len(smooth_indices), n_z_bins)), training=False)
-            else:
-                network = net_spec.get_layers()
             model = Model(
-                network=network,
-                n_side=None if is_multires_gcnn else smooth_nside,
-                indices=None if is_multires_gcnn else smooth_indices,
+                network=net_spec.get_layers(),
+                n_side=smooth_nside,
+                indices=smooth_indices,
                 n_neighbors=net_conf["network"]["n_neighbors"],
-                # only used when network is a layer list (single-res): BaseModel wraps it in a
-                # HealpyGCNN. Inert for the multi-res prebuilt encoder (already carries the backend).
+                # BaseModel wraps the layer list in a HealpyGCNN built with this backend
                 spmm_backend=spmm_backend,
                 z_bank_size=net_conf["network"]["z_bank_size"],
                 max_checkpoints=net_conf["network"]["max_checkpoints"],
                 optimizer=optimizer,
-                input_shape=None if is_multires_gcnn else (None, len(smooth_indices), n_z_bins),
+                input_shape=(None, len(smooth_indices), n_z_bins),
                 max_batch_size=effective_local_batch_size,
                 checkpoint_dir=checkpoint_dir,
                 summary_dir=summary_dir,
@@ -1195,12 +1150,12 @@ def training(args=None):
             else:
                 mutual_info_kwargs = {}
 
-            # A static input_signature (dim_x set) only fits the plain map path. When
-            # return_cls=True the network takes a (maps, cls) tuple, and the transformer
-            # reshapes its own input (and its map width = len(smooth_indices) which differs
-            # from len(data_vec_pix) under downsampling); the multi-res GCNN encoder is a
-            # prebuilt subclassed Model too — in all these cases trace dynamically.
-            dynamic_input = return_cls or is_transformer or is_multires_gcnn
+            # A static input_signature (dim_x set) only fits BaseModel's layer-list path, where it
+            # wraps the layers in a HealpyGCNN itself. Every other network here is a pre-built
+            # subclassed Model — it may take a (maps, cls) tuple, and its map width is
+            # len(smooth_indices), which differs from len(data_vec_pix) under downsampling — so
+            # only the legacy specs get a static signature; everything else traces dynamically.
+            dynamic_input = is_transformer or net_name == "resnet"
             model.setup_grid_loss_step(
                 loss=args.loss_function,
                 batch_size=local_batch_size,

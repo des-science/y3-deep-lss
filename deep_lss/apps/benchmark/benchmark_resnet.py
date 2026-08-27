@@ -9,12 +9,11 @@ and step time, the GCNN analogue of ``benchmark_transformer.py``. Applies the sa
 (``project_transformer_bench_sizing_recipe``) to the ``configs/deepsphere/prod/{lensing,clustering,
 combined}/{maps,maps+cls}.yaml`` lineage.
 
-It builds each model through the *exact* construction path used by run_training.py's non-transformer
-branches (single-resolution ``HealpyGCNN`` for lensing/clustering maps-only, ``ResNetMultiResEncoder``
-for the combined multi-res maps-only path, ``ResNetMapsPlusCLSNetwork`` — optionally wrapping a
-``ResNetMultiResEncoder`` — for any maps+cls config) but feeds it synthetic random batches, so the
-measured peak memory and step time reflect the architecture and per-GPU (local) batch size, isolated
-from the tfrecord data pipeline.
+It builds each model through the *exact* construction path used by run_training.py's resnet branch
+— one ``ResNetSummaryNetwork`` wrapping either a single-resolution ``HealpyGCNN`` or (combined
+probes) a ``ResNetMultiResEncoder``, with the Cls branch attached iff the config has a ``cls:``
+block — but feeds it synthetic random batches, so the measured peak memory and step time reflect
+the architecture and per-GPU (local) batch size, isolated from the tfrecord data pipeline.
 
 Two modes, mirroring benchmark_transformer.py:
 
@@ -84,9 +83,9 @@ def run_single(args):
     from deep_lss.utils import configuration, optimization
     from deep_lss.models.grid_model import GridLossModel
     from deep_lss.nets import NETWORKS
-    from deep_lss.nets.composite.resnet_maps_plus_cls import ResNetMapsPlusCLSNetwork
+    from deep_lss.nets.composite.resnet_summary import ResNetSummaryNetwork
     from deep_lss.nets.encoders.maps.gcnn.resnet_multires import ResNetMultiResEncoder
-    from deep_lss.nets.layers.cls.embedding import get_cls_embedding_layers
+    from deep_lss.nets.layers.cls.embedding import get_cls_branch_kwargs
 
     net_conf = input_output.read_yaml(args.net_config)
     dlss_conf = configuration.read_split_configs(args.probes_config, args.scales_config)
@@ -152,94 +151,60 @@ def run_single(args):
             **net_conf["network"]["kwargs"],
         )
 
-        if return_cls:
-            _, l_min_per_pair, l_max_per_pair = configuration.get_cls_bounds_per_pair(msfm_conf, dlss_conf)
-            n_cls_bins = cls_conf.get("n_bins", 16)
-            cls_emb_widths = cls_conf.get("embedding_layers", [512, 512, 512, 512])
-            cls_emb_dropout = cls_conf.get("embedding_dropout_rate", None)
-            map_encoder = None
-            if is_multires_gcnn:
-                map_encoder = ResNetMultiResEncoder(
-                    smoothing_kwargs=smoothing_kwargs,
-                    layers=net_spec.get_conv_layers(),
-                    nside=smooth_nside,
-                    n_neighbors=net_conf["network"]["n_neighbors"],
-                    max_batch_size=batch_size,
-                    input_norm=input_norm,
-                    fusion=net_conf["network"].get("fusion", "concat"),
-                    injection_conv_layers=net_conf["network"].get("injection_conv_layers", 0),
-                    injection_conv_kwargs={
-                        "poly_degree": net_conf["network"]["kwargs"].get("poly_degree", 5),
-                        "conv_type": net_conf["network"]["kwargs"].get("conv_type", "cheby"),
-                    },
-                    # also a top-level network key, for the same reason as injection_conv_layers
-                    fusion_width=net_conf["network"].get("fusion_width", None),
-                    fuse_act=net_conf["network"].get("fuse_act", None),
-                )
-            network = ResNetMapsPlusCLSNetwork(
-                conv_layers=None if is_multires_gcnn else net_spec.get_conv_layers(),
-                cls_embedding_layers=get_cls_embedding_layers(
-                    cls_emb_widths,
-                    dropout_rate=cls_emb_dropout,
-                    dropout_per_layer=cls_conf.get("embedding_dropout_per_layer", True),
-                ),
-                regression_head_layers=net_spec.get_head_layers_no_flatten(),
-                n_side=None if is_multires_gcnn else smooth_nside,
-                tfr_n_side=n_side,
-                indices=None if is_multires_gcnn else smooth_indices,
+        # the cls: block is the only thing that differs between the two paths
+        cls_kwargs = get_cls_branch_kwargs(cls_conf, msfm_conf, dlss_conf, n_side, cls_transform)
+        map_encoder = None
+        if is_multires_gcnn:
+            map_encoder = ResNetMultiResEncoder(
+                smoothing_kwargs=smoothing_kwargs,
+                layers=net_spec.get_conv_layers(),
+                nside=smooth_nside,
                 n_neighbors=net_conf["network"]["n_neighbors"],
                 max_batch_size=batch_size,
-                initial_Fin=None if is_multires_gcnn else n_z_bins,
-                n_cls_bins=n_cls_bins,
-                l_min_per_pair=l_min_per_pair,
-                l_max_per_pair=l_max_per_pair,
-                cls_transform=cls_transform,
-                map_feature_dim=net_conf["network"].get("map_feature_dim", None),
-                map_encoder=map_encoder,
-                map_pool=net_conf["network"].get("map_pool", None),
-                map_pool_multiscale=net_conf["network"].get("map_pool_multiscale", False),
+                input_norm=input_norm,
+                fusion=net_conf["network"].get("fusion", "concat"),
+                injection_conv_layers=net_conf["network"].get("injection_conv_layers", 0),
+                injection_conv_kwargs={
+                    "poly_degree": net_conf["network"]["kwargs"].get("poly_degree", 5),
+                    "conv_type": net_conf["network"]["kwargs"].get("conv_type", "cheby"),
+                },
+                # also a top-level network key, for the same reason as injection_conv_layers
+                fusion_width=net_conf["network"].get("fusion_width", None),
+                fuse_act=net_conf["network"].get("fuse_act", None),
             )
-            if network.gcnn is not None:
-                network.gcnn.build((batch_size, len(smooth_indices), n_z_bins))
-            network(
-                (tf.zeros((2, len(smooth_indices), n_z_bins)), tf.zeros((2, 3 * n_side, len(l_min_per_pair)))),
-                training=False,
-            )
-            dynamic_input = True
+        network = ResNetSummaryNetwork(
+            conv_layers=None if is_multires_gcnn else net_spec.get_conv_layers(),
+            regression_head_layers=net_spec.get_head_layers_no_flatten(),
+            n_side=None if is_multires_gcnn else smooth_nside,
+            indices=None if is_multires_gcnn else smooth_indices,
+            n_neighbors=net_conf["network"]["n_neighbors"],
+            max_batch_size=batch_size,
+            initial_Fin=None if is_multires_gcnn else n_z_bins,
+            # the Cls branch, or {} for a maps-only config
+            **cls_kwargs,
+            map_feature_dim=net_conf["network"].get("map_feature_dim", None),
+            map_encoder=map_encoder,
+            map_pool=net_conf["network"].get("map_pool", None),
+            map_pool_multiscale=net_conf["network"].get("map_pool_multiscale", False),
+        )
+        if network.gcnn is not None:
+            network.gcnn.build((batch_size, len(smooth_indices), n_z_bins))
+        maps_trace = tf.zeros((2, len(smooth_indices), n_z_bins))
+        if return_cls:
+            cls_trace = tf.zeros((2, 3 * n_side, len(cls_kwargs["l_min_per_pair"])))
+            network((maps_trace, cls_trace), training=False)
         else:
-            if is_multires_gcnn:
-                network = ResNetMultiResEncoder(
-                    smoothing_kwargs=smoothing_kwargs,
-                    layers=net_spec.get_layers(),
-                    nside=smooth_nside,
-                    n_neighbors=net_conf["network"]["n_neighbors"],
-                    max_batch_size=batch_size,
-                    input_norm=input_norm,
-                    fusion=net_conf["network"].get("fusion", "concat"),
-                    injection_conv_layers=net_conf["network"].get("injection_conv_layers", 0),
-                    injection_conv_kwargs={
-                        "poly_degree": net_conf["network"]["kwargs"].get("poly_degree", 5),
-                        "conv_type": net_conf["network"]["kwargs"].get("conv_type", "cheby"),
-                    },
-                    # also a top-level network key, for the same reason as injection_conv_layers
-                    fusion_width=net_conf["network"].get("fusion_width", None),
-                    fuse_act=net_conf["network"].get("fuse_act", None),
-                )
-                network(tf.zeros((2, len(smooth_indices), n_z_bins)), training=False)
-                dynamic_input = True
-            else:
-                network = net_spec.get_layers()
-                dynamic_input = False
+            network(maps_trace, training=False)
 
         model = GridLossModel(
             network=network,
-            n_side=None if dynamic_input else smooth_nside,
-            indices=None if dynamic_input else smooth_indices,
+            n_side=None,
+            indices=None,
             n_neighbors=net_conf["network"]["n_neighbors"],
             z_bank_size=net_conf["network"]["z_bank_size"],
             max_checkpoints=net_conf["network"]["max_checkpoints"],
             optimizer=optimizer,
-            input_shape=None if dynamic_input else (None, len(smooth_indices), n_z_bins),
+            input_shape=None,
             max_batch_size=batch_size,
             checkpoint_dir=os.path.join(tmp_dir, "checkpoint"),
             summary_dir=os.path.join(tmp_dir, "summary"),
@@ -272,7 +237,7 @@ def run_single(args):
     if return_cls:
         x = (
             tf.random.normal((batch_size, len(smooth_indices), n_z_bins)),
-            tf.random.normal((batch_size, 3 * n_side, len(l_min_per_pair))),
+            tf.random.normal((batch_size, 3 * n_side, len(cls_kwargs["l_min_per_pair"]))),
         )
     else:
         x = tf.random.normal((batch_size, len(smooth_indices), n_z_bins))

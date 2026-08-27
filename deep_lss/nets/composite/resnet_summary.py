@@ -4,19 +4,30 @@
 Created June 2025
 Author: Arne Thomsen
 
-Network that concatenates DeepSphere map features with binned angular power spectra (Cls).
-The DeepSphere GCNN map branch is built from ``ResNetLayers`` conv/head layer lists (the only
-encoder exposing ``get_conv_layers`` / ``get_head_layers_no_flatten``), hence ``ResNet`` in the
-name; the transformer-branch counterpart is
-``deep_lss.nets.composite.transformer_maps_plus_cls.TransformerMapsPlusCLSNetwork``.
+The DeepSphere GCNN summary network — the ONE network for both the maps-only and the maps+Cls
+path, which differ only in whether a Cls branch is concatenated onto the map features. The map
+branch is byte-identical either way, so ``map_pool`` / ``map_feature_dim`` have exactly one
+implementation and mean the same thing on both paths. The transformer counterpart is
+``deep_lss.nets.composite.transformer_summary.TransformerSummaryNetwork``.
+
+The map branch is built from ``ResNetLayers`` conv/head layer lists (the only encoder exposing
+``get_conv_layers`` / ``get_head_layers_no_flatten``), hence ``ResNet`` in the name.
 
 Architecture:
   1. HealpyGCNN processes the HEALPix maps → flatten (or mean-pool over pixels, map_pool="mean")
-     [→ linear Dense(map_feature_dim)] → map_norm (LN)                     (map branch)
-  2. ClsBinningAndTransformLayer bins + gathers + sign-log-transforms Cls
-     → cls_norm (LN) → cls_embedding MLP (Dense→LN × N)                    (Cls branch)
-  3. Concatenate both branches
-  4. regression_head (LN + hidden Dense layers + output)
+     [→ linear Dense(map_feature_dim)]                                     (map branch)
+  2. ONLY with a Cls branch:
+       a. map_norm (LN) over the map features
+       b. ClsBinningAndTransformLayer bins + gathers + sign-log-transforms Cls
+          → cls_norm (LN) → cls_embedding MLP (Dense→LN × N)               (Cls branch)
+       c. Concatenate both branches
+  3. regression_head (LN + hidden Dense layers + output)
+
+``map_norm`` is part of the fusion, not of the map branch: it exists to balance the map features
+against the Cls features before the concatenation, so per-branch normalization is meaningful only
+when there are two branches. With no Cls the head's own leading LayerNormalization already
+normalizes the map features, and keeping ``map_norm`` too would just stack two LayerNorms — so the
+maps-only network is exactly ``gcnn → readout → [projection] → head``.
 """
 
 import tensorflow as tf
@@ -36,14 +47,17 @@ from deep_lss.nets.layers.maps.readout import (
 LOGGER = logger.get_logger(__file__)
 
 
-class ResNetMapsPlusCLSNetwork(tf.keras.Model):
-    """Maps + Cls combined network.
+class ResNetSummaryNetwork(tf.keras.Model):
+    """DeepSphere GCNN summary network, with or without a Cls branch.
 
-    Processes HEALPix maps with a DeepSphere HealpyGCNN, then concatenates the
-    Cls branch (per-pair binned, sign-log-transformed, encoded by a small MLP)
-    to the flattened GCNN output before the regression head.  Each branch is
-    independently LayerNorm'd; the Cls embedding further processes the Cls
-    features before fusion.
+    Processes HEALPix maps with a DeepSphere HealpyGCNN (single- or multi-resolution), reduces the
+    conv features to a vector with the configured readout, and runs the regression head on it.
+    When Cls arguments are supplied, the Cls branch (per-pair binned, sign-log-transformed, encoded
+    by a small MLP) is LayerNorm'd and concatenated onto the LayerNorm'd map features first — that
+    concatenation is the ONLY difference between the two paths.
+
+    The Cls arguments (``tfr_n_side``, ``n_cls_bins``, ``l_min_per_pair``, ``l_max_per_pair``,
+    ``cls_embedding_layers``) are all-or-nothing: pass every one for maps+Cls, none for maps-only.
     """
 
     def __init__(
@@ -71,29 +85,34 @@ class ResNetMapsPlusCLSNetwork(tf.keras.Model):
         Args:
             conv_layers (list): Graph-convolution layers (ResNetLayers.get_conv_layers()).
                 Mutually exclusive with ``map_encoder``.
-            cls_embedding_layers (list): MLP layers that encode the Cls branch before fusion
-                (get_cls_embedding_layers()).  Pass ``[]`` to skip the embedding.
-            regression_head_layers (list): Dense head layers without the leading Flatten
-                (ResNetLayers.get_head_layers_no_flatten()).
+            cls_embedding_layers (list, optional): maps+Cls ONLY. MLP layers that encode the Cls
+                branch before fusion (get_cls_embedding_layers()).  Pass ``[]`` to skip the
+                embedding, ``None`` (default) for a maps-only network.
+            regression_head_layers (list): Dense head layers without the leading readout
+                (ResNetLayers.get_head_layers_no_flatten()) — this network owns the readout on
+                both paths, so the head always starts at its LayerNorm.
             n_side (int): HEALPix n_side of the input maps (after any downsampling/smoothing)
                 used to build the GCNN graph.
-            tfr_n_side (int): Native HEALPix n_side of the TFRecords, i.e. the simulation
-                resolution. The Cls stored in the TFRecords are not downsampled, so
+            tfr_n_side (int, optional): maps+Cls ONLY. Native HEALPix n_side of the TFRecords, i.e.
+                the simulation resolution. The Cls stored in the TFRecords are not downsampled, so
                 ``n_ell = 3 * tfr_n_side``.
             indices (np.ndarray): 1-D array of HEALPix NEST pixel indices in the footprint.
             n_neighbors (int): Number of neighbours for the HealpyGCNN graph.
             max_batch_size (int): Pre-allocated max batch size for sparse-dense matmul splits.
             initial_Fin (int): Number of input map channels (z-bins).
-            n_cls_bins (int): Number of ell bins per cross pair.
-            l_min_per_pair (list[float]): Per-pair lower bin edge (from scales config).
-            l_max_per_pair (list[float]): Per-pair upper bin edge = l_max_eff (from scales config).
-            cls_transform (str): Cls transform, forwarded to ClsBinningAndTransformLayer
-                ("asinh_per_feature" or "log1p_fixed").
-            map_feature_dim (int, optional): Bottleneck width of the map branch at the fusion
-                point, mirroring the transformer composite: a linear Dense projects the flattened
-                GCNN features (~1e5-dim) down to this width before map_norm, so both branches
-                meet the concatenation at comparable dimensionality. ``None`` (default) keeps the
-                legacy behavior of concatenating the raw flattened features. Note: object-based
+            n_cls_bins (int, optional): maps+Cls ONLY. Number of ell bins per cross pair.
+            l_min_per_pair (list[float], optional): maps+Cls ONLY. Per-pair lower bin edge (from
+                scales config).
+            l_max_per_pair (list[float], optional): maps+Cls ONLY. Per-pair upper bin edge =
+                l_max_eff (from scales config).
+            cls_transform (str): maps+Cls ONLY. Cls transform, forwarded to
+                ClsBinningAndTransformLayer ("asinh_per_feature" or "log1p_fixed").
+            map_feature_dim (int, optional): Bottleneck width of the map branch, mirroring the
+                transformer: a linear Dense projects the flattened GCNN features (~1e5-dim) down
+                to this width. With a Cls branch it sits at the fusion point (before map_norm), so
+                both branches meet the concatenation at comparable dimensionality; maps-only it is
+                simply a bottleneck before the head. ``None`` (default) keeps the legacy behavior
+                of passing the raw flattened features through. Note: object-based
                 checkpointing is structure-sensitive — a checkpoint trained without the projection
                 can only be restored with ``map_feature_dim`` unset, and vice versa.
             map_encoder (tf.keras.Model, optional): Prebuilt map branch returning
@@ -150,6 +169,22 @@ class ResNetMapsPlusCLSNetwork(tf.keras.Model):
         """
         super().__init__()
 
+        # The Cls branch is all-or-nothing: a half-configured call would otherwise build a network
+        # that trains fine and quietly ignores the Cls the pipeline is still yielding.
+        cls_args = {
+            "tfr_n_side": tfr_n_side,
+            "n_cls_bins": n_cls_bins,
+            "l_min_per_pair": l_min_per_pair,
+            "l_max_per_pair": l_max_per_pair,
+            "cls_embedding_layers": cls_embedding_layers,
+        }
+        self.return_cls = any(v is not None for v in cls_args.values())
+        if self.return_cls and (missing := [k for k, v in cls_args.items() if v is None]):
+            raise ValueError(
+                f"incomplete Cls branch: {missing} left as None while the others were given. Pass all "
+                f"of {sorted(cls_args)} for a maps+Cls network, or none of them for a maps-only one."
+            )
+
         if (map_encoder is None) == (conv_layers is None):
             raise ValueError("pass exactly one of conv_layers (single-res GCNN) or map_encoder (multi-res)")
         if map_encoder is not None and any(a is not None for a in (n_side, indices, initial_Fin)):
@@ -182,12 +217,16 @@ class ResNetMapsPlusCLSNetwork(tf.keras.Model):
         )
         self.map_encoder = map_encoder
 
-        self.cls_layer = ClsBinningAndTransformLayer(
-            n_ell=3 * tfr_n_side,
-            n_bins=n_cls_bins,
-            l_min_per_pair=l_min_per_pair,
-            l_max_per_pair=l_max_per_pair,
-            cls_transform=cls_transform,
+        self.cls_layer = (
+            ClsBinningAndTransformLayer(
+                n_ell=3 * tfr_n_side,
+                n_bins=n_cls_bins,
+                l_min_per_pair=l_min_per_pair,
+                l_max_per_pair=l_max_per_pair,
+                cls_transform=cls_transform,
+            )
+            if self.return_cls
+            else None
         )
 
         # Optional map-branch bottleneck: linear, like the transformer's final Dense(num_outputs)
@@ -213,29 +252,38 @@ class ResNetMapsPlusCLSNetwork(tf.keras.Model):
 
         # Separate LayerNorm per branch so the high-dimensional map features and the
         # compact Cls features are independently normalised before the embedding / concatenation.
-        self.map_norm = tf.keras.layers.LayerNormalization(axis=-1, name="map_norm")
-        self.cls_norm = tf.keras.layers.LayerNormalization(axis=-1, name="cls_norm")
+        # Both belong to the FUSION: with no Cls branch there is nothing to balance the map
+        # features against, and the regression head already opens with its own LayerNorm — so a
+        # maps-only network skips them rather than stacking two LayerNorms back to back.
+        self.map_norm = tf.keras.layers.LayerNormalization(axis=-1, name="map_norm") if self.return_cls else None
+        self.cls_norm = tf.keras.layers.LayerNormalization(axis=-1, name="cls_norm") if self.return_cls else None
 
         self.cls_embedding_layers = cls_embedding_layers
         self.regression_head_layers = regression_head_layers
 
-        dense_widths = [layer.units for layer in cls_embedding_layers if hasattr(layer, "units")]
-        cls_out_dim = dense_widths[-1] if dense_widths else self.cls_layer.n_cls_flat
-        LOGGER.warning(
-            f"ResNetMapsPlusCLSNetwork: map_pool={map_pool or 'None (flatten)'}, "
+        map_branch_msg = (
+            f"ResNetSummaryNetwork: map_pool={map_pool or 'None (flatten)'}, "
             f"map_pool_multiscale={map_pool_multiscale}"
             f"{f' ({len(self.scale_norms)} scale taps)' if map_pool_multiscale else ''}, map_feature_dim="
-            f"{map_feature_dim if map_feature_dim is not None else 'None (raw flattened GCNN features)'}, "
-            f"n_cls_bins={n_cls_bins}, n_z_cross={len(l_max_per_pair)}, "
-            f"cls_flat_dim={self.cls_layer.n_cls_flat}, "
-            f"cls_emb_dim={cls_out_dim} ({'embedding' if cls_embedding_layers else 'no embedding'})"
+            f"{map_feature_dim if map_feature_dim is not None else 'None (raw flattened GCNN features)'}"
         )
+        if self.return_cls:
+            dense_widths = [layer.units for layer in cls_embedding_layers if hasattr(layer, "units")]
+            cls_out_dim = dense_widths[-1] if dense_widths else self.cls_layer.n_cls_flat
+            LOGGER.warning(
+                f"{map_branch_msg}, n_cls_bins={n_cls_bins}, n_z_cross={len(l_max_per_pair)}, "
+                f"cls_flat_dim={self.cls_layer.n_cls_flat}, "
+                f"cls_emb_dim={cls_out_dim} ({'embedding' if cls_embedding_layers else 'no embedding'})"
+            )
+        else:
+            LOGGER.warning(f"{map_branch_msg}, NO Cls branch (maps only) — no fusion, no map_norm")
 
     def call(self, inputs, training=False):
         """Forward pass.
 
         Args:
-            inputs (tuple): ``(maps, cls)`` where
+            inputs: with a Cls branch, the tuple ``(maps, cls)``; maps-only, the ``maps`` tensor
+                on its own, where
                 - maps: float tensor ``(batch, n_pix, n_channels)``
                 - cls:  float tensor ``(batch, n_ell, n_z_cross)``  (raw per-ell values)
             training (bool): Keras training flag.
@@ -243,9 +291,10 @@ class ResNetMapsPlusCLSNetwork(tf.keras.Model):
         Returns:
             tf.Tensor: Summary statistics, shape ``(B, out_features)``.
         """
-        maps, cls = inputs
+        maps, cls = inputs if self.return_cls else (inputs, None)
 
-        # Map branch: GCNN (or multi-res encoder) → pool/flatten → (project) → normalise
+        # Map branch: GCNN (or multi-res encoder) → pool/flatten → (project). Identical on both
+        # paths; normalisation and the concat below belong to the fusion.
         map_branch = self.map_encoder if self.map_encoder is not None else self.gcnn
         if self.map_pool_multiscale:
             # Multi-scale readout: reduce at every resolution, not just the trunk. The multi-res
@@ -281,16 +330,22 @@ class ResNetMapsPlusCLSNetwork(tf.keras.Model):
                 x_flat = tf.reshape(x, (tf.shape(x)[0], -1))  # (B, n_map_flat)
         if self.map_projection is not None:
             x_flat = self.map_projection(x_flat)  # (B, map_feature_dim); small n_ch->dim Dense when pooled
-        x_flat = self.map_norm(x_flat, training=training)
 
-        # Cls branch: per-pair bin + log transform → normalise → embed
-        cls_flat = self.cls_layer(cls, training=training)  # (B, n_bins * n_z_cross)
-        cls_flat = self.cls_norm(cls_flat, training=training)
-        for layer in self.cls_embedding_layers:
-            cls_flat = layer(cls_flat, training=training)  # (B, emb_width) after last Dense+LN
+        if self.return_cls:
+            # Fusion: normalise each branch on its own, then concatenate. See __init__ for why
+            # map_norm/cls_norm belong here rather than to the map branch.
+            x_flat = self.map_norm(x_flat, training=training)
 
-        # Concatenate and pass through the regression head
-        x = tf.concat([x_flat, cls_flat], axis=-1)
+            # Cls branch: per-pair bin + log transform → normalise → embed
+            cls_flat = self.cls_layer(cls, training=training)  # (B, n_bins * n_z_cross)
+            cls_flat = self.cls_norm(cls_flat, training=training)
+            for layer in self.cls_embedding_layers:
+                cls_flat = layer(cls_flat, training=training)  # (B, emb_width) after last Dense+LN
+
+            x_flat = tf.concat([x_flat, cls_flat], axis=-1)
+
+        # Regression head (opens with its own LayerNorm)
+        x = x_flat
         for layer in self.regression_head_layers:
             x = layer(x, training=training)
         return x

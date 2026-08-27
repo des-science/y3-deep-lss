@@ -17,10 +17,13 @@ Structure (mirroring the transformer encoder as closely as the Sequential GCNN a
   3. ``gcnn_pre`` — a stock ``HealpyGCNN`` running the fine probe (lensing @512) through the
      leading ResNet layers until the pooling stack reaches the coarse nside.
   4. injection fusion — the transformer idiom (``nested_transformer`` ``injection_proj`` /
-     ``injection_fuse``): a linear Dense embeds the smoothed coarse channels to the fine stream's
+     ``injection_fuse``): a linear Dense projects the smoothed coarse channels to the fine stream's
      channel width, they are concatenated, and a second linear Dense fuses back to that width.
+     Under the default ``fusion="concat"`` the two Denses have nothing between them and therefore
+     collapse exactly into one — the projection is redundant there and kept only because
+     ``fusion="bilinear"`` needs it (see ``injection_proj`` in ``__init__``).
   5. ``gcnn_post`` — a second stock ``HealpyGCNN`` at the coarse nside running the remaining
-     layers (and, for maps-only networks, the regression head, which HealpyGCNN passes through).
+     layers. The readout and head live in ``ResNetSummaryNetwork``, not here.
 
 ``HealpyGCNN`` is a ``keras.Sequential`` with the sphere graphs baked in at construction, so the
 mid-stack injection is realized by splitting the ResNet layer list into two GCNN segments rather
@@ -96,9 +99,10 @@ class ResNetMultiResEncoder(MultiResEncoderMixin, tf.keras.Model):
     Exposes the same interface as the transformer map encoders (``HealpixMapEncoder``), with the
     smoothing/grouping/input-norm plumbing provided by the shared ``MultiResEncoderMixin``:
 
-      - ``call(maps, training)``          -> ``(B, n_pix_out, n_ch)`` conv features when built from
-        ``ResNetLayers.get_conv_layers()`` (maps+cls composite), or ``(B, out_features)`` when built
-        from ``ResNetLayers.get_layers()`` (maps-only, head included).
+      - ``call(maps, training)``          -> ``(B, n_pix_out, n_ch)`` conv features. Always built
+        from ``ResNetLayers.get_conv_layers()``: the readout and the regression head belong to
+        ``ResNetSummaryNetwork``, which wraps this encoder on both the maps-only and the
+        maps+Cls path.
       - ``smooth_groups(maps, training)`` -> list of per-resolution-group smoothed maps (fp32).
       - ``masks`` (property)              -> matching list of per-group footprint masks.
       - ``load_input_norm_stats(stats)``  -> load a list of ``(mean, inv_std)`` into the group layers.
@@ -125,6 +129,10 @@ class ResNetMultiResEncoder(MultiResEncoderMixin, tf.keras.Model):
             trunk the local cross statistic (galaxy-galaxy lensing is a product of the two aligned fields)
             directly. Separate checkpoint lineage from "concat" only via ``injection_fuse``'s input width,
             which is inferred lazily — but treat it as its own lineage anyway (retrain).
+
+            It is also the only setting under which ``injection_proj`` does anything: with a plain
+            concat, proj and fuse have nothing between them and collapse into a single Dense (see
+            the NOTE at their construction). Measured a wash in bench_v4 (1.010 [0.999, 1.023]).
         injection_conv_layers (int, optional): number of channel-preserving graph convolutions (+ LayerNorm)
             to run at the injection nside on the FUSED both-probe stream, right after the fusion Dense and
             before the rest of ``gcnn_post`` (i.e. prepended to ``post_layers``). Motivation: in the default
@@ -156,7 +164,9 @@ class ResNetMultiResEncoder(MultiResEncoderMixin, tf.keras.Model):
         fuse_act (str, optional): activation applied to ``injection_fuse``'s output (followed by a
             LayerNorm), e.g. ``"relu"``. ``None`` (default) keeps the historical behaviour.
 
-            WHY THIS EXISTS: without it the seam is entirely LINEAR. ``injection_fuse`` is a Dense with
+            WHY THIS EXISTS: without it the seam is entirely LINEAR — a statement about what follows
+            ``injection_fuse``, not about the redundant ``injection_proj``/``injection_fuse`` pair that
+            precedes it; this knob does not collapse that pair. ``injection_fuse`` is a Dense with
             no activation and ``post_layers[0]`` is a ``HealpyPseudoConv`` whose relu is applied after
             its own linear op, so fuse and the following pseudo-conv compose into ONE linear map and
             concat fusion contributes no multiplicative cross-probe interaction at all — consistent with
@@ -234,8 +244,8 @@ class ResNetMultiResEncoder(MultiResEncoderMixin, tf.keras.Model):
             spmm_backend=spmm_backend,
         )
         # injection fusion, transformer idiom (nested_transformer injection_proj/injection_fuse):
-        # linear Dense embed of the coarse channels, concat with the fine stream, linear Dense fuse
-        # back to the fine stream's width — applied before all layers at the coarse nside and below
+        # linear Dense projection of the coarse channels, concat with the fine stream, linear Dense
+        # fuse back to the fine stream's width — applied before all layers at the coarse nside and below
         # the pinch: every bit of cross-probe information passes through injection_fuse's output width.
         # It defaults to the fine stream's width at the seam (split_Fin = base_channels), which is 8x
         # narrower than the trunk it feeds; fusion_width widens it. gcnn_post is then built at the wider
@@ -245,6 +255,17 @@ class ResNetMultiResEncoder(MultiResEncoderMixin, tf.keras.Model):
         self.injection_proj = tf.keras.layers.Dense(split_Fin, name="injection_proj")
         self.injection_fuse = tf.keras.layers.Dense(fused_Fin, name="injection_fuse")
 
+        # NOTE — under the DEFAULT fusion="concat", injection_proj is REDUNDANT and deliberately
+        # kept. Nothing sits between it and injection_fuse (see call()), so the pair collapses
+        # exactly: fuse(concat([x, W_p r + b_p])) = W_x x + (W_i W_p) r + (W_i b_p + b_f), one Dense
+        # (split_Fin + C_coarse) -> fused_Fin with the same rank ceiling min(fused_Fin, C_coarse).
+        # This is a different statement from the fuse_act note below, which is about injection_fuse
+        # composing with the pseudo-conv DOWNSTREAM; fuse_act does not touch this redundancy, and
+        # neither does injection_conv_layers.
+        # It is kept because fusion="bilinear" makes it load-bearing: x*inj needs both streams at
+        # the same width and is not shape-compatible without the projection (the coarse stream
+        # carries only C_coarse=4 channels). Keeping the idiom identical to nested_transformer's is
+        # what makes the knob portable in either direction.
         # Optional NONLINEARITY at the seam. Without it the fusion is one composite LINEAR map:
         # injection_fuse is a Dense with no activation and post_layers[0] is a HealpyPseudoConv whose
         # relu is applied after its own linear op, so concat fusion contributes no multiplicative
@@ -308,7 +329,7 @@ class ResNetMultiResEncoder(MultiResEncoderMixin, tf.keras.Model):
                 single-probe ``gcnn_pre`` stream and is not a cross-probe scale. The last
                 downsampling tap is dropped by ``assemble_scale_taps`` because the residual body
                 follows it at the same nside and width. Consumed by
-                ``ResNetMapsPlusCLSNetwork(map_pool_multiscale=True)``.
+                ``ResNetSummaryNetwork(map_pool_multiscale=True)``.
 
         Returns:
             tf.Tensor: conv features ``(B, n_pix_reduced, n_ch)``, or ``(features, taps)`` when
@@ -322,7 +343,8 @@ class ResNetMultiResEncoder(MultiResEncoderMixin, tf.keras.Model):
         x = self.gcnn_pre(fine_t, training=training)  # (B, P_coarse, split_Fin)
         inj = self.injection_proj(coarse_t)  # (B, P_coarse, split_Fin)
         # fuse the pooled lensing stream (x) with the injected clustering channels (inj), both aligned
-        # at the coarse nside. "bilinear" also feeds x*inj so the trunk gets the local cross statistic
+        # at the coarse nside. Under "concat" proj and fuse are one linear map (see the NOTE in
+        # __init__); "bilinear" also feeds x*inj so the trunk gets the local cross statistic
         # (galaxy-galaxy lensing ~ product of the two fields at the same position) directly; injection_fuse
         # infers its input width lazily, so the wider concat needs no construction change.
         parts = [x, inj, x * inj] if self.fusion == "bilinear" else [x, inj]

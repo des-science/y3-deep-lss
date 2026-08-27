@@ -12,7 +12,7 @@ The readout is the highest-leverage lever measured in this programme -- ``flatte
 trunk's final (coarsest) feature map. ``moment_pool`` is the ladder of statistics; the
 ``*_taps`` helpers let a caller apply it at each scale of the encoder.
 
-Kept out of any particular network body so the composite (``composite/resnet_maps_plus_cls.py``)
+Kept out of any particular network body so the summary network (``composite/resnet_summary.py``)
 and the multi-resolution encoder (``encoders/maps/gcnn/resnet_multires.py``) can share it -- the
 encoder owns the fused seam and therefore has to assemble its own tap list, so both need these.
 """

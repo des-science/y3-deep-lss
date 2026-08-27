@@ -26,12 +26,11 @@ from msfm.utils import logger, files
 from deep_lss.utils import configuration, distribute, evaluation
 from deep_lss.models.base_model import BaseModel
 from deep_lss.nets import NETWORKS, TRANSFORMER_NETWORKS
-from deep_lss.nets.composite.resnet_maps_plus_cls import ResNetMapsPlusCLSNetwork
+from deep_lss.nets.composite.resnet_summary import ResNetSummaryNetwork
+from deep_lss.nets.composite.transformer_summary import TransformerSummaryNetwork
 from deep_lss.nets.encoders.maps.gcnn.resnet_multires import ResNetMultiResEncoder
-from deep_lss.nets.encoders.maps.transformer.network import HealpixTransformerNetwork
-from deep_lss.nets.composite.transformer_maps_plus_cls import TransformerMapsPlusCLSNetwork
 from deep_lss.nets.heads.regression_head import get_regression_head
-from deep_lss.nets.layers.cls.embedding import get_cls_embedding_layers
+from deep_lss.nets.layers.cls.embedding import get_cls_branch_kwargs
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 warnings.filterwarnings("ignore", category=RuntimeWarning)
@@ -226,20 +225,28 @@ if __name__ == "__main__":
             "(see configs/transformer/prod/lensing/maps+cls.yaml)."
         )
     if return_cls:
-        LOGGER.warning("cls block detected in net_conf['network'] — building ResNetMapsPlusCLSNetwork for evaluation")
+        LOGGER.warning(
+            "cls block detected in net_conf['network'] — the summary network will concatenate a "
+            "Cls branch onto the map features"
+        )
 
     max_batch_size = net_conf["dset"]["eval"]["grid"]["local_batch_size"]
 
-    is_transformer = net_conf["network"]["name"] in TRANSFORMER_NETWORKS
+    net_name = net_conf["network"]["name"]
+    is_transformer = net_name in TRANSFORMER_NETWORKS
 
     # mirror run_training.py: a mixed per-probe smooth_nside (split_probes spec) on the GCNN path
     # selects ResNetMultiResEncoder (per-probe smoothing + coarse-probe injection)
     is_multires_gcnn = (not is_transformer) and "split_probes" in smoothing_kwargs
-    if is_multires_gcnn and net_conf["network"]["name"] != "resnet":
+    if is_multires_gcnn and net_name != "resnet":
         raise ValueError(
             "Per-probe smooth_nside on the GCNN path is only supported for network.name=resnet "
             "(ResNetMultiResEncoder)"
         )
+
+    # mirror run_training.py: backend for the graph convolutions and the HealpySmoothing front-end.
+    # It selects a kernel, not a variable, so a train/eval mismatch restores without complaint.
+    spmm_backend = net_conf["network"].get("spmm_backend", "csr")
 
     # create all of the variables within the strategy's scope, such that they are mirrored
     with strategy.scope():
@@ -272,60 +279,40 @@ if __name__ == "__main__":
             # (no checkpoint variables involved).
             masked_attention = bool(net_conf["network"].get("masked_attention", False))
 
+            # MUST mirror run_training's construction exactly -- see the ResNetMultiResEncoder
+            # comment below for why a divergence here is silent rather than loud.
+            cls_kwargs = get_cls_branch_kwargs(
+                cls_conf, msfm_conf, dlss_conf, n_side, (cls_conf or {}).get("transform", "asinh_per_feature")
+            )
+            # dense regression head minus the leading readout (the map feature is already 2-D)
+            regression_head_layers = get_regression_head(
+                out_features=n_output,
+                head_type="dense",
+                dense_layers=fused_head_layers,
+                dropout_rate=head_dropout,
+            )[1:]
+            network = TransformerSummaryNetwork(
+                smoothing_kwargs=smoothing_kwargs,
+                smooth_indices=smooth_indices,
+                nside=smooth_nside,
+                token_nside=token_nside,
+                in_channels=n_z_bins,
+                # absent = None = no projection; see the note in run_training.py
+                map_feature_dim=net_conf["network"].get("map_feature_dim", None),
+                transformer_kwargs=transformer_kwargs,
+                regression_head_layers=regression_head_layers,
+                **cls_kwargs,
+                jit_compile_body=jit_compile_body,
+                input_norm=input_norm,
+                masked_attention=masked_attention,
+                spmm_backend=spmm_backend,
+            )
+            maps_trace = tf.zeros((2, len(smooth_indices), n_z_bins))
             if return_cls:
-                _, l_min_per_pair, l_max_per_pair = configuration.get_cls_bounds_per_pair(msfm_conf, dlss_conf)
-                n_cls_bins = cls_conf.get("n_bins", 16)
-                cls_emb_widths = cls_conf.get("embedding_layers", [512, 512, 512, 512])
-                cls_emb_dropout = cls_conf.get("embedding_dropout_rate", None)
-                # dense regression head minus the leading Flatten (the fused vector is already 2-D)
-                regression_head_layers = get_regression_head(
-                    out_features=n_output,
-                    head_type="dense",
-                    dense_layers=fused_head_layers,
-                    dropout_rate=head_dropout,
-                )[1:]
-                network = TransformerMapsPlusCLSNetwork(
-                    smoothing_kwargs=smoothing_kwargs,
-                    smooth_indices=smooth_indices,
-                    nside=smooth_nside,
-                    token_nside=token_nside,
-                    in_channels=n_z_bins,
-                    map_feature_dim=net_conf["network"]["map_feature_dim"],
-                    transformer_kwargs=transformer_kwargs,
-                    tfr_n_side=n_side,
-                    n_cls_bins=n_cls_bins,
-                    l_min_per_pair=l_min_per_pair,
-                    l_max_per_pair=l_max_per_pair,
-                    cls_embedding_layers=get_cls_embedding_layers(
-                        cls_emb_widths,
-                        dropout_rate=cls_emb_dropout,
-                        dropout_per_layer=cls_conf.get("embedding_dropout_per_layer", True),
-                    ),
-                    regression_head_layers=regression_head_layers,
-                    cls_transform=cls_conf.get("transform", "asinh_per_feature"),
-                    jit_compile_body=jit_compile_body,
-                    input_norm=input_norm,
-                    masked_attention=masked_attention,
-                )
-                network(
-                    (tf.zeros((2, len(smooth_indices), n_z_bins)), tf.zeros((2, 3 * n_side, len(l_min_per_pair)))),
-                    training=False,
-                )
+                cls_trace = tf.zeros((2, 3 * n_side, len(cls_kwargs["l_min_per_pair"])))
+                network((maps_trace, cls_trace), training=False)
             else:
-                network = HealpixTransformerNetwork(
-                    smoothing_kwargs=smoothing_kwargs,
-                    smooth_indices=smooth_indices,
-                    nside=smooth_nside,
-                    token_nside=token_nside,
-                    in_channels=n_z_bins,
-                    num_outputs=n_output,
-                    transformer_kwargs=transformer_kwargs,
-                    jit_compile_body=jit_compile_body,
-                    head_dropout_rate=head_dropout,
-                    input_norm=input_norm,
-                    masked_attention=masked_attention,
-                )
-                network(tf.zeros((2, len(smooth_indices), n_z_bins)), training=False)
+                network(maps_trace, training=False)
 
             LOGGER.info(f"Built transformer network {net_conf['network']['name']} (return_cls={return_cls})")
             model = BaseModel(
@@ -339,9 +326,9 @@ if __name__ == "__main__":
                 restore_checkpoint=True,
                 strategy=strategy,
             )
-        else:
+        elif net_name == "resnet":
             input_norm = bool(net_conf["network"].get("input_norm", False))
-            net_spec = NETWORKS[net_conf["network"]["name"]](
+            net_spec = NETWORKS["resnet"](
                 out_features=n_output,
                 # multi-res: smoothing and input norm live in ResNetMultiResEncoder instead
                 smoothing_kwargs=None if is_multires_gcnn else smoothing_kwargs,
@@ -349,135 +336,111 @@ if __name__ == "__main__":
                 # layer, whose statistics (measured at training time) restore from the checkpoint
                 **({"input_norm": True} if input_norm and not is_multires_gcnn else {}),
                 **({"smoothing_external": True} if is_multires_gcnn else {}),
+                spmm_backend=spmm_backend,
                 **net_conf["network"]["kwargs"],
             )
-            LOGGER.info(f"Loaded a network specification of type {NETWORKS[net_conf['network']['name']]}")
+            LOGGER.info(f"Loaded a network specification of type {NETWORKS['resnet']}")
 
+            cls_kwargs = get_cls_branch_kwargs(
+                cls_conf, msfm_conf, dlss_conf, n_side, (cls_conf or {}).get("transform", "asinh_per_feature")
+            )
+            map_encoder = None
+            if is_multires_gcnn:
+                map_encoder = ResNetMultiResEncoder(
+                    smoothing_kwargs=smoothing_kwargs,
+                    layers=net_spec.get_conv_layers(),
+                    nside=smooth_nside,
+                    n_neighbors=net_conf["network"]["n_neighbors"],
+                    max_batch_size=max_batch_size,
+                    input_norm=input_norm,
+                    spmm_backend=spmm_backend,
+                    fusion=net_conf["network"].get("fusion", "concat"),
+                    # MUST mirror run_training's construction exactly. These three were missing
+                    # here, and the failure mode is silent: the injection convs are PREPENDED to
+                    # gcnn_post, so omitting them shifts every later layer's position in the
+                    # object graph. base_model restores with expect_partial() +
+                    # assert_existing_objects_matched(), which only checks that variables in the
+                    # BUILT graph found a match -- extra checkpoint entries are ignored without a
+                    # warning. So a run trained with injection_conv_layers > 0 would be evaluated
+                    # against a differently-wired network, with weights mismatched by position.
+                    injection_conv_layers=net_conf["network"].get("injection_conv_layers", 0),
+                    injection_conv_kwargs={
+                        "poly_degree": net_conf["network"]["kwargs"].get("poly_degree", 5),
+                        "conv_type": net_conf["network"]["kwargs"].get("conv_type", "cheby"),
+                    },
+                    fusion_width=net_conf["network"].get("fusion_width", None),
+                    fuse_act=net_conf["network"].get("fuse_act", None),
+                )
+            network = ResNetSummaryNetwork(
+                conv_layers=None if is_multires_gcnn else net_spec.get_conv_layers(),
+                regression_head_layers=net_spec.get_head_layers_no_flatten(),
+                n_side=None if is_multires_gcnn else smooth_nside,
+                indices=None if is_multires_gcnn else smooth_indices,
+                n_neighbors=net_conf["network"]["n_neighbors"],
+                max_batch_size=max_batch_size,
+                initial_Fin=None if is_multires_gcnn else n_z_bins,
+                # the Cls branch, or {} for a maps-only run -- resolved from the same config block
+                # by the same helper as in run_training, so the two cannot disagree
+                **cls_kwargs,
+                # must match the training-time setting for the checkpoint to restore
+                map_feature_dim=net_conf["network"].get("map_feature_dim", None),
+                map_encoder=map_encoder,
+                map_pool=net_conf["network"].get("map_pool", None),
+                # must match training: a readout forwarded here but not there (or vice versa)
+                # changes the architecture between train and eval and expect_partial() will NOT
+                # raise — the injection_conv_layers precedent in bench_v8
+                map_pool_multiscale=net_conf["network"].get("map_pool_multiscale", False),
+                spmm_backend=spmm_backend,
+            )
+            if network.gcnn is not None:
+                network.gcnn.build((max_batch_size, len(smooth_indices), n_z_bins))
+            # Trace the full ResNetSummaryNetwork so that network.built=True and BaseModel
+            # can call network.summary(). gcnn.build() only builds the map branch.
+            maps_trace = tf.zeros((2, len(smooth_indices), n_z_bins))
             if return_cls:
-                _, l_min_per_pair, l_max_per_pair = configuration.get_cls_bounds_per_pair(msfm_conf, dlss_conf)
-                n_cls_bins = cls_conf.get("n_bins", 16)
-                cls_emb_widths = cls_conf.get("embedding_layers", [512, 512, 512, 512])
-                cls_emb_dropout = cls_conf.get("embedding_dropout_rate", None)
-                map_encoder = None
-                if is_multires_gcnn:
-                    map_encoder = ResNetMultiResEncoder(
-                        smoothing_kwargs=smoothing_kwargs,
-                        layers=net_spec.get_conv_layers(),
-                        nside=smooth_nside,
-                        n_neighbors=net_conf["network"]["n_neighbors"],
-                        max_batch_size=max_batch_size,
-                        input_norm=input_norm,
-                        spmm_backend=net_conf["network"].get("spmm_backend", "csr"),
-                        fusion=net_conf["network"].get("fusion", "concat"),
-                        # MUST mirror run_training's construction exactly. These three were missing
-                        # here, and the failure mode is silent: the injection convs are PREPENDED to
-                        # gcnn_post, so omitting them shifts every later layer's position in the
-                        # object graph. base_model restores with expect_partial() +
-                        # assert_existing_objects_matched(), which only checks that variables in the
-                        # BUILT graph found a match -- extra checkpoint entries are ignored without a
-                        # warning. So a run trained with injection_conv_layers > 0 would be evaluated
-                        # against a differently-wired network, with weights mismatched by position.
-                        injection_conv_layers=net_conf["network"].get("injection_conv_layers", 0),
-                        injection_conv_kwargs={
-                            "poly_degree": net_conf["network"]["kwargs"].get("poly_degree", 5),
-                            "conv_type": net_conf["network"]["kwargs"].get("conv_type", "cheby"),
-                        },
-                        fusion_width=net_conf["network"].get("fusion_width", None),
-                        fuse_act=net_conf["network"].get("fuse_act", None),
-                    )
-                network = ResNetMapsPlusCLSNetwork(
-                    conv_layers=None if is_multires_gcnn else net_spec.get_conv_layers(),
-                    cls_embedding_layers=get_cls_embedding_layers(
-                        cls_emb_widths,
-                        dropout_rate=cls_emb_dropout,
-                        dropout_per_layer=cls_conf.get("embedding_dropout_per_layer", True),
-                    ),
-                    regression_head_layers=net_spec.get_head_layers_no_flatten(),
-                    n_side=None if is_multires_gcnn else smooth_nside,
-                    tfr_n_side=n_side,
-                    indices=None if is_multires_gcnn else smooth_indices,
-                    n_neighbors=net_conf["network"]["n_neighbors"],
-                    max_batch_size=max_batch_size,
-                    initial_Fin=None if is_multires_gcnn else n_z_bins,
-                    n_cls_bins=n_cls_bins,
-                    l_min_per_pair=l_min_per_pair,
-                    l_max_per_pair=l_max_per_pair,
-                    cls_transform=cls_conf.get("transform", "asinh_per_feature"),
-                    # must match the training-time setting for the checkpoint to restore
-                    map_feature_dim=net_conf["network"].get("map_feature_dim", None),
-                    map_encoder=map_encoder,
-                    map_pool=net_conf["network"].get("map_pool", None),
-                    # must match training: a readout forwarded here but not there (or vice versa)
-                    # changes the architecture between train and eval and expect_partial() will NOT
-                    # raise — the injection_conv_layers precedent in bench_v8
-                    map_pool_multiscale=net_conf["network"].get("map_pool_multiscale", False),
-                )
-                if network.gcnn is not None:
-                    network.gcnn.build((max_batch_size, len(smooth_indices), n_z_bins))
-                # Trace the full ResNetMapsPlusCLSNetwork so that network.built=True and BaseModel
-                # can call network.summary(). gcnn.build() only builds the map branch.
-                network(
-                    (tf.zeros((2, len(smooth_indices), n_z_bins)), tf.zeros((2, 3 * n_side, len(l_min_per_pair)))),
-                    training=False,
-                )
-                model = BaseModel(
-                    network=network,
-                    n_side=None,
-                    indices=None,
-                    n_neighbors=net_conf["network"]["n_neighbors"],
-                    input_shape=None,
-                    max_batch_size=max_batch_size,
-                    checkpoint_dir=checkpoint_dir,
-                    restore_checkpoint=True,
-                    strategy=strategy,
-                )
+                cls_trace = tf.zeros((2, 3 * n_side, len(cls_kwargs["l_min_per_pair"])))
+                network((maps_trace, cls_trace), training=False)
             else:
-                if is_multires_gcnn:
-                    # prebuilt keras.Model (encoder incl. the regression head) — mirror run_training.py
-                    network = ResNetMultiResEncoder(
-                        smoothing_kwargs=smoothing_kwargs,
-                        layers=net_spec.get_layers(),
-                        nside=smooth_nside,
-                        n_neighbors=net_conf["network"]["n_neighbors"],
-                        max_batch_size=max_batch_size,
-                        input_norm=input_norm,
-                        spmm_backend=net_conf["network"].get("spmm_backend", "csr"),
-                        fusion=net_conf["network"].get("fusion", "concat"),
-                        # maps-only counterpart of the maps+cls site above -- same silent-mismatch
-                        # reasoning, same three previously-missing kwargs.
-                        injection_conv_layers=net_conf["network"].get("injection_conv_layers", 0),
-                        injection_conv_kwargs={
-                            "poly_degree": net_conf["network"]["kwargs"].get("poly_degree", 5),
-                            "conv_type": net_conf["network"]["kwargs"].get("conv_type", "cheby"),
-                        },
-                        fusion_width=net_conf["network"].get("fusion_width", None),
-                        fuse_act=net_conf["network"].get("fuse_act", None),
-                    )
-                    network(tf.zeros((2, len(smooth_indices), n_z_bins)), training=False)
-                    model = BaseModel(
-                        network=network,
-                        n_side=None,
-                        indices=None,
-                        n_neighbors=net_conf["network"]["n_neighbors"],
-                        input_shape=None,
-                        max_batch_size=max_batch_size,
-                        checkpoint_dir=checkpoint_dir,
-                        restore_checkpoint=True,
-                        strategy=strategy,
-                    )
-                else:
-                    network = net_spec.get_layers()
-                    model = BaseModel(
-                        network=network,
-                        n_side=smooth_nside,
-                        indices=smooth_indices,
-                        n_neighbors=net_conf["network"]["n_neighbors"],
-                        input_shape=(None, len(smooth_indices), n_z_bins),
-                        max_batch_size=max_batch_size,
-                        checkpoint_dir=checkpoint_dir,
-                        restore_checkpoint=True,
-                        strategy=strategy,
-                    )
+                network(maps_trace, training=False)
+            model = BaseModel(
+                network=network,
+                n_side=None,
+                indices=None,
+                n_neighbors=net_conf["network"]["n_neighbors"],
+                input_shape=None,
+                max_batch_size=max_batch_size,
+                checkpoint_dir=checkpoint_dir,
+                restore_checkpoint=True,
+                strategy=strategy,
+            )
+        else:
+            # Legacy layer-list specs — see the matching branch in run_training.py. No Cls branch.
+            if return_cls:
+                raise ValueError(
+                    f"network.name={net_name!r} is a legacy layer-list spec and has no Cls branch; "
+                    "remove the cls: block, or use name=resnet / nested_transformer."
+                )
+            input_norm = bool(net_conf["network"].get("input_norm", False))
+            net_spec = NETWORKS[net_name](
+                out_features=n_output,
+                smoothing_kwargs=smoothing_kwargs,
+                **({"input_norm": True} if input_norm else {}),
+                spmm_backend=spmm_backend,
+                **net_conf["network"]["kwargs"],
+            )
+            LOGGER.info(f"Loaded a legacy network specification of type {NETWORKS[net_name]}")
+            model = BaseModel(
+                network=net_spec.get_layers(),
+                n_side=smooth_nside,
+                indices=smooth_indices,
+                n_neighbors=net_conf["network"]["n_neighbors"],
+                spmm_backend=spmm_backend,
+                input_shape=(None, len(smooth_indices), n_z_bins),
+                max_batch_size=max_batch_size,
+                checkpoint_dir=checkpoint_dir,
+                restore_checkpoint=True,
+                strategy=strategy,
+            )
 
     # Build a numpy-level model callable for individual observation evaluation.
     # Includes downsampling when smooth_nside < n_side.

@@ -152,9 +152,9 @@ class BaseModel(object):
             self.build_network(input_shape=self.input_shape)
             self.print_summary()
         elif isinstance(self.network, tf.keras.Model) and self.network.built:
-            # ResNetMapsPlusCLSNetwork is passed with input_shape=None (tuple inputs don't use the
-            # standard build path), but the caller traces it with dummy inputs beforehand so
-            # network.built is True by the time we arrive here.
+            # The summary networks are passed with input_shape=None (a pre-built subclassed
+            # Model can't use the standard build path), but the caller traces it with dummy
+            # inputs beforehand so network.built is True by the time we arrive here.
             self.print_summary()
 
         # set the step

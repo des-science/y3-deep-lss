@@ -5,8 +5,8 @@ Created June 2025
 Author: Arne Thomsen
 
 Power-spectrum (Cls) binning + transform layer used by the maps + Cls composite networks
-(``deep_lss.nets.composite.resnet_maps_plus_cls`` and
-``deep_lss.nets.composite.transformer_maps_plus_cls``).
+(``deep_lss.nets.composite.resnet_summary`` and
+``deep_lss.nets.composite.transformer_summary``).
 """
 
 import numpy as np

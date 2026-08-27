@@ -727,7 +727,7 @@ class NestedHierarchicalLocalWindowTransformer(tf.keras.Model):
         -> final tensor of shape (B, N, D_final)
         -> global attention over N tokens
         -> pooling over N
-        -> prediction head
+        -> optional linear output projection (num_outputs; None leaves the pooled feature)
 
     The final global attention operates over N tokens, so internally it has
     an N x N attention matrix per head.
@@ -1019,9 +1019,26 @@ class NestedHierarchicalLocalWindowTransformer(tf.keras.Model):
         # already runs at that nside, so the network is one level deeper for the fine probe.
         # Each entry is {"level": body-loop level L (1..body_levels-1), "in_channels": C_inj};
         # the tensor arrives already tiling the same N top-level tokens with body_levels-L
-        # nested axes. At the start of level L its C_inj features are embedded to
+        # nested axes. At the start of level L its C_inj features are projected to
         # channel_dims[L], concatenated with the merged fine stream, and a Dense fuses the
-        # concat back to channel_dims[L] (the same concat+Dense idiom as the patch merges).
+        # concat back to channel_dims[L].
+        #
+        # NOTE — injection_proj is currently REDUNDANT, and deliberately kept. Nothing sits
+        # between it and injection_fuse (see call()), so the pair collapses exactly:
+        #   fuse(concat([x, W_p r + b_p])) = W_x x + (W_i W_p) r + (W_i b_p + b_f),
+        # i.e. one Dense (channel_dims[L] + C_inj) -> channel_dims[L] with the same rank
+        # ceiling min(channel_dims[L], C_inj). It costs channel_dims[L]^2 + channel_dims[L]
+        # parameters (4160 at the combined prod geometry, L=1) and buys no expressiveness.
+        # It is kept because it becomes load-bearing the moment the fusion is not a plain
+        # concat: the GCNN twin's fusion="bilinear" feeds x*inj, which needs both streams at
+        # the same width and is not even shape-compatible without the projection. Keeping the
+        # idiom identical in both encoders is what makes that knob portable here. See
+        # deep_lss.nets.encoders.maps.gcnn.resnet_multires (fusion / fuse_act), where the same
+        # pair lives and both nonlinearity knobs measured a wash (bench_v4, bench_v8).
+        #
+        # This is NOT the patch-merge idiom, despite the resemblance: NestedPatchMerge4 is
+        # LayerNorm -> concat -> ONE Dense. The injection seam has two Denses and no norm.
+        #
         # Masked attention (token_valid) is not supported alongside injections.
         self.injections_spec = list(injections or [])
         if self.injections_spec and token_valid is not None:
@@ -1087,7 +1104,11 @@ class NestedHierarchicalLocalWindowTransformer(tf.keras.Model):
         # position as the post-fusion head dropout in the maps+cls networks. Variable-free, so
         # toggling it keeps checkpoints compatible.
         self.head_dropout = tf.keras.layers.Dropout(head_dropout_rate) if head_dropout_rate is not None else None
-        self.head = tf.keras.layers.Dense(num_outputs)
+        # num_outputs=None returns the pooled feature as-is. The summary networks follow this with
+        # LayerNorm -> Dropout -> Dense(out_features), so a projection here would be a second linear
+        # layer with no nonlinearity between the two -- it only earns its parameters when the width
+        # itself matters, i.e. when a Cls branch is concatenated onto this feature.
+        self.head = tf.keras.layers.Dense(num_outputs) if num_outputs is not None else None
 
         window_sizes = [4 ** min(window_levels, body_levels - level) for level in range(body_levels)]
         head_input_dim = self.channel_dims[-1] * (pool_queries if pool == "attention" else 1)
@@ -1137,7 +1158,7 @@ class NestedHierarchicalLocalWindowTransformer(tf.keras.Model):
                 body_levels - L nested axes, tiling the same N top-level tokens as x.
 
         Output:
-            y: (B, num_outputs)
+            y: (B, num_outputs), or (B, final_dim) when num_outputs is None
         """
         expected_ndim = 3 + self.num_nested_levels
         rank = x.shape.rank
@@ -1213,9 +1234,14 @@ class NestedHierarchicalLocalWindowTransformer(tf.keras.Model):
         # Hierarchical local processing.
         readout_features = []
         for level in range(self.body_levels):
-            # Inject a coarser secondary input that enters at this body level: embed its
+            # Inject a coarser secondary input that enters at this body level: project its
             # channels to channel_dims[level], concatenate with the merged fine stream, and
             # fuse back to channel_dims[level] before the local attention sees the level.
+            # Nothing between proj and fuse, so the two are one linear map -- redundant here
+            # and kept only so a non-concat fusion stays portable from the GCNN twin; see the
+            # NOTE next to their construction in __init__. The fused output IS the residual
+            # stream, and the following pre-norm block supplies the nonlinearity, so this seam
+            # is not the "entirely LINEAR seam" that resnet_multires's fuse_act was added for.
             if level in injections_cl:
                 inj = self.injection_proj[str(level)](injections_cl[level])
                 x = self.injection_fuse[str(level)](tf.concat([x, inj], axis=-1))
@@ -1267,8 +1293,9 @@ class NestedHierarchicalLocalWindowTransformer(tf.keras.Model):
         if self.head_dropout is not None:
             x = self.head_dropout(x, training=training)
 
-        # Classification or regression head:
-        #   (B, final_dim) -> (B, num_outputs)
-        x = self.head(x)
+        # Optional output projection:
+        #   (B, final_dim) -> (B, num_outputs); identity when num_outputs is None
+        if self.head is not None:
+            x = self.head(x)
 
         return x

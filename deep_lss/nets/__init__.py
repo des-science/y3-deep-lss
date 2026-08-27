@@ -6,9 +6,8 @@ from .encoders.maps.gcnn.resnet import ResNetLayers
 from .encoders.maps.gcnn.resnet_multires import ResNetMultiResEncoder
 from .encoders.maps.legacy.vit import ViTLayers, GTLayers
 from .encoders.maps.legacy.one_d_conv import OneDConvLayers
-from .encoders.maps.transformer.network import HealpixTransformerNetwork
-from .composite.resnet_maps_plus_cls import ResNetMapsPlusCLSNetwork
-from .composite.transformer_maps_plus_cls import TransformerMapsPlusCLSNetwork
+from .composite.resnet_summary import ResNetSummaryNetwork
+from .composite.transformer_summary import TransformerSummaryNetwork
 from .encoders.cls.mlp import MultiLayerPerceptron
 from .encoders.cls.cnn import ClsConv1D
 from .encoders.cls.transformer import ClsTransformer
@@ -31,7 +30,8 @@ CLS_NETWORKS = {
     "cls_transformer": ClsTransformer,
 }
 
-# Network names that are built as a pre-assembled tf.keras.Model (smoothing + nested
-# tokenizer + transformer) and passed to BaseModel directly with n_side=None, rather than
-# through the layer-list / HealpyGCNN path used by the entries in NETWORKS above.
+# Network names built as a pre-assembled tf.keras.Model (smoothing + nested tokenizer +
+# transformer) and passed to BaseModel directly with n_side=None, rather than through the
+# layer-list / HealpyGCNN path. "resnet" is also pre-assembled now (ResNetSummaryNetwork owns
+# the readout on both paths); only the legacy NETWORKS entries still use the layer-list path.
 TRANSFORMER_NETWORKS = frozenset({"nested_transformer"})

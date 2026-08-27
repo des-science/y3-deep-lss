@@ -26,11 +26,12 @@ Two pieces are added on top of the raw transformer:
      of very different physical scale (lensing shear vs clustering counts) thus enter the
      transformer balanced.
 
-  3. ``HealpixTransformerNetwork`` (maps only) — a pre-built ``tf.keras.Model`` that BaseModel
-     uses directly (passed with ``n_side=None``), so no HealpyGCNN graph is constructed. The
-     maps + Cls composite ``TransformerMapsPlusCLSNetwork`` lives in
-     ``deep_lss.nets.composite.transformer_maps_plus_cls`` and reuses the helpers and tokenizer
-     defined here.
+  3. ``build_map_encoder`` — the shared entry point returning the map branch feature,
+     single- or multi-resolution. Both the maps-only and the maps + Cls network are the single
+     ``TransformerSummaryNetwork`` in ``deep_lss.nets.composite.transformer_summary``, which wraps
+     this encoder and concatenates a Cls branch onto it only when one is configured. It is a
+     pre-built ``tf.keras.Model`` that BaseModel uses directly (passed with ``n_side=None``), so no
+     HealpyGCNN graph is constructed.
 """
 
 import numpy as np
@@ -237,7 +238,8 @@ class HealpixMapEncoder(tf.keras.Model):
     and ``HealpixMultiResMapEncoder`` (per-probe nsides with injection) — implement the same four
     methods so the rest of the pipeline is resolution-agnostic:
 
-      - ``call(maps, training)``          -> ``(B, num_outputs)`` map feature / summary.
+      - ``call(maps, training)``          -> ``(B, num_outputs)`` map feature, or the pooled
+        ``(B, final_dim)`` feature when ``num_outputs`` is None.
       - ``smooth_groups(maps, training)`` -> list of per-resolution-group smoothed maps (fp32).
       - ``masks`` (property)              -> matching list of per-group footprint masks.
       - ``load_input_norm_stats(stats)``  -> load a list of ``(mean, inv_std)`` into the group layers.
@@ -253,8 +255,7 @@ class HealpixSingleResMapEncoder(HealpixMapEncoder):
     Used when smoothing resolves to a single kernel (all active probes share one nside). The
     Gaussian smoothing is the identical ``HealpySmoothing`` front-end used by the DeepSphere
     networks, so the maps seen by the transformer are preprocessed the same way. Returns
-    ``(B, num_outputs)`` — the summary for maps-only, or the ``map_feature_dim`` feature for the
-    maps+cls composite, matching the transformer's ``num_outputs``.
+    ``(B, num_outputs)``, or the pooled ``(B, final_dim)`` feature when ``num_outputs`` is None.
     """
 
     def __init__(
@@ -343,8 +344,8 @@ class HealpixMultiResMapEncoder(MultiResEncoderMixin, HealpixMapEncoder):
     probes). The coarser probe (clustering @256) is never upsampled — it enters the hierarchy at
     its own scale, so the network is one level deeper for the finer probe (lensing @512).
 
-    Returns ``(B, num_outputs)`` (the summary for maps-only, or the ``map_feature_dim`` feature
-    for the maps+cls composite, matching the transformer's ``num_outputs``).
+    Returns ``(B, num_outputs)``, or the pooled ``(B, final_dim)`` feature when ``num_outputs``
+    is None.
     """
 
     def __init__(
@@ -457,8 +458,14 @@ def build_map_encoder(
     and ``token_valid`` are mutually exclusive) and raises. Any other spec (all active probes at a
     single nside) selects ``HealpixSingleResMapEncoder``.
 
-    Both encoders return ``(B, num_outputs)`` and share the ``smooth_groups`` / ``masks`` /
-    ``load_input_norm_stats`` input-norm interface (see ``HealpixMapEncoder``).
+    ``num_outputs`` is the width of the final linear projection, or None for no projection at all
+    (the pooled ``(B, final_dim)`` feature is returned unchanged). The summary network always
+    follows this with LayerNorm -> Dropout -> Dense(out_features), so a projection here is a second
+    linear layer with no nonlinearity between the two: it is worth its parameters only when the
+    width is itself the point, i.e. when a Cls branch is concatenated onto the map feature.
+
+    Both encoders share the ``smooth_groups`` / ``masks`` / ``load_input_norm_stats`` input-norm
+    interface (see ``HealpixMapEncoder``).
     """
     if "split_probes" in (smoothing_kwargs or {}):
         if masked_attention:
@@ -488,47 +495,3 @@ def build_map_encoder(
         masked_attention=masked_attention,
         spmm_backend=spmm_backend,
     )
-
-
-class HealpixTransformerNetwork(tf.keras.Model):
-    """Maps-only nested transformer: a thin wrapper over a single ``map_encoder``.
-
-    Delegates the whole map branch (smoothing -> input-norm -> tokenizer -> transformer, single- or
-    multi-resolution) to the encoder built by ``build_map_encoder`` and returns its
-    ``(B, num_outputs)`` summary directly. The empirical input-norm statistics are measured through
-    ``self.map_encoder`` in ``run_training``.
-    """
-
-    def __init__(
-        self,
-        smoothing_kwargs,
-        smooth_indices,
-        nside,
-        token_nside,
-        in_channels,
-        num_outputs,
-        transformer_kwargs,
-        jit_compile_body=False,
-        head_dropout_rate=None,
-        input_norm=False,
-        masked_attention=False,
-        spmm_backend="csr",
-    ):
-        super().__init__()
-        self.map_encoder = build_map_encoder(
-            smoothing_kwargs=smoothing_kwargs,
-            smooth_indices=smooth_indices,
-            nside=nside,
-            token_nside=token_nside,
-            in_channels=in_channels,
-            num_outputs=num_outputs,
-            transformer_kwargs=transformer_kwargs,
-            jit_compile_body=jit_compile_body,
-            head_dropout_rate=head_dropout_rate,
-            input_norm=input_norm,
-            masked_attention=masked_attention,
-            spmm_backend=spmm_backend,
-        )
-
-    def call(self, maps, training=False):
-        return self.map_encoder(maps, training=training)

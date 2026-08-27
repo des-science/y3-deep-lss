@@ -129,9 +129,19 @@ def evaluate_grid(
     dset_kwargs["drop_remainder"] = True
 
     # network constants
-    # GCNN/ResNet-era option (save the penultimate embedding); not applicable to the
-    # transformer, whose output is the summary itself, so default to False when absent.
+    # Legacy option (save the penultimate embedding). It needs a Functional/Sequential network --
+    # `model.network.input` and `.layers[-2]` -- which only BaseModel's layer-list path produces,
+    # i.e. the legacy vision_transformer / graph_transformer / one_d_conv specs. Every resnet and
+    # nested_transformer run is a pre-built subclassed Model with no `.input`, so this would raise
+    # an opaque AttributeError deep in the evaluation loop; refuse it up front instead. No live
+    # config sets it (only configs/deprecated/v5-v7 do).
     save_second_to_last_layer = net_conf["network"].get("save_second_to_last_layer", False)
+    if save_second_to_last_layer and not isinstance(model.network, tf.keras.Sequential):
+        raise ValueError(
+            "save_second_to_last_layer requires a Sequential network (the legacy layer-list specs); "
+            f"{type(model.network).__name__} is a pre-built subclassed Model and exposes no "
+            "`.input`/`.layers[-2]`. Set save_second_to_last_layer: False."
+        )
 
     strategy = model.strategy
 
@@ -334,9 +344,19 @@ def evaluate_fiducial(
     LOGGER.info(f"There's a total of {n_examples} data vectors to be evaluated")
 
     # network constants
-    # GCNN/ResNet-era option (save the penultimate embedding); not applicable to the
-    # transformer, whose output is the summary itself, so default to False when absent.
+    # Legacy option (save the penultimate embedding). It needs a Functional/Sequential network --
+    # `model.network.input` and `.layers[-2]` -- which only BaseModel's layer-list path produces,
+    # i.e. the legacy vision_transformer / graph_transformer / one_d_conv specs. Every resnet and
+    # nested_transformer run is a pre-built subclassed Model with no `.input`, so this would raise
+    # an opaque AttributeError deep in the evaluation loop; refuse it up front instead. No live
+    # config sets it (only configs/deprecated/v5-v7 do).
     save_second_to_last_layer = net_conf["network"].get("save_second_to_last_layer", False)
+    if save_second_to_last_layer and not isinstance(model.network, tf.keras.Sequential):
+        raise ValueError(
+            "save_second_to_last_layer requires a Sequential network (the legacy layer-list specs); "
+            f"{type(model.network).__name__} is a pre-built subclassed Model and exposes no "
+            "`.input`/`.layers[-2]`. Set save_second_to_last_layer: False."
+        )
 
     strategy = model.strategy
     local_batch_size = dset_kwargs["local_batch_size"]

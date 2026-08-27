@@ -4,14 +4,18 @@
 Created June 2025
 Author: Arne Thomsen
 
-Benchmark the nested hierarchical local-window transformer (HealpixTransformerNetwork)
+Benchmark the nested hierarchical local-window transformer (TransformerSummaryNetwork)
 hyperparameter configs for GPU memory fit and step time.
 
 It builds each model through the *exact* construction path used by run_training.py (the
 ``is_transformer`` branch: real HealpySmoothing front-end + nested tokenizer + transformer +
-GridLossModel with the variational mutual-information loss) but feeds it synthetic random
-batches, so the measured peak memory and step time reflect the architecture and per-GPU
-(local) batch size, isolated from the tfrecord data pipeline.
+regression head + GridLossModel with the variational mutual-information loss) but feeds it
+synthetic random batches, so the measured peak memory and step time reflect the architecture
+and per-GPU (local) batch size, isolated from the tfrecord data pipeline.
+
+The network is always built WITHOUT the Cls branch, so ``peak_gb``/``step_ms`` measure the map
+branch alone even for a config that carries a ``cls:`` block. That is the quantity the sizing
+recipe wants; the Cls head is small and its cost does not scale with the batch geometry.
 
 Two modes:
 
@@ -73,7 +77,8 @@ def run_single(args):
     from msfm.utils import input_output, files
     from deep_lss.utils import configuration, optimization
     from deep_lss.models.grid_model import GridLossModel
-    from deep_lss.nets.encoders.maps.transformer.network import HealpixTransformerNetwork
+    from deep_lss.nets.composite.transformer_summary import TransformerSummaryNetwork
+    from deep_lss.nets.heads.regression_head import get_regression_head
 
     net_conf = input_output.read_yaml(args.net_config)
     dlss_conf = configuration.read_split_configs(args.probes_config, args.scales_config)
@@ -138,14 +143,22 @@ def run_single(args):
         transformer_kwargs = net_conf["network"]["kwargs"]
         jit_compile_body = net_conf["network"].get("jit_compile_body", False)
 
-        network = HealpixTransformerNetwork(
+        head_conf = net_conf["network"].get("head", {}) or {}
+        network = TransformerSummaryNetwork(
             smoothing_kwargs=smoothing_kwargs,
             smooth_indices=smooth_indices,
             nside=smooth_nside,
             token_nside=token_nside,
             in_channels=n_z_bins,
-            num_outputs=n_output,
+            # absent = None = no projection; see the note in run_training.py
+            map_feature_dim=net_conf["network"].get("map_feature_dim", None),
             transformer_kwargs=transformer_kwargs,
+            # maps-only (no Cls kwargs): the head runs straight on the map feature
+            regression_head_layers=get_regression_head(
+                out_features=n_output,
+                head_type="dense",
+                dropout_rate=head_conf.get("dropout_rate", None),
+            )[1:],
             jit_compile_body=jit_compile_body,
             masked_attention=bool(net_conf["network"].get("masked_attention", False)),
         )
