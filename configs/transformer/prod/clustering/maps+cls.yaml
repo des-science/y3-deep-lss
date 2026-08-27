@@ -3,6 +3,13 @@
 # the regression head. Architecture is the benchmarked winning base, bench_t8/default.yaml, same as
 # lensing/maps+cls.yaml; the map branch runs at nside 256 (clustering-only, so smooth_nside 256 is
 # the finest smoothing resolution — no upsample back).
+# TWO KEYS DIFFER VS maps.yaml -- this `cls:` BLOCK and `map_feature_dim` -- and the second
+# exists only because of the first: map_feature_dim is the width the map feature is projected to
+# for the concatenation, crushing the encoder's 1024-d pooled feature (base_embed_dim 32, growth
+# double, nside 512 -> token_nside 16 = 5 levels) to the 512 that matches the Cls embedding.
+# Maps-only there is nothing to balance and it is null. The GCNN prod pair needs no such second
+# key: its pooled map is 512-d already, so both its files say null and they diff by cls: alone.
+# Everything else here is identical -- one TransformerSummaryNetwork, one map encoder, one head.
 name: nested_transformer
 
 training:
@@ -38,6 +45,7 @@ network:
   # clustering-only, so nside 256 is the finest active smooth_nside and becomes the network's working
   # resolution (resolve_smooth_nside): the pipeline downsamples the native-res maps to 256 and the
   # transformer runs on those ~4x fewer pixels (no upsample back to native, unlike combined).
+  # Raw tfrecord I/O stays at native res (identical to lensing), so the dataloader values transfer.
   smooth_nside:
     clustering: 256
   token_nside: 16
@@ -48,7 +56,7 @@ network:
   input_norm: true
   # exclude footprint-masked pixels from attention/merges/pooling (keeps checkpoint lineage)
   masked_attention: false
-  map_feature_dim: 512
+  map_feature_dim: 512  # map-branch width AT THE CONCAT, matched to the Cls embedding width
   head:
     dropout_rate: 0.1
   cls:

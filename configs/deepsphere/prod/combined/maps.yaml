@@ -1,7 +1,15 @@
 # DeepSphere ResNet GCNN -- combined probes (multi-res: clustering injected at nside 256), maps only.
 # Architecture: bench_v7 `full` -- see ../../dev/combined/bench_v7/ for the rationale.
-# NOTE: the pooled map readout (map_pool) exists only on the maps+Cls path
-# (ResNetMapsPlusCLSNetwork); this config keeps the flatten head.
+# THE ONLY DIFFERENCE VS maps+cls.yaml IS THE `cls:` BLOCK. Both build one ResNetSummaryNetwork
+# over the same map branch; the cls: block decides only whether a Cls branch is concatenated onto
+# the map features before the regression head. map_pool therefore means exactly the same thing in
+# both files -- there is one implementation of the readout, not two.
+# !! THE POOLED READOUT IS NOT BENCHMARKED ON THE MAPS-ONLY PATH, AND IS NOT SCHEDULED TO BE. !!
+# It was switched on here ON REQUEST, AHEAD OF THE EVIDENCE. The contrast that would have validated
+# it (flatten vs mean, maps-only) was written as bench_v11 and then SHELVED to
+# dev/combined/bench_v11/_deferred/ on 2026-08-27, when that round was re-scoped to maps+Cls only.
+# So this default rests on the maps+Cls +32.1% flatten->mean result transplanted across paths, and
+# on nothing measured on the maps-only path itself. Reverting is deleting the map_pool line below.
 name: deepsphere_default
 
 training:
@@ -40,6 +48,8 @@ network:
   save_second_to_last_layer: False
   z_bank_size: Null
   input_norm: true
+  map_pool: mean  # readout over the (footprint-only) pixel axis instead of flatten
+  map_feature_dim: null  # the pooled map is already trunk-wide; no projection
   kwargs:
     base_channels: 64  # trunk = base_channels * 2^pool_layers = 512, pinned across probes
     pool_layers: 3

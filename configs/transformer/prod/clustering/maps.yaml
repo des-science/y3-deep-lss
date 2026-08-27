@@ -1,6 +1,25 @@
 # Nested hierarchical local-window transformer — clustering, maps only.
-# No Cls branch (no `cls:` block, no map_feature_dim): the transformer output is the summary
-# statistic directly. Otherwise identical to clustering/maps+cls.yaml — the benchmarked winning base,
+# TWO KEYS DIFFER VS maps+cls.yaml -- the `cls:` BLOCK and `map_feature_dim` -- and the second
+# exists only because of the first. Both paths build one TransformerSummaryNetwork over the same
+# map encoder and the same regression head; the cls: block decides whether a Cls branch is
+# concatenated onto the map feature, and map_feature_dim is the width the map feature is
+# projected to FOR that concatenation. Here there is nothing to balance, so it is null: the
+# mean-pooled encoder feature goes straight into the regression head, whose
+# LayerNorm -> Dropout -> Dense is the only linear layer, and a projection would stack two Dense
+# layers with no activation between them. The key may equally be omitted (absent = None); it is
+# kept so the pair carries the same key SET and the diff is one value.
+# The GCNN prod pair does differ by the cls: block alone, and only because its arithmetic works
+# out: base_channels 64 x 3 pool_layers = a 512-d pooled map, already matching the 512-d Cls
+# embedding, so BOTH its files say null. Here the encoder ends at 1024 (base_embed_dim 32,
+# growth double, nside 512 -> token_nside 16 = 5 levels), so maps+cls has to crush it to 512.
+# There is no readout choice here as there is on the GCNN: the transformer ends in a mean pool
+# over tokens on both paths (nested_transformer.py, `reduce_mean(x, axis=1)`), so map_pool has
+# no meaning and is not a key.
+# NOT YET BENCHMARKED maps-only: this path used to end in the encoder's own Dense(n_output) and
+# now ends in the shared regression head (LN -> Dropout -> Dense), one linear layer either way.
+# No transformer maps-only run exists on any dataset, so nothing on disk is invalidated -- but
+# nothing validates it either.
+# Otherwise identical to clustering/maps+cls.yaml — the benchmarked winning base,
 # bench_t8/default.yaml — with the whole network running at nside 256: clustering is the only active
 # probe, so its smooth_nside 256 is the finest smoothing resolution and sets the input geometry.
 name: nested_transformer
@@ -42,6 +61,7 @@ network:
   smooth_nside:
     clustering: 256
   token_nside: 16
+  map_feature_dim: null  # no projection: nothing to balance against, so the head's Dense is enough
   z_bank_size: Null
   max_checkpoints: 50
   jit_compile_body: true

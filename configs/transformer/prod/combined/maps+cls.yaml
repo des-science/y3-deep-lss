@@ -10,6 +10,13 @@
 # injection and the token_valid attention mask are mutually exclusive in the core transformer, so
 # build_map_encoder raises if it is enabled here. It is available in the single-resolution
 # lensing/clustering configs.
+# TWO KEYS DIFFER VS maps.yaml -- this `cls:` BLOCK and `map_feature_dim` -- and the second
+# exists only because of the first: map_feature_dim is the width the map feature is projected to
+# for the concatenation, crushing the encoder's 1024-d pooled feature (base_embed_dim 32, growth
+# double, nside 512 -> token_nside 16 = 5 levels) to the 512 that matches the Cls embedding.
+# Maps-only there is nothing to balance and it is null. The GCNN prod pair needs no such second
+# key: its pooled map is 512-d already, so both its files say null and they diff by cls: alone.
+# Everything else here is identical -- one TransformerSummaryNetwork, one map encoder, one head.
 name: nested_transformer
 
 training:
@@ -54,7 +61,7 @@ network:
   jit_compile_body: true
   precision: bfloat16
   input_norm: true
-  map_feature_dim: 512
+  map_feature_dim: 512  # map-branch width AT THE CONCAT, matched to the Cls embedding width
   head:
     dropout_rate: 0.1
   cls:
