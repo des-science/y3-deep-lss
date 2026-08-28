@@ -1,6 +1,62 @@
 # bench_v11 — COMBINED, the SUBTRACTIVE round
 
-**Status (2026-08-27): configs written and verified, NOTHING LAUNCHED.** 5 arms, 10 jobs, combined only.
+**Status (2026-08-28): COMPLETE. All 5 arms ran to budget; the round settled its own question.**
+Jobs 3200020-3200030, 5 x 2-job `afterany` chains, all COMPLETED 0:0, all 79 200 / 79 200 s consumed.
+
+## RESULT — adopt `simple_mean_std`; delete ConvNeXt, DropPath and attention
+
+The pre-registered rule in `simple_mean_std.yaml` was `>= 0.951 -> ADOPT`. It measured **0.970**.
+
+**Paired FoM (`run_comparison`, 1000 mocks, final checkpoints, seed floor 0.049):**
+
+| arm | steps as run | it/s | vs `simple` | vs `bench_v8_mean_std` |
+|---|---|---|---|---|
+| `bench_v8_mean_std` (champion) | 260 000 | 3.32 | **1.104** | 1.000 |
+| **`simple_mean_std`** | 235 400 | 3.02 | **1.069** | **0.970 =** |
+| `noattn` | 273 800 | 3.55 | 1.054 | 0.950 |
+| `nodroppath` | 249 300 | 3.18 | 1.039 = | 0.942 |
+| `convnext` | 278 000 | 3.52 | 1.025 = | 0.926 |
+| `simple` (floor) | 235 500 | 3.00 | 1.000 | 0.906 |
+
+**The readout is the whole gain.** `simple -> simple_mean_std` is the cleanest contrast the
+programme has produced: one knob, and the two arms landed within **100 steps** of each other
+(235 500 vs 235 400) under the wall budget, so it is equal-wall *and* equal-samples. It is worth
+**+6.9%**. The champion's remaining margin over it — 1.104 / 1.069 = **1.033** — is inside the floor.
+Three blocks, a wash.
+
+**ConvNeXt alone is nothing, once its own confound is paid back.** The header declared ~17% extra
+steps at fixed wall; it realised **1.18x** (278 000 vs 235 500) and the declared "a win under ~2% is
+not evidence for the block" rule therefore stands as written. At the measured +7.3%-per-2x budget
+elasticity that 1.18x is worth ~+1.75%, so of `convnext`'s raw 1.025 the **block contributes ~+0.7%**.
+
+**`simple_mean_std` ties the champion from behind.** It is the *slowest-but-one* arm and trained
+**9.5% fewer steps** than the champion (235 400 vs 260 000, ~ -1.05% of FoM). Correcting for that,
+the tie is ~0.980 — the wash is more comfortable than the raw number, not less, which is the safe
+direction for a decision to *remove* machinery.
+
+**`nodroppath` is uninterpretable as designed, and stayed that way.** Two knobs (DropPath off *and*
+attention every:1), and the every:1 change made it the slowest arm at 3.18 it/s -> 4% fewer steps
+than the champion. Its 0.942 is a loss outside the floor, but it is not a DropPath measurement and
+must never be quoted as one.
+
+**`noattn` at 0.950 sits one thousandth outside the 0.049 floor** — treat it as the boundary case it
+is, not as a resolved 5% cost of removing attention. It does not matter for the decision: it is
+*both* worse and more complex than `simple_mean_std`, which settles the round on its own.
+
+**Q2 robustness (`run_diagnostics robustness`): every row a wash, no disasters.** MEAN 0.229-0.290
+across all six runs, `source_clustering` MAX 0.333-0.526, every row inside the floor and marked `=`.
+`simple_mean_std` MEAN 0.261 vs the champion's 0.265. Removing the three blocks costs no robustness.
+
+**Q3 coverage (`run_diagnostics coverage`, paired vs the champion): gate PASSED.** `simple_mean_std`
+HPD delta **-0.0057 [-0.0162, +0.0053]**, CI spans 0. SBC shows the cohort-wide mild rejection on
+Om/s8/w0 and clean nuisances that *every* v18 run including the transformer and the Cls baselines
+shows — a property of the mock set, not the architecture. No pathology from the 512 -> 1024 readout.
+
+**Cost.** `simple_mean_std` is **18.47 M** trainable params vs the champion's **20.54 M** — 10% fewer,
+with the ConvNeXt block, stochastic depth and both attention blocks gone.
+
+**Not yet done:** the without-Cls evaluation, and the lensing/clustering transplant.
+
 
 **The question.** Every previous round asked *what can we add*. This one asks **what can we delete**:
 what is the simplest GCNN that is still meaningfully better than `bench_v7_simple`? The combined
