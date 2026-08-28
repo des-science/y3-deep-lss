@@ -264,3 +264,26 @@ a round.
 
 Then evaluate the winner **without the Cls branch** — every arm here carries it, so the maps-only
 number is a separate measurement, not a re-read of these runs.
+
+## FOLLOW-UP LAUNCHED 2026-08-28 — `convnext_mean_std`, the missing cell
+
+The user's stated preference is to **use ConvNeXt**. The round as scored could not say which
+ConvNeXt recipe that should mean, because every ConvNeXt run on disk carries DropPath, attention,
+or both. So the block x readout square was closed:
+
+|  | mean readout | mean_std readout |
+|---|---|---|
+| **classic** | `simple` 1.000 | `simple_mean_std` **1.069** |
+| **convnext, bare** | `convnext` 1.025 **=** | **`convnext_mean_std` — RUNNING** |
+| convnext + DropPath | — | `noattn` 1.054 |
+| convnext + attention | — | `nodroppath` 1.039 (two knobs) |
+| convnext + DropPath + attention | `v2` 1.074 | `bench_v8_mean_std` **1.104** |
+
+**Jobs:** combined 3211923 -> 3211924 (2-job `afterany` chain, 79 200 s); lensing 3211925 and
+clustering 3211926 (1 job each, 39 600 s, equal wall with `bench_v10_mean_std_1x` and `v2`).
+
+**Prediction on the record before the run:** ~1.02-1.05 vs `simple`, i.e. NOT beating
+`simple_mean_std`. Every partial strip-down of the stack lands at or below plain classic, and the
+isolated block at `mean` readout was a wash. If that holds, **ConvNeXt only pays as the full
+package** and the recipe to adopt is `bench_v8_mean_std` / `bench_v10_mean_std_1x`, machinery
+included. Above ~1.12 would overturn it and make bare ConvNeXt the best simple net in the programme.
