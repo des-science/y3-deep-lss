@@ -1,0 +1,128 @@
+# ============================================================================
+# bench_v11 — LENSING, "convnext_mean_std". THE MISSING CELL OF THE BLOCK x READOUT SQUARE.
+#
+# PARENT: simple_mean_std.yaml (this directory).
+# THE ONLY KNOB: residual_block_type "residual" -> "convnext". DropPath stays 0.0 and there is
+# still no attention, both HELD EQUAL to the parent -- that is what makes this the block alone.
+#
+# WHY IT EXISTS. bench_v11 on combined left exactly one cell of the 2x2 unmeasured:
+#
+#                 |  mean readout        |  mean_std readout
+#   --------------|----------------------|---------------------------
+#   classic       |  simple      1.000   |  simple_mean_std   1.069
+#   convnext bare |  convnext    1.025 = |  THIS FILE         ??
+#
+# and the four ConvNeXt runs that DO exist all carry DropPath, attention, or both:
+#   convnext + DropPath + attention + mean_std   1.104   (bench_v8_mean_std / bench_v10_mean_std_1x)
+#   convnext + DropPath,  no attention, mean_std 1.054   (bench_v11_noattn)
+#   convnext + attention, no DropPath, mean_std  1.039   (bench_v11_nodroppath, two knobs)
+#
+# THE PREDICTION, ON THE RECORD BEFORE THE RUN. Every partial strip-down of the ConvNeXt stack
+# lands AT OR BELOW plain classic + mean_std (1.054 and 1.039 against 1.069), and the isolated
+# block at mean readout was 1.025, a wash. So this arm is expected to land ~1.02-1.05 vs simple,
+# i.e. NOT to beat simple_mean_std. If that holds, ConvNeXt only pays as the full package and the
+# machinery is the price of admission, not an optional extra. A result above ~1.12 would overturn
+# that and make bare ConvNeXt the best simple network in the programme.
+#
+# RUN CONTEXT. Launched 2026-08-28 to close the square on all three probes at once, alongside the
+# lensing/clustering transplant. The user's stated preference is to use ConvNeXt; this file is what
+# decides WHICH ConvNeXt recipe that means.
+#
+# BUDGET: ONE 12 h job, 39 600 s. Equal wall with bench_v10_mean_std_1x and v2.
+#
+# NEW CHECKPOINT LINEAGE -- RUN_NUM=1, own MODEL_DIR. The block change alters weight shapes; a
+# classic checkpoint would load under expect_partial() and NOT raise.
+# ============================================================================
+name: deepsphere_default
+
+training:
+  n_steps: auto  # <-- THE ONLY KNOB vs lensing/bench_v7/simple.yaml (which fixes 110000)
+  wall_budget_seconds: 39600  # TRAINING seconds for the WHOLE run -- ONE 12 h job, no chain.
+                              # Matches bench_v10_mean_std_1x and v2 on disk exactly = equal wall.
+  job_budget_seconds: 39600  # the single job's share (11 h of 12 h; ~1 h left for the eval tail)
+  output_every: Null
+  checkpoint_every: 5000  # job 2 restores the last checkpoint -- smaller = less lost handoff work
+  vali_every: 1000
+  eval_every: Null
+
+optimization:
+  optimizer: adam
+  gradient_clipping:
+    clip_by_value: null
+    clip_by_norm: null
+    clip_by_global_norm: 1.0
+  mutual_info_loss:
+    learning_rate: 1.0e-4
+    optimizer_kwargs:
+      beta_1: 0.9
+      beta_2: 0.999
+    scheduler: cosine
+    warmup_steps: 5000
+    warmup_init_learning_rate: 1.0e-5
+    decay_alpha: 0.0
+    ema_momentum: null
+
+network:
+  name: resnet
+  spmm_backend: csr
+  n_neighbors: 60
+  max_checkpoints: 50
+  save_second_to_last_layer: False
+  z_bank_size: Null
+  input_norm: true
+  # No smooth_nside: lensing is the only active probe and stays at its native nside throughout.
+  map_pool: mean_std  # <-- THE ONLY KNOB vs simple.yaml: mean + per-channel spatial std,
+                      # (B,512) -> (B,1024). The lever that decided combined (+6.9%).
+  map_feature_dim: null  # no projection: the 1024-d pooled map goes straight to map_norm + concat
+  cls:
+    n_bins: 16
+    transform: asinh_per_feature
+    asinh_default_scale: null
+    embedding_layers: [512, 512, 512, 512]  # 512 against a 1024-d map -- the inherited balance confound
+    embedding_dropout_rate: 0.1
+  kwargs:
+    # CLASSIC residual body -- no residual_block_type key at all (default "residual"), no attention.
+    base_channels: 64  # pool_widen doubles per pool stage -> trunk 64 * 2^3 = 512 (pinned across probes)
+    pool_layers: 3
+    conv_layers: 2
+    residual_layers: 5
+    residual_block_type: convnext  # <-- THE ONLY KNOB vs simple_mean_std.yaml (which omits this
+                                   # key and takes the default classic "residual" block)
+    mlp_ratio: 4  # ConvNeXt-only, upstream default. Comes WITH the block; not a second knob.
+    layer_scale_init: 1.0e-6  # ConvNeXt-only, upstream default (ConvNeXt/CaiT LayerScale)
+    drop_path_rate: 0.0  # EXPLICITLY OFF, and HELD EQUAL TO simple_mean_std.yaml --
+                         # that is what makes this the block ALONE. bench_v11_noattn
+                         # is the same architecture WITH DropPath 0.1 (scored 1.054).
+    poly_degree: 5
+    head_type: "dense"
+    dense_layers: []
+    dropout_rate: 0.1
+
+dset:
+  training:
+    common:
+      is_eval: False
+      n_readers: 64
+      n_prefetch: 8
+      n_workers: Null
+    grid:
+      local_batch_size: 16
+      file_name_shuffle_buffer: 64
+      examples_shuffle_buffer: 256
+  validation:
+    n_batches: 50
+    common:
+      is_eval: True
+      n_readers: 8
+      n_prefetch: 2
+      n_workers: 16
+    grid:
+      local_batch_size: 16
+  eval:
+    common:
+      is_eval: True
+      n_readers: 64
+      n_prefetch: 2
+      n_workers: Null
+    grid:
+      local_batch_size: 16
