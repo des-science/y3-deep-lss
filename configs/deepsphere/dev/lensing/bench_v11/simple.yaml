@@ -1,0 +1,117 @@
+# ============================================================================
+# bench_v11 — LENSING, "simple". THE TRANSPLANT: does the combined result hold across the board?
+#
+# PARENT: lensing/bench_v7/simple.yaml (the classic-block, mean-pool floor).
+# THE ONLY KNOB vs that parent: the SIZING MODE (fixed 110000 -> wall budget). The
+#          architecture is untouched key-for-key. This is the round's FLOOR.
+#
+# WHY THIS ARM EXISTS. bench_v11 on COMBINED (scored 2026-08-28) found that the readout is the
+# entire gain and the machinery is not: at fixed `mean` readout the whole ConvNeXt + DropPath +
+# attention stack is worth 1.074, while swapping the readout on the plain classic block is worth
+# 1.069 -- the same number. Stacking both (bench_v8_mean_std) beat the readout alone by 1.028, a
+# wash. The two levers are SUBSTITUTES, not additive. This round asks whether that also holds on
+# lensing alone, which is the last thing standing between here and a final architecture.
+#
+# THE ANCHORS ARE ALREADY ON DISK AT THE SAME WALL, so this round needs no anchor runs:
+#   bench_v10_mean_std_1x  convnext + DropPath 0.1 + attention every 2 + mean_std, 39 600 s
+#   v2                     the v18 production default: same stack, mean readout,      39 600 s
+#   (bench_v10_mean_std_2x is the same recipe at 79 200 s -- NOT equal wall, do not pair on it)
+#
+# BUDGET: ONE 12 h job, 39 600 s. Single probe, no chain -- MAX_RUNS is not set. n_steps is an
+# OUTPUT (throughput.json), not an input.
+#
+# DECLARED CONFOUND, AND IT RUNS THE CONSERVATIVE WAY. The classic block is SLOWER than ConvNeXt
+# (lensing 3.02 vs 3.50 measured, x1.16), so under an equal wall these arms train ~15% FEWER steps
+# than the bench_v10/v2 anchors -- worth roughly 1.5% of FoM AGAINST them. A win or a wash here is
+# therefore conservative; only a loss larger than ~2% is ambiguous between the block and the budget.
+# (On combined the local budget elasticity measured ~0: bench_v8_long at 2x wall scored 1.069 vs
+# v2's 1.074 at 1x, a wash. If that holds here the confound is smaller still.)
+#
+# NEW CHECKPOINT LINEAGE -- RUN_NUM=1, own MODEL_DIR. Nothing here loads a bench_v7 checkpoint.
+# ============================================================================
+name: deepsphere_default
+
+training:
+  n_steps: auto  # <-- THE ONLY KNOB vs lensing/bench_v7/simple.yaml (which fixes 110000)
+  wall_budget_seconds: 39600  # TRAINING seconds for the WHOLE run -- ONE 12 h job, no chain.
+                              # Matches bench_v10_mean_std_1x and v2 on disk exactly = equal wall.
+  job_budget_seconds: 39600  # the single job's share (11 h of 12 h; ~1 h left for the eval tail)
+  output_every: Null
+  checkpoint_every: 5000  # job 2 restores the last checkpoint -- smaller = less lost handoff work
+  vali_every: 1000
+  eval_every: Null
+
+optimization:
+  optimizer: adam
+  gradient_clipping:
+    clip_by_value: null
+    clip_by_norm: null
+    clip_by_global_norm: 1.0
+  mutual_info_loss:
+    learning_rate: 1.0e-4
+    optimizer_kwargs:
+      beta_1: 0.9
+      beta_2: 0.999
+    scheduler: cosine
+    warmup_steps: 5000
+    warmup_init_learning_rate: 1.0e-5
+    decay_alpha: 0.0
+    ema_momentum: null
+
+network:
+  name: resnet
+  spmm_backend: csr
+  n_neighbors: 60
+  max_checkpoints: 50
+  save_second_to_last_layer: False
+  z_bank_size: Null
+  input_norm: true
+  # No smooth_nside: lensing is the only active probe and stays at its native nside throughout.
+  map_pool: mean  # KEEP: the winning readout, +32.1% paired over flatten
+  map_feature_dim: null  # no projection: the 512-d pooled map goes straight to map_norm + concat
+  cls:
+    n_bins: 16
+    transform: asinh_per_feature
+    asinh_default_scale: null
+    embedding_layers: [512, 512, 512, 512]  # last entry 512 balances the 512-d pooled map; fused = 1024
+    embedding_dropout_rate: 0.1
+  kwargs:
+    # CLASSIC residual body -- no residual_block_type key at all (default "residual"), no attention.
+    base_channels: 64  # pool_widen doubles per pool stage -> trunk 64 * 2^3 = 512 (pinned across probes)
+    pool_layers: 3
+    conv_layers: 2
+    residual_layers: 5
+    drop_path_rate: 0.0  # EXPLICITLY OFF: DropPath measured 0.946 on the classic block -- it hurts here
+    poly_degree: 5
+    head_type: "dense"
+    dense_layers: []
+    dropout_rate: 0.1
+
+dset:
+  training:
+    common:
+      is_eval: False
+      n_readers: 64
+      n_prefetch: 8
+      n_workers: Null
+    grid:
+      local_batch_size: 16
+      file_name_shuffle_buffer: 64
+      examples_shuffle_buffer: 256
+  validation:
+    n_batches: 50
+    common:
+      is_eval: True
+      n_readers: 8
+      n_prefetch: 2
+      n_workers: 16
+    grid:
+      local_batch_size: 16
+  eval:
+    common:
+      is_eval: True
+      n_readers: 64
+      n_prefetch: 2
+      n_workers: Null
+    grid:
+      local_batch_size: 16
