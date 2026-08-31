@@ -1,7 +1,20 @@
 # bench_v12 — the SHARED-CORE round
 
-**Status: QUEUED, GCNN ConvNeXt ARMS REVISED** (2026-08-31). Twelve jobs submitted at 11:48
-(3242160-3242173); none had started when the round was revised at 16:40, so nothing is lost.
+**Status: QUEUED, 12 jobs** (2026-08-31). Twelve submitted at 11:48 (3242160-3242173); none had
+started when the round was revised at 17:0x, so nothing was lost.
+
+| arm | jobs | note |
+|---|---|---|
+| `classic_nodrop` | 3242160 / 3242161 | original submission, kept |
+| `transformer` | 3242167 / 3242168 | original submission, kept |
+| `transformer_nodrop` | 3242169 / 3242170 | original submission, kept |
+| `transformer_nodrop_droppath` | 3242171 / 3242173 | original submission, kept |
+| `staged_nodrop` | **3245093 / 3245094** | replaces `convnext_nodrop` (3242162/3, cancelled) |
+| `staged_nodrop_droppath` | **3245095 / 3245096** | replaces `convnext_nodrop_droppath` (3242164/5) |
+
+Only the two ConvNeXt chains were cancelled and resubmitted; the other eight keep the priority
+they had accrued since 11:48. The two new chains therefore start later than the rest, which costs
+latency but confounds nothing -- every arm is `n_steps: auto` on its own 79 200 s budget.
 
 **The revision:** the two ConvNeXt GCNN arms now carry the **staged all-ConvNeXt layout** that was
 drafted as its own round, `bench_v13`. That round is gone -- folded in here rather than run after,
