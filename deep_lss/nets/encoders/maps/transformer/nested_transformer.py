@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 import tensorflow as tf
+from deepsphere.gnn_layers import DropPath
 from msfm.utils import logger
 
 LOGGER = logger.get_logger(__file__)
@@ -353,6 +354,7 @@ class TransformerBlock(tf.keras.layers.Layer):
         attn_dist_bins=None,
         attn_coeff_init=0.0,
         block_dropout_rate=None,
+        drop_path_rate=0.0,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -406,6 +408,12 @@ class TransformerBlock(tf.keras.layers.Layer):
         # the checkpoint lineage.
         self.drop1 = tf.keras.layers.Dropout(block_dropout_rate) if block_dropout_rate is not None else None
         self.drop2 = tf.keras.layers.Dropout(block_dropout_rate) if block_dropout_rate is not None else None
+        # Stochastic depth on the whole residual branch: the same DropPath the GCNN's ConvNeXt
+        # block uses, at a rate held CONSTANT across depth (as resnet.py does) rather than timm's
+        # linear ramp, so the knob reads the same on both architectures. Variable-free, so
+        # toggling it preserves the checkpoint lineage.
+        self.dp1 = DropPath(drop_path_rate) if drop_path_rate else None
+        self.dp2 = DropPath(drop_path_rate) if drop_path_rate else None
 
     def call(self, x, training=None, attention_mask=None):
         # attention_mask: optional boolean mask broadcastable to (B_like, S, S); True
@@ -424,6 +432,8 @@ class TransformerBlock(tf.keras.layers.Layer):
             attn_out = self.ls1(attn_out)
         if self.drop1 is not None:
             attn_out = self.drop1(attn_out, training=training)
+        if self.dp1 is not None:
+            attn_out = self.dp1(attn_out, training=training)
 
         x = shortcut + attn_out
         mlp_out = self.mlp(self.norm2(x), training=training)
@@ -431,6 +441,8 @@ class TransformerBlock(tf.keras.layers.Layer):
             mlp_out = self.ls2(mlp_out)
         if self.drop2 is not None:
             mlp_out = self.drop2(mlp_out, training=training)
+        if self.dp2 is not None:
+            mlp_out = self.dp2(mlp_out, training=training)
         x = x + mlp_out
 
         return x
@@ -476,6 +488,7 @@ class NestedLocalWindowBlock(tf.keras.layers.Layer):
         pos_coeff_init=0.0,
         window_mask=None,
         block_dropout_rate=None,
+        drop_path_rate=0.0,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -510,6 +523,7 @@ class NestedLocalWindowBlock(tf.keras.layers.Layer):
             attn_dist_bins=dist_bins,
             attn_coeff_init=pos_coeff_init,
             block_dropout_rate=block_dropout_rate,
+            drop_path_rate=drop_path_rate,
         )
 
     def call(self, x, training=None):
@@ -726,7 +740,8 @@ class NestedHierarchicalLocalWindowTransformer(tf.keras.Model):
         -> ...
         -> final tensor of shape (B, N, D_final)
         -> global attention over N tokens
-        -> pooling over N
+        -> pooling over N   (POOL -> NORM: no pre-pool LayerNorm; the norm follows in
+                             TransformerSummaryNetwork, as on the GCNN twin)
         -> optional linear output projection (num_outputs; None leaves the pooled feature)
 
     The final global attention operates over N tokens, so internally it has
@@ -750,6 +765,7 @@ class NestedHierarchicalLocalWindowTransformer(tf.keras.Model):
         fp32_softmax=True,
         head_dropout_rate=None,
         block_dropout_rate=None,
+        drop_path_rate=0.0,
         merge_op="concat",
         pool="mean",
         pool_queries=1,
@@ -995,6 +1011,7 @@ class NestedHierarchicalLocalWindowTransformer(tf.keras.Model):
                         pos_coeff_init=pos_coeff_init,
                         window_mask=(None if stage_window_masks is None else stage_window_masks[level]),
                         block_dropout_rate=block_dropout_rate,
+                        drop_path_rate=drop_path_rate,
                         name=f"local_stage_{level}_block_{block_index}",
                     )
                     for block_index in range(local_blocks_per_level)
@@ -1070,12 +1087,18 @@ class NestedHierarchicalLocalWindowTransformer(tf.keras.Model):
                 layerscale_init=layerscale_init,
                 fp32_softmax=fp32_softmax,
                 block_dropout_rate=block_dropout_rate,
+                drop_path_rate=drop_path_rate,
                 name=f"global_block_{block_index}",
             )
             for block_index in range(global_blocks)
         ]
 
-        self.norm = _fp32_layer_norm(axis=-1, epsilon=1e-5)
+        # NO pre-pool LayerNorm: the readout is POOL -> NORM, matching the GCNN twin and
+        # ConvNeXt's classifier rather than ViT's norm -> pool. Not equivalent -- norming first
+        # equalizes each token's magnitude, and amplitude across sky positions is signal here.
+        # The norm the head needs comes after the pool, from TransformerSummaryNetwork.
+        # !! LINEAGE BREAK (2026-08-31): a variable was removed, so older checkpoints hard-error.
+
         # Learned-query attention pool over the N top-level tokens (see AttentionPool);
         # None reproduces the (masked) mean pool.
         self.attention_pool = (
@@ -1141,6 +1164,7 @@ class NestedHierarchicalLocalWindowTransformer(tf.keras.Model):
             f"masked_attention={token_valid is not None}, "
             f"head input width={head_input_dim}, layerscale_init={layerscale_init}, "
             f"fp32_softmax={fp32_softmax}, block_dropout_rate={block_dropout_rate}, "
+            f"drop_path_rate={drop_path_rate}, "
             f"head_dropout_rate={head_dropout_rate}"
         )
         if token_valid is not None:
@@ -1272,7 +1296,10 @@ class NestedHierarchicalLocalWindowTransformer(tf.keras.Model):
         for block in self.global_blocks:
             x = block(x, training=training, attention_mask=self._global_mask)
 
-        x = self.norm(x)
+        # fp32 BEFORE pooling, not optional: the pre-norm residual stream grows with depth, and
+        # averaging N of those in bf16 loses precision. The removed LayerNorm supplied this cast
+        # as a side effect, so every pooling branch below sees the dtype it saw before.
+        x = tf.cast(x, tf.float32)
 
         # Pool over the N basic patches:
         #   (B, N, final_dim) -> (B, final_dim) or (B, pool_queries * final_dim)
