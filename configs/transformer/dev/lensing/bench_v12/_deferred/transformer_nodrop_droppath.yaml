@@ -1,0 +1,103 @@
+# bench_v12 -- LENSING, maps + Cls.
+# "transformer_nodrop_droppath" -- the modern-regularization arm, transformer side.
+# PARENT: transformer_nodrop.yaml. THE ONLY KNOB: network.kwargs.drop_path_rate 0.0 -> 0.1.
+# The GCNN's twin, and the SAME knob: DropPath was added to this network on 2026-08-31
+# reusing deepsphere.gnn_layers.DropPath at the same position and a constant rate.
+# NEVER RUN. Launch this arm first and alone; the network is traced at startup, so a
+# plumbing error crashes in minutes.
+# Rationale, launch plan and scoring: ../../../../../deepsphere/dev/combined/bench_v12/README.md
+# NEW CHECKPOINT LINEAGE -- RUN_NUM=1, own MODEL_DIR.
+name: nested_transformer
+
+training:
+  n_steps: auto  # an OUTPUT of the wall-clock budget; see throughput.json
+  wall_budget_seconds: 39600  # TRAINING seconds for the WHOLE run -- single 12 h job
+  job_budget_seconds: 39600  # this job's share (11 h of 12 h; ~1 h for the eval tail)
+  output_every: Null
+  checkpoint_every: 5000
+  vali_every: 1000
+  eval_every: Null
+
+optimization:
+  optimizer: adam
+  gradient_clipping:
+    clip_by_value: null
+    clip_by_norm: null
+    clip_by_global_norm: 1.0
+  mutual_info_loss:
+    learning_rate: 1.0e-4
+    optimizer_kwargs:
+      beta_1: 0.9
+      beta_2: 0.999
+    scheduler: cosine
+    warmup_steps: 5000
+    warmup_init_learning_rate: 1.0e-5
+    decay_alpha: 0.0
+    ema_momentum: null
+
+network:
+  name: nested_transformer
+  spmm_backend: csr
+  token_nside: 16
+  z_bank_size: Null
+  max_checkpoints: 50
+  jit_compile_body: true
+  precision: bfloat16
+  input_norm: true
+  map_feature_dim: null  # no projection, matching the GCNN: pool -> map_norm -> concat
+  masked_attention: False  # unavailable on the multi-res path, so combined omits it
+  head:
+    dropout_rate: null  # <-- THE KNOB: head dropout off (transformer.yaml sets 0.1)
+  cls:
+    n_bins: 16
+    transform: asinh_per_feature
+    asinh_default_scale: null
+    embedding_layers: [512, 512, 512, 512]
+    embedding_dropout_rate: 0.1
+  kwargs:
+    base_embed_dim: 32  # trunk = base_embed_dim * 2^levels = 1024, pinned across probes
+    growth: double
+    num_heads: 4
+    window_levels: 3
+    local_blocks_per_level: 1
+    global_blocks: 1
+    mlp_ratio: 4
+    layerscale_init: null
+    fp32_softmax: true
+    block_dropout_rate: null  # drops activations; drop_path_rate below drops whole branches
+    drop_path_rate: 0.1  # <-- THE KNOB vs transformer_nodrop.yaml. Stochastic depth on
+                         # each residual branch, constant across depth so it is the same
+                         # knob as the GCNN's. NO PRIOR EVIDENCE HERE: DropPath's sign is
+                         # block-dependent, so the GCNN result does not transfer.
+    pos_encoding: null  # null (position-free) or geodesic (distance-kernel attention bias)
+    merge_op: concat  # concat (order-sensitive concat+Dense) or deepsets (needs pos_encoding)
+
+dset:
+  training:
+    common:
+      is_eval: False
+      n_readers: 16
+      n_prefetch: 4
+      n_workers: 128
+    grid:
+      local_batch_size: 16
+      file_name_shuffle_buffer: 64
+      examples_shuffle_buffer: 1024
+  validation:
+    n_batches: 100  # matched across both architectures (prod GCNN is still 50). Monitoring
+                    # only, but it runs inside the wall budget: ~2% of the step count.
+    common:
+      is_eval: True
+      n_readers: 8
+      n_prefetch: 2
+      n_workers: 16
+    grid:
+      local_batch_size: 16
+  eval:
+    common:
+      is_eval: True
+      n_readers: 16
+      n_prefetch: 2
+      n_workers: 128
+    grid:
+      local_batch_size: 16

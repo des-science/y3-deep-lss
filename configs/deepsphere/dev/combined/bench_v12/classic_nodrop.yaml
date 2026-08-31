@@ -1,0 +1,92 @@
+# bench_v12 -- COMBINED (multi-res: clustering injected at nside 256), maps + Cls.
+# "classic_nodrop" -- head dropout off, classic block.
+# PARENT: classic.yaml. THE ONLY KNOB: network.kwargs.dropout_rate 0.1 -> null.
+# Rationale, launch plan and scoring: README.md
+# NEW CHECKPOINT LINEAGE -- RUN_NUM=1, own MODEL_DIR.
+name: deepsphere_default
+
+training:
+  n_steps: auto  # an OUTPUT of the wall-clock budget; see throughput.json
+  wall_budget_seconds: 79200  # TRAINING seconds for the WHOLE run -- 2 x 12 h chain
+  job_budget_seconds: 39600  # this job's share (11 h of 12 h; ~1 h for the eval tail)
+  output_every: Null
+  checkpoint_every: 5000
+  vali_every: 1000
+  eval_every: Null
+
+optimization:
+  optimizer: adam
+  gradient_clipping:
+    clip_by_value: null
+    clip_by_norm: null
+    clip_by_global_norm: 1.0
+  mutual_info_loss:
+    learning_rate: 1.0e-4
+    optimizer_kwargs:
+      beta_1: 0.9
+      beta_2: 0.999
+    scheduler: cosine
+    warmup_steps: 5000
+    warmup_init_learning_rate: 1.0e-5
+    decay_alpha: 0.0
+    ema_momentum: null
+
+network:
+  name: resnet
+  spmm_backend: csr
+  n_neighbors: 60
+  max_checkpoints: 50
+  save_second_to_last_layer: False
+  z_bank_size: Null
+  input_norm: true
+  smooth_nside:  # clustering (fwhm >= 57') smoothed and injected at nside 256
+    clustering: 256
+  map_pool: mean  # the only readout the transformer can also do (its encoder mean-pools)
+  map_feature_dim: null  # no projection: the pooled map goes straight to map_norm + concat
+  cls:
+    n_bins: 16
+    transform: asinh_per_feature
+    asinh_default_scale: null
+    embedding_layers: [512, 512, 512, 512]
+    embedding_dropout_rate: 0.1
+  kwargs:
+    base_channels: 64  # trunk = base_channels * 2^pool_layers = 512, pinned across probes
+    pool_layers: 3
+    conv_layers: 2
+    residual_layers: 5
+    drop_path_rate: 0.0  # off; convnext_nodrop_droppath.yaml turns it on
+    poly_degree: 5
+    head_type: "dense"
+    dense_layers: []
+    dropout_rate: null  # <-- THE KNOB: head dropout off. Same get_regression_head
+                        # call the transformer arms use, so it is the same knob there.
+
+dset:
+  training:
+    common:
+      is_eval: False
+      n_readers: 32
+      n_prefetch: 4
+      n_workers: Null
+    grid:
+      local_batch_size: 16
+      file_name_shuffle_buffer: 64
+      examples_shuffle_buffer: 256
+  validation:
+    n_batches: 100  # matched across both architectures (prod GCNN is still 50). Monitoring
+                    # only, but it runs inside the wall budget: ~2% of the step count.
+    common:
+      is_eval: True
+      n_readers: 8
+      n_prefetch: 2
+      n_workers: 16
+    grid:
+      local_batch_size: 16
+  eval:
+    common:
+      is_eval: True
+      n_readers: 64
+      n_prefetch: 2
+      n_workers: Null
+    grid:
+      local_batch_size: 16
