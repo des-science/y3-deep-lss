@@ -54,7 +54,7 @@ network:
     pool_layers: 3
     conv_layers: 2
     residual_layers: 5
-    drop_path_rate: 0.0  # off; convnext_nodrop_droppath.yaml turns it on
+    drop_path_rate: 0.0  # off; staged_nodrop_droppath.yaml is the arm that turns it on
     poly_degree: 5
     head_type: "dense"
     dense_layers: []

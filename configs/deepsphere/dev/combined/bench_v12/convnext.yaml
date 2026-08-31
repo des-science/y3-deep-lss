@@ -58,7 +58,7 @@ network:
     residual_block_type: convnext  # <-- THE KNOB vs classic.yaml, which omits it
     mlp_ratio: 4  # ships with the ConvNeXt block; not a second knob
     layer_scale_init: 1.0e-6  # ships with the ConvNeXt block; not a second knob
-    drop_path_rate: 0.0  # off; convnext_nodrop_droppath.yaml turns it on
+    drop_path_rate: 0.0  # off; staged_nodrop_droppath.yaml is the arm that turns it on
     poly_degree: 5
     head_type: "dense"
     dense_layers: []

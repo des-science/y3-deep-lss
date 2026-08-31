@@ -1,7 +1,11 @@
 # bench_v12 -- COMBINED (multi-res: clustering injected at nside 256), maps + Cls.
-# "classic" -- the round's FLOOR and the classic side of the block test.
-# PARENT: none, this is the round's base. NO RUN NEEDED on combined: `bench_v11_simple`
-# on disk is this file bar dset.validation.n_batches (50 -> 100), which is monitoring only.
+# "staged_nodrop" -- head dropout off, and the STAGED all-ConvNeXt layout: only strided
+# PseudoConvs and ConvNeXt blocks, no bare graph convs anywhere. The ship candidate.
+# LAYOUT REFERENCE: STAGED_LAYOUT.md (stage table, cost, smoke test, what conv_type costs).
+# PARENT: classic_nodrop.yaml, but TWO knobs from it -- the block AND the layout. That is
+# deliberate: bench_v11 already measured the block alone at ~+0.7% (a wash), so the question
+# here is whether the whole all-ConvNeXt package holds up, not which half of it does.
+# ONE knob from staged_nodrop_droppath.yaml (drop_path_rate), which is the clean contrast.
 # Rationale, launch plan and scoring: README.md
 # NEW CHECKPOINT LINEAGE -- RUN_NUM=1, own MODEL_DIR.
 name: deepsphere_default
@@ -51,15 +55,23 @@ network:
     embedding_layers: [512, 512, 512, 512]
     embedding_dropout_rate: 0.1
   kwargs:
-    base_channels: 64  # trunk = base_channels * 2^pool_layers = 512, pinned across probes
-    pool_layers: 3
-    conv_layers: 2
-    residual_layers: 5
-    drop_path_rate: 0.0  # off; staged_nodrop_droppath.yaml is the arm that turns it on
-    poly_degree: 5
+    # The STAGED layout (see STAGED_LAYOUT.md). Replaces
+    # base_channels / pool_layers / conv_layers / residual_layers. One entry per nside halving,
+    # 512 -> 256 -> 128 -> 64 -> 32 -> 16. Each stage is a strided PseudoConv of that width
+    # followed by that many ConvNeXt blocks, so every width change is a PseudoConv and every
+    # graph convolution sits inside a block. Trunk stays nside 16 x 512, and the first block is
+    # still at nside 64, exactly as in the parent.
+    stage_widths: [64, 128, 256, 512, 512]
+    stage_blocks: [0, 0, 1, 1, 5]
+    residual_block_type: convnext  # the block used at every stage
+    mlp_ratio: 4  # ships with the ConvNeXt block; not a second knob
+    layer_scale_init: 1.0e-6  # ships with the ConvNeXt block; not a second knob
+    drop_path_rate: 0.0  # off; staged_nodrop_droppath.yaml turns it on
+    poly_degree: 5  # ChebK order of each block's depthwise conv; conv_type no longer applies
     head_type: "dense"
     dense_layers: []
-    dropout_rate: 0.1  # the inherited default; *_nodrop.yaml turns it off
+    dropout_rate: null  # <-- THE KNOB: head dropout off. Same get_regression_head
+                        # call the transformer arms use, so it is the same knob there.
 
 dset:
   training:

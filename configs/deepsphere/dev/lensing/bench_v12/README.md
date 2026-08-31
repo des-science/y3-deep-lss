@@ -1,5 +1,12 @@
 # bench_v12 — LENSING, GCNN arms
 
+> **2026-08-31 — the combined round's ConvNeXt arms were replaced by the STAGED all-ConvNeXt
+> layout** (bench_v13, folded in). If a staged arm wins, the parked ConvNeXt file here needs its
+> `base_channels`/`pool_layers`/`conv_layers`/`residual_layers` keys swapped for `stage_widths`/
+> `stage_blocks` before it is transplanted. See `combined/bench_v12/STAGED_LAYOUT.md`, and note
+> that clustering's stage widths are NOT combined's.
+
+
 **The round definition, rationale, shared core, launch plan and scoring rules live in
 [`../../combined/bench_v12/README.md`](../../combined/bench_v12/README.md).** Read that first.
 

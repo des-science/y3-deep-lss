@@ -1,10 +1,11 @@
-# bench_v13 -- COMBINED (multi-res: clustering injected at nside 256), maps + Cls.
-# "staged" -- the trunk cleanup: only PseudoConvs and ConvNeXt blocks, no bare graph convs.
-# PARENT: bench_v12/convnext_nodrop.yaml. THE ONLY KNOB: the layer LAYOUT (5 keys, one change).
-# !! SYNC THE REGULARIZATION TO bench_v12'S WINNER BEFORE LAUNCHING. !! This file mirrors
-# convnext_nodrop (head dropout null, drop_path 0.0). If convnext_nodrop_droppath wins, set
-# drop_path_rate: 0.1 here too -- otherwise the contrast is two knobs and attributes to neither.
-# Rationale: README.md
+# bench_v12 -- COMBINED (multi-res: clustering injected at nside 256), maps + Cls.
+# "staged_nodrop_droppath" -- staged all-ConvNeXt layout with stochastic depth ON.
+# DropPath's sign is block-dependent: +5.0% on ConvNeXt, a LOSS on the classic block.
+# LAYOUT REFERENCE: STAGED_LAYOUT.md (stage table, cost, smoke test, what conv_type costs).
+# PARENT: staged_nodrop.yaml. THE ONLY KNOB: network.kwargs.drop_path_rate 0.0 -> 0.1.
+# Against classic_nodrop.yaml it is three knobs and attributes to none of them; score it
+# against staged_nodrop only.
+# Rationale, launch plan and scoring: README.md
 # NEW CHECKPOINT LINEAGE -- RUN_NUM=1, own MODEL_DIR.
 name: deepsphere_default
 
@@ -53,7 +54,7 @@ network:
     embedding_layers: [512, 512, 512, 512]
     embedding_dropout_rate: 0.1
   kwargs:
-    # <-- THE KNOB vs bench_v12/convnext_nodrop.yaml: the staged layout replaces
+    # The STAGED layout (see STAGED_LAYOUT.md). Replaces
     # base_channels / pool_layers / conv_layers / residual_layers. One entry per nside halving,
     # 512 -> 256 -> 128 -> 64 -> 32 -> 16. Each stage is a strided PseudoConv of that width
     # followed by that many ConvNeXt blocks, so every width change is a PseudoConv and every
@@ -64,7 +65,8 @@ network:
     residual_block_type: convnext  # the block used at every stage
     mlp_ratio: 4  # ships with the ConvNeXt block; not a second knob
     layer_scale_init: 1.0e-6  # ships with the ConvNeXt block; not a second knob
-    drop_path_rate: 0.0  # off; convnext_nodrop_droppath.yaml turns it on
+    drop_path_rate: 0.1  # <-- THE ONLY KNOB vs staged_nodrop.yaml. Applies to all 7 blocks
+                         # now, not 5 -- the staged layout has no unregularized bare convs.
     poly_degree: 5  # ChebK order of each block's depthwise conv; conv_type no longer applies
     head_type: "dense"
     dense_layers: []

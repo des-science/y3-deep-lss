@@ -1,6 +1,13 @@
 # bench_v12 — the SHARED-CORE round
 
-**Status: DEFINED, NOT LAUNCHED** (2026-08-31). Configs written and verified; nothing submitted.
+**Status: QUEUED, GCNN ConvNeXt ARMS REVISED** (2026-08-31). Twelve jobs submitted at 11:48
+(3242160-3242173); none had started when the round was revised at 16:40, so nothing is lost.
+
+**The revision:** the two ConvNeXt GCNN arms now carry the **staged all-ConvNeXt layout** that was
+drafted as its own round, `bench_v13`. That round is gone -- folded in here rather than run after,
+because a queue that had not moved made it free to test the layout we actually intend to ship
+instead of the one we intend to replace. See "The bench_v13 fold" below for what it costs.
+`bench_v13/README.md` is now `STAGED_LAYOUT.md` in this directory.
 
 This file carries the shared rationale for **both architectures and all three probes**.
 `lensing/bench_v12/` and `clustering/bench_v12/` point here, as do the three
@@ -19,9 +26,11 @@ Pick **one default per architecture** — a GCNN and a vision transformer — th
 
 Two questions, and nothing else:
 
-- **A. Classic residual block vs ConvNeXt**, one knob, all three probes — the apples-to-apples
-  contrast bench_v7 could not give (its `full`-vs-`simple` moved three knobs at once and its own
-  README says so).
+- **A. The classic GCNN vs the all-ConvNeXt network.** Originally one knob (the block); since the
+  bench_v13 fold it is the **package** — ConvNeXt blocks *and* the staged layout — because that is
+  the network the paper would actually ship. The one-knob block contrast is not lost, it is simply
+  already answered: bench_v11 measured the block alone at **~+0.7% once its step confound is paid
+  back**, a wash. What is open is whether the full package holds up, not which half of it carries.
 - **B. Is the regularization in the right place?** This pipeline inherited a **bare body with
   dropout in the regression head**. Modern practice is the exact reverse: a bare head, and
   stochastic depth in the body. Both halves are tested — head dropout off, and DropPath on.
@@ -105,22 +114,32 @@ Optimizer is **Adam 1e-4 in every arm** — see question B on why weight decay i
 
 ### GCNN — `configs/deepsphere/dev/<probe>/bench_v12/`
 
-| file | block | head dropout | body DropPath | one knob vs |
-|---|---|---|---|---|
-| `classic.yaml` | classic | 0.1 | 0.0 | — (the base) |
-| `convnext.yaml` | **convnext** | 0.1 | 0.0 | `classic` |
-| `classic_nodrop.yaml` | classic | **null** | 0.0 | `classic` |
-| `convnext_nodrop.yaml` | **convnext** | **null** | 0.0 | `convnext` *and* `classic_nodrop` |
-| `convnext_nodrop_droppath.yaml` | **convnext** | **null** | **0.1** | `convnext_nodrop` |
+| file | layout | block | head dropout | body DropPath | knob vs |
+|---|---|---|---|---|---|
+| `classic.yaml` | legacy | classic | 0.1 | 0.0 | — (the base) |
+| `convnext.yaml` | legacy | **convnext** | 0.1 | 0.0 | `classic` |
+| `classic_nodrop.yaml` | legacy | classic | **null** | 0.0 | `classic` |
+| `staged_nodrop.yaml` | **staged** | **convnext** | **null** | 0.0 | `classic_nodrop` (a package, 9 keys) |
+| `staged_nodrop_droppath.yaml` | **staged** | **convnext** | **null** | **0.1** | `staged_nodrop` (1 key) |
 
-The first four are a clean **2 × 2 in (block, head dropout)**, so either margin reads along either
-edge and the block×dropout interaction is visible rather than assumed. The fifth adds the body
-regularizer on top, making `convnext_nodrop → convnext_nodrop_droppath` the pair that tests
-question B's second half: **is a bare head plus stochastic depth better than a regularized head
-plus a bare body?**
+The two `_deferred/` files, `convnext_nodrop.yaml` and `convnext_nodrop_droppath.yaml`, are the
+legacy-layout versions of the last two rows. They were queued and cancelled unrun; they are kept
+because they are what closes the 2 × 2 if the package ever needs taking apart.
 
-`convnext_nodrop_droppath` is the round's **modern-practice candidate**. `drop_path_rate: 0.1` is
-the value used throughout bench_v8 and bench_v11 and is **not** being tuned here.
+**What the 2 × 2 became.** `classic`/`convnext`/`classic_nodrop`/`convnext_nodrop` was a clean
+2 × 2 in (block, head dropout). Folding the layout in replaces its fourth cell with a two-knob
+package, so the block×dropout interaction is no longer readable from this round alone. Accepted:
+three of the four cells are unchanged, the dropout edge still reads on the classic block, and the
+block edge is bench_v11's already-measured wash.
+
+`staged_nodrop → staged_nodrop_droppath` is untouched by the fold and remains the clean one-knob
+pair that tests question B's second half: **is a bare head plus stochastic depth better than a
+regularized head plus a bare body?**
+
+`staged_nodrop_droppath` is the round's **modern-practice candidate**. `drop_path_rate: 0.1` is the
+value used throughout bench_v8 and bench_v11 and is **not** being tuned here. In the staged layout
+it now reaches **all 7 blocks** rather than 5, because there are no bare convolutions left outside
+a residual branch — a slightly stronger dose of the same knob, worth noting when reading its margin.
 
 **There is no `classic_droppath` arm.** DropPath measured **+5.0% on ConvNeXt and 0.946 — a loss —
 on the classic block**, so that arm would spend a 12 h slot re-measuring a known negative.
@@ -251,6 +270,35 @@ Via the **`submit` skill** — no new submission script. `MODEL_DIR` mirrors the
 `RUN_NUM=1` and a fresh `MODEL_DIR` for every arm — the block change alters weight shapes and
 `expect_partial()` does **not** raise on a mismatch.
 
+### The bench_v13 fold (2026-08-31, before any job started)
+
+`bench_v13` was drafted as a follow-on round: one arm, testing whether the GCNN's two bare
+Chebyshev convolutions could be replaced by ConvNeXt blocks so the network is nothing but strided
+pseudo-convs and ConvNeXt blocks — a far simpler thing to draw beside the transformer in
+`networks.tex`. It was smoke-tested (job 3244154, builds OK, +1% params, +6% step time, +35% peak
+memory) and was waiting on this round's regularization answer.
+
+It was folded in instead, because **none of the twelve jobs had started**. Testing the layout we
+intend to ship costs the same twelve slots as testing the one we intend to replace, and it removes
+a serial dependency: bench_v13 would otherwise have had to wait for bench_v12 to resolve, then run
+a further two 12 h jobs, and then re-open the regularization question on a network neither arm of
+this round had used.
+
+**What the fold costs, stated plainly:**
+
+1. **`classic_nodrop → staged_nodrop` is two knobs**, block and layout, not one. It is scored as a
+   package and must never be quoted as a block measurement. bench_v11 already has the block alone
+   at ~+0.7%, a wash, which is why this is acceptable rather than merely convenient.
+2. **The legacy-layout ConvNeXt at this exact regularization is never run.** `bench_v11_convnext`
+   is the nearest thing on disk and differs by head dropout (0.1, not null), so the layout knob is
+   not cleanly attributable from anything that will exist. If `staged_nodrop` *loses* outside the
+   floor, that attribution is what the round will want, and `_deferred/convnext_nodrop.yaml` is
+   ready to run as the tiebreak — a further 2 jobs, only if needed.
+3. `staged_nodrop_droppath` doses 7 blocks where the legacy arm dosed 5.
+
+**What it buys:** the round now answers "should we ship the all-ConvNeXt GCNN?" directly, at no
+extra cost and two weeks earlier than the sequential plan.
+
 ### THE ROUND IS COMBINED-ONLY (2026-08-31)
 
 **Decide on `combined`, then transplant the winner to the other two probes.** The lensing and
@@ -300,9 +348,9 @@ two.
 |---|---|---|---|
 | `classic` | GCNN | **0** — on disk as `bench_v11_simple` | anchor |
 | `convnext` | GCNN | **0** — on disk as `bench_v11_convnext` | A (block) |
-| `classic_nodrop` | GCNN | 2 | B1 (head dropout), closes the 2×2 |
-| `convnext_nodrop` | GCNN | 2 | B1 on the ship candidate |
-| `convnext_nodrop_droppath` | GCNN | 2 | B2 (body stochastic depth) |
+| `classic_nodrop` | GCNN | 2 | B1 (head dropout) on the classic block |
+| `staged_nodrop` | GCNN | 2 | **A** — the all-ConvNeXt package vs the classic GCNN |
+| `staged_nodrop_droppath` | GCNN | 2 | B2 (body stochastic depth), one knob |
 | `transformer` | transformer | 2 | the first wall-matched transformer anchor |
 | `transformer_nodrop` | transformer | 2 | B1 |
 | `transformer_nodrop_droppath` | transformer | 2 | B2 |
@@ -313,9 +361,18 @@ Both zero-job rows are verified identical by `config_check diff`, not assumed �
 
 One arm per architecture per probe: the winning (block, regularization) combination on GCNN and
 the winning regularization on the transformer, run once on lensing and once on clustering. Move
-the matching file out of `_deferred/` rather than writing a new one — the rationale headers are
-already correct there, including clustering's `base_channels: 128` / `base_embed_dim: 64` trunk
+the matching file out of `<probe>/bench_v12/_deferred/` rather than writing a new one — the
+rationale headers are already correct there, including clustering's `base_embed_dim: 64` trunk
 match.
+
+**The fold added one step to the GCNN half.** The parked per-probe ConvNeXt files are all
+**legacy-layout**, written before bench_v13 existed. If a staged arm wins, swap their four
+`base_channels`/`pool_layers`/`conv_layers`/`residual_layers` keys for `stage_widths`/
+`stage_blocks` before launching. **Lensing shares combined's trunk arithmetic** (`base_channels:
+64`, `pool_layers: 3`) and so takes the stage list verbatim: `[64, 128, 256, 512, 512]` /
+`[0, 0, 1, 1, 5]`. **Clustering does not** — it runs `base_channels: 128` with `pool_layers: 2`,
+reaching the same 512-wide nside-16 trunk from a lower input nside in one halving fewer. Its stage
+list must be derived from its own parked file; copying combined's would silently change its trunk.
 
 ## Scoring
 
@@ -346,11 +403,16 @@ $P -m deep_lss.utils.config_check diff $D/bench_v12/classic.yaml $D/bench_v12/co
 $P -m deep_lss.utils.config_check diff $D/bench_v12/classic.yaml $D/bench_v12/classic_nodrop.yaml
 $P -m deep_lss.utils.config_check diff $D/bench_v12/convnext.yaml $D/bench_v12/convnext_nodrop.yaml
 #   network.kwargs.dropout_rate 0.1 -> None              -> 1 key each
-$P -m deep_lss.utils.config_check diff $D/bench_v12/convnext_nodrop.yaml \
-                                       $D/bench_v12/convnext_nodrop_droppath.yaml
+$P -m deep_lss.utils.config_check diff $D/bench_v12/staged_nodrop.yaml \
+                                       $D/bench_v12/staged_nodrop_droppath.yaml
 #   network.kwargs.drop_path_rate 0.0 -> 0.1             -> 1 key
+$P -m deep_lss.utils.config_check diff $D/bench_v12/classic_nodrop.yaml \
+                                       $D/bench_v12/staged_nodrop.yaml
+#   9 keys, "MORE THAN ONE KNOB"                         -> EXPECTED, and the tool says so:
+#   base_channels/pool_layers/conv_layers/residual_layers out, stage_widths/stage_blocks in,
+#   plus the ConvNeXt block's inseparable three. It is the package contrast, declared as such.
 $P -m deep_lss.utils.config_check check $D/bench_v12/*.yaml
-#   exit 0; the 3 NOTES are the intended classic-vs-convnext key-set split
+#   exit 0; the 9 NOTES are the intended legacy-vs-staged key-set split
 ```
 
 Both live `check` runs exit 0, as do the four parked `_deferred/` sets.

@@ -1,6 +1,11 @@
-# bench_v13 — COMBINED, the trunk cleanup
+# The staged all-ConvNeXt layout
 
-**One arm, one question:** does the GCNN still perform when its two bare Chebyshev convolutions
+**Layout reference for bench_v12's `staged_nodrop*` arms.** Drafted as a standalone round,
+`bench_v13`, and folded into bench_v12 on 2026-08-31 before any job started — see that round's
+README under "The bench_v13 fold". This file is the design record: the stage table, the cost, the
+smoke test, and what the layout gives up.
+
+**The question it answers:** does the GCNN still perform when its two bare Chebyshev convolutions
 are replaced by ConvNeXt blocks, so the whole network is nothing but strided pseudo-convs and
 ConvNeXt blocks?
 
@@ -8,6 +13,9 @@ The motivation is the paper figure (`paper_2_tex/figures/networks.tex`) — a GC
 type throughout is a far simpler thing to draw beside the transformer than one with a residual
 body sitting on top of two conv+LayerNorm slots. The expectation is a **wash**, and a wash is a
 pass: this is a change adopted for consistency, not for FoM.
+
+The two arms that carry it are `staged_nodrop.yaml` (drop_path 0.0) and
+`staged_nodrop_droppath.yaml` (0.1). Both live in this directory.
 
 ## The layout
 
@@ -25,8 +33,9 @@ Verified by simulating the layer stack (`nside`/width bookkeeping mirroring `Hea
 | trunk | **ConvNeXt × 5** | 16 | 512 |
 | readout | mean pool | | 512 |
 
-Against `bench_v12/convnext_nodrop`: **5 blocks → 7, bare Chebyshev convs 2 → 0**, and the two
-interleaved `LayerNorm`s disappear because each block opens with its own.
+Against the legacy layout (`_deferred/convnext_nodrop.yaml`): **5 blocks → 7, bare Chebyshev
+convs 2 → 0**, and the two interleaved `LayerNorm`s disappear because each block opens with its
+own.
 
 **Both invariants hold.** The first graph convolution is still at nside 64, and the trunk is still
 nside 16 × 512. The multi-resolution injection split for clustering is also unchanged — the layer
@@ -52,7 +61,7 @@ Both configs built through the real `run_training` path on one GPU, batch 16, sy
 
 | | params | peak GB | step ms | throughput |
 |---|---|---|---|---|
-| `bench_v12/convnext_nodrop` | 15.952 M | 7.99 | 239.8 | 66.7 |
+| legacy layout (`_deferred/convnext_nodrop`) | 15.952 M | 7.99 | 239.8 | 66.7 |
 | `staged` | 16.091 M | 10.8 | 254.0 | 63.0 |
 | | **1.01×** | **1.35×** | **1.06×** | |
 
@@ -79,7 +88,8 @@ Same nside, same trunk, near-identical cost — but not a re-drawing:
 - stage 2 gains an inverted bottleneck
 - both gain a residual path they did not have
 
-So it is measured as one knob off `bench_v12_convnext_nodrop`, never adopted on the arithmetic.
+So it is measured, never adopted on the arithmetic — see the scoring note below for what the
+fold did to that measurement's attribution.
 
 ## What it costs elsewhere
 
@@ -91,12 +101,12 @@ config still builds. But a *new* run cannot select a different polynomial basis.
 
 `poly_degree` still applies: it is the ChebK order of each block's depthwise conv.
 
-## !! Before launching !!
+## The launch blocker, and how the fold removed it
 
-**Sync the regularization keys to bench_v12's winner.** `staged.yaml` currently mirrors
-`convnext_nodrop` (`dropout_rate: null`, `drop_path_rate: 0.0`). If `convnext_nodrop_droppath`
-wins that round, set `drop_path_rate: 0.1` here as well — otherwise the contrast moves two knobs
-and attributes to neither.
+~~**Sync the regularization keys to bench_v12's winner.**~~ Resolved by the fold. As a standalone
+round this file had to wait for bench_v12 to name a regularization, or else move two knobs at once.
+Folded in, **both** regularizations run staged — `staged_nodrop` and `staged_nodrop_droppath` are
+one knob apart — so there is nothing left to sync and nothing left to wait for.
 
 ~~The staged code path has never been executed.~~ **Smoke-tested 2026-08-31, job 3244154: it
 builds, status OK.** The log confirms the intended stack directly --
@@ -116,25 +126,36 @@ schedule as the string `"auto"` and raised `TypeError`. That made every `prod/` 
 config unbenchmarkable. Fixed in the same commit by substituting a concrete step count (the
 benchmark measures step time and memory; nothing there depends on the LR schedule).
 
-## The arm
+## The arms
 
-| file | one knob vs | keys | jobs |
+| file | knob vs | keys | jobs |
 |---|---|---|---|
-| `staged.yaml` | `bench_v12/convnext_nodrop.yaml` | 6 (one change) | 2 (`afterany` chain) |
+| `staged_nodrop.yaml` | `classic_nodrop.yaml` | 9 — a **package**, block + layout | 2 (`afterany` chain) |
+| `staged_nodrop_droppath.yaml` | `staged_nodrop.yaml` | 1 (`drop_path_rate`) | 2 (`afterany` chain) |
 
-The control needs no run: it is `bench_v12_convnext_nodrop`, already on disk by then.
-
-Six keys, one knob — `base_channels`/`pool_layers`/`conv_layers`/`residual_layers` out,
-`stage_widths`/`stage_blocks` in. They are one layout, not six choices; `config_check diff` will
-report `MORE THAN ONE KNOB` and that is expected here, exactly as for the ConvNeXt block's
-three-key package in bench_v12.
+`base_channels`/`pool_layers`/`conv_layers`/`residual_layers` out, `stage_widths`/`stage_blocks`
+in, plus the ConvNeXt block's inseparable three. `config_check diff` reports `MORE THAN ONE KNOB`
+on the first row and that is expected — it is one layout, not six choices, exactly as for the
+ConvNeXt block's three-key package.
 
 ## Scoring
 
-`compare-runs` paired FoM against `bench_v12_convnext_nodrop`. Floor **0.049**; a tie is the
-expected and acceptable outcome, and it argues for **adopting** this arm rather than dropping it —
-the usual "a tie goes to the simpler net" rule points here, because this *is* the simpler net
-(one block type, two fewer knob families, no hidden widening).
+`compare-runs` paired FoM. Floor **0.049**; a tie is the expected and acceptable outcome, and it
+argues for **adopting** the staged arm rather than dropping it — the usual "a tie goes to the
+simpler net" rule points here, because this *is* the simpler net (one block type, two fewer knob
+families, no hidden widening).
+
+**What the fold cost this measurement.** The intended reference was
+`bench_v12_convnext_nodrop` — the same block and regularization in the legacy layout — which would
+have isolated the layout to one knob. That run will not exist. The reference is now
+`bench_v12_classic_nodrop`, so a margin reads as **block + layout together**. Two mitigations, and
+the honest limit of each:
+
+- bench_v11 measured the block alone at **~+0.7%** once its 1.18× step confound is paid back — a
+  wash. So most of any margin here is attributable to the layout by elimination, not by design.
+- If the staged arm **loses outside the floor**, `_deferred/convnext_nodrop.yaml` is ready to run
+  as the tiebreak (2 further jobs) and restores the clean one-knob layout contrast. Only spend it
+  then.
 
 **Q3 `coverage` is required**: the summary dimensionality is unchanged at 512, but the readout's
 upstream path is not, and a pathological summary defeating the flow is the one failure mode Q1
