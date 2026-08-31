@@ -45,22 +45,31 @@ three pooling stages leave the tensor at 256 and it is the *first Chebyshev* tha
 the config reads as though the pooling stages already reached the trunk width. The staged form
 states each width outright, so there is nothing to misread.
 
-## Cost — near neutral
+## Cost — MEASURED (job 3244154, 2026-08-31)
 
-Computed from the layer definitions, **not measured**:
+Both configs built through the real `run_training` path on one GPU, batch 16, synthetic batches
+(`benchmark_resnet.py --single`):
 
-| | params | graph-conv work |
-|---|---|---|
-| `bench_v12/convnext_nodrop` | 14.76 M | 26.2 (arb.) |
-| `staged` | 14.89 M | 27.3 |
-| | **1.01×** | **1.04×** |
+| | params | peak GB | step ms | throughput |
+|---|---|---|---|---|
+| `bench_v12/convnext_nodrop` | 15.952 M | 7.99 | 239.8 | 66.7 |
+| `staged` | 16.091 M | 10.8 | 254.0 | 63.0 |
+| | **1.01×** | **1.35×** | **1.06×** | |
 
-The two effects nearly cancel: the block at nside 64 runs at C=256 (8.4 against the Chebyshev's
-10.5, and one depthwise conv instead of a full K·C² one), while stage 2's block costs 8.4 against
-5.2 because the inverted bottleneck is heavier than a single Cheb.
+**Parameters landed within 0.5 % of prediction** (+0.139 M measured against +0.13 M computed).
+Step time came in at 1.06× against a 1.04× prediction, which was for graph-conv work alone rather
+than the whole step. The two effects nearly cancel as expected: the block at nside 64 runs at
+C=256 and is cheaper than the Chebyshev it replaces, while stage 2's block is dearer than its Cheb
+because the inverted bottleneck outweighs a single conv.
 
-Because the budget is `n_steps: auto`, a ~4 % slower step buys ~4 % fewer steps, i.e. ~0.3 % of
-FoM at the +7.3 %-per-2× elasticity. Well inside the 0.049 floor.
+**Peak memory is the one thing the arithmetic missed: 8.0 -> 10.8 GB, +35 %.** The MLP expansion
+to 4C inside the nside-64 block materializes a wide activation at 16x the pixel count of the trunk,
+which parameter counting does not see. Harmless here (the GCNN is not memory-bound -- 10.8 of
+~120 GB, and the ~85 GB NCCL band that constrains the transformer does not apply), but it is a
+real 1.35x and it would bite first if the batch size were ever raised.
+
+Because the budget is `n_steps: auto`, a 6 % slower step buys ~6 % fewer steps, i.e. ~0.4 % of FoM
+at the +7.3 %-per-2× elasticity. Well inside the 0.049 floor.
 
 ## It is a real architecture change
 
@@ -89,11 +98,23 @@ config still builds. But a *new* run cannot select a different polynomial basis.
 wins that round, set `drop_path_rate: 0.1` here as well — otherwise the contrast moves two knobs
 and attributes to neither.
 
-**The staged code path has never been executed.** The layout was verified by simulating the layer
-stack in pure Python; the real build needs TensorFlow, which is not on the login node. Run it
-through `.claude/bin/run_job.sh` (or give this arm's first job a short `--partition=debug` slot)
-before spending a 2 × 12 h chain. `run_training.py` builds and traces the network at startup, so
-a mistake surfaces in minutes.
+~~The staged code path has never been executed.~~ **Smoke-tested 2026-08-31, job 3244154: it
+builds, status OK.** The log confirms the intended stack directly --
+
+```
+Staged GCNN layout: 5 nside halvings, widths [64, 128, 256, 512, 512],
+                    blocks [0, 0, 1, 1, 5], trunk width 512, 7 convnext blocks total
+```
+
+-- and the multi-resolution seam is unchanged from the parent: both report clustering *"injected at
+64 channels, fused to 64"*. The layer count after the fusion drops 13 -> 11, which is the two
+`LayerNorm`s the staged layout removes.
+
+The smoke test also flushed out a **pre-existing bug in `benchmark_resnet.py`**, unrelated to this
+arm: it called `get_optimizer` without a `WallClockBudget`, so `n_steps: auto` reached the cosine
+schedule as the string `"auto"` and raised `TypeError`. That made every `prod/` and bench_v8+
+config unbenchmarkable. Fixed in the same commit by substituting a concrete step count (the
+benchmark measures step time and memory; nothing there depends on the LR schedule).
 
 ## The arm
 

@@ -62,6 +62,10 @@ DEFAULTS = {
     "configs_dir": f"{REPOS}/y3-deep-lss/configs/deepsphere/prod/lensing",
 }
 
+# Stand-in for `n_steps: auto`, which run_training resolves from a wall-clock budget this benchmark
+# does not build. Only sets the cosine's length; nothing measured here depends on it.
+_BENCH_N_STEPS = 100000
+
 
 # --------------------------------------------------------------------------------------
 # child mode: build + time a single (config, batch)
@@ -137,6 +141,15 @@ def run_single(args):
     cls_transform = (cls_conf or {}).get("transform", "asinh_per_feature")
 
     input_norm = bool(net_conf["network"].get("input_norm", False))
+
+    # `n_steps: auto` is resolved by run_training from a WallClockBudget, which this benchmark has
+    # no equivalent of -- get_optimizer would then compute `"auto" - warmup_steps`. Substitute a
+    # concrete count: it only sets the cosine's length, and nothing here depends on the LR schedule
+    # (step time and peak memory are what is measured). Without this every prod and bench_v8+ config
+    # is unbenchmarkable, which is most of them.
+    if net_conf["training"].get("n_steps") == "auto":
+        net_conf["training"]["n_steps"] = _BENCH_N_STEPS
+        print(f"n_steps: auto -> {_BENCH_N_STEPS} for the benchmark (LR schedule is not measured)")
 
     strategy = tf.distribute.get_strategy()  # default single-device strategy
     graph_build_t0 = time.perf_counter()
