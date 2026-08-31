@@ -45,6 +45,12 @@ class ResNetLayers:
         conv_widen=False,
         channel_multiplier=2,
         residual_layers=6,
+        # staged layout (bench_v13): one entry per nside halving, replacing the six kwargs above.
+        # stage_widths[i] is the Fout of that stage's strided HealpyPseudoConv, stage_blocks[i] the
+        # number of channel-preserving blocks placed AFTER it. Mutually exclusive with the legacy
+        # pool_layers/conv_layers/residual_layers form.
+        stage_widths=None,
+        stage_blocks=None,
         residual_block_type="residual",
         mlp_ratio=4,
         layer_scale_init=1e-6,
@@ -104,6 +110,18 @@ class ResNetLayers:
                 width after the first layer. Defaults to 2.
             residual_layers (int, optional): Number of residual layers. These are the main graph convolutions
                 (channel-preserving). Defaults to 6.
+            stage_widths (list, optional): STAGED LAYOUT, one entry per nside halving: the ``Fout`` of that
+                stage's strided ``HealpyPseudoConv``. Because the blocks are channel-preserving, the trunk
+                width is simply ``stage_widths[-1]`` and every width change is a PseudoConv -- there is no
+                widening hidden inside a graph conv. Defaults to None (legacy layout).
+            stage_blocks (list, optional): STAGED LAYOUT, same length as ``stage_widths``: how many
+                ``residual_block_type`` blocks to place AFTER that stage's downsample. Downsample-then-blocks
+                is ConvNeXt's own arrangement, so the network is only PseudoConvs and blocks -- no bare
+                conv+LayerNorm slots, and therefore no ``conv_type`` basis choice (the ConvNeXt block is
+                Chebyshev-only). ``residual_attention_every`` counts blocks across all stages.
+                Mutually exclusive with ``pool_layers``/``conv_layers``/``residual_layers``, which it
+                replaces wholesale along with ``pool_widen``/``conv_widen``/``channel_multiplier``.
+                Defaults to None (legacy layout).
             residual_block_type (str, optional): Which block to use for the ``residual_layers`` body.
                 "residual" (default) is the classic ``Healpy_ResidualLayer`` (two full ChebK convs +
                 LayerNorm + skip, basis per ``conv_type``). "convnext" is a ConvNeXt-style block
@@ -210,6 +228,31 @@ class ResNetLayers:
         conv_helper = _CONV_HELPERS[conv_type]
         conv_basis_code = _CONV_BASIS_CODES[conv_type]
 
+        # Staged layout: downsample-then-blocks, the ConvNeXt/Swin arrangement, where every graph
+        # convolution lives inside a block and every width change lives in a PseudoConv. Opting in
+        # replaces pool_layers/conv_layers/residual_layers wholesale, so refuse a half-specified mix
+        # rather than silently honoring one and dropping the other.
+        staged = stage_widths is not None or stage_blocks is not None
+        if staged:
+            if stage_widths is None or stage_blocks is None:
+                raise ValueError("stage_widths and stage_blocks must be given together")
+            if len(stage_widths) != len(stage_blocks):
+                raise ValueError(
+                    f"stage_widths and stage_blocks must be the same length, got "
+                    f"{len(stage_widths)} and {len(stage_blocks)}"
+                )
+            if not stage_widths:
+                raise ValueError("stage_widths must not be empty")
+            if any(int(b) < 0 for b in stage_blocks):
+                raise ValueError(f"stage_blocks entries must be >= 0, got {list(stage_blocks)}")
+            # The blocks are channel-preserving, so the trunk width is the LAST stage width, not
+            # base_channels * anything -- state it loudly, it is the number the configs pin.
+            LOGGER.info(
+                f"Staged GCNN layout: {len(stage_widths)} nside halvings, widths {list(stage_widths)}, "
+                f"blocks {list(stage_blocks)}, trunk width {stage_widths[-1]}, "
+                f"{sum(stage_blocks)} {residual_block_type} blocks total"
+            )
+
         self.smoothing_layer = None
         self.input_norm_layer = None
         self._input_norm_mask = None
@@ -240,31 +283,12 @@ class ResNetLayers:
             self.input_norm_layer = EmpiricalInputNormalization(len(smoothing_kwargs["fwhm"]), self._input_norm_mask)
             self.layers.append(self.input_norm_layer)
 
-        # pure pooling stages: strided HealpyPseudoConv, downsampling (nside halved) without a graph conv.
-        # Width grows by channel_multiplier per stage when pool_widen (applied after each append, so
-        # base_channels stays the width after the first layer).
-        n_channels = base_channels
-        for _ in range(pool_layers):
-            self.layers.append(healpy_layers.HealpyPseudoConv(p=1, Fout=n_channels, activation=activation))
-            if pool_widen:
-                n_channels *= channel_multiplier
+        def append_block(index):
+            """One channel-preserving block plus its optional attention / dropout companions.
 
-        # graph-conv pooling stages: graph conv (basis per conv_type) + LayerNorm + strided HealpyPseudoConv.
-        # Width is handled identically to the pooling stages: grows by channel_multiplier per stage when
-        # conv_widen (graph-U-Net schedule), otherwise constant.
-        for _ in range(conv_layers):
-            self.layers.append(conv_helper(K=poly_degree, Fout=n_channels, activation=activation))
-            self.layers.append(tf.keras.layers.LayerNormalization(**{"axis": -1, **norm_kwargs}))
-            self.layers.append(healpy_layers.HealpyPseudoConv(p=1, Fout=n_channels, activation=activation))
-            if conv_widen:
-                n_channels *= channel_multiplier
-
-        # residual body (channel-preserving). "residual" is the classic two-ChebK residual block;
-        # "convnext" is the depthwise-separable ConvNeXt block (one graph conv + pointwise MLP).
-        # When residual_attention is given, a HealpyGlobalAttention block is interleaved after every
-        # residual_attention_every-th residual layer (see the arg docs): distributed content-dependent
-        # mixing through the body, so the graph convs act on globally-mixed features.
-        for i in range(residual_layers):
+            ``index`` counts blocks across the WHOLE network, so residual_attention_every keeps its
+            meaning in the staged layout even though the blocks are spread over several nsides.
+            """
             if residual_block_type == "convnext":
                 self.layers.append(
                     healpy_layers.Healpy_ConvNeXtLayer(
@@ -291,13 +315,51 @@ class ResNetLayers:
                         drop_path_rate=drop_path_rate,
                     )
                 )
-            if residual_attention is not None and (i + 1) % residual_attention_every == 0:
+            if residual_attention is not None and (index + 1) % residual_attention_every == 0:
                 self.layers.append(HealpyGlobalAttention(**residual_attention))
             # optional trunk regularization: channel-wise (SpatialDropout1D) dropout after each block.
             # No trainable variables, so it is lineage-preserving; rides HealpyGCNN's passthrough branch
-            # (no Fout / no nside change), exactly like the LayerNorms in the conv-pooling stages.
+            # (no Fout / no nside change).
             if body_dropout_rate is not None:
                 self.layers.append(tf.keras.layers.SpatialDropout1D(body_dropout_rate))
+
+        if staged:
+            # Downsample, then blocks, per resolution -- ConvNeXt's own arrangement. Every width
+            # change is a PseudoConv (the blocks are channel-preserving and expose no Fout) and every
+            # graph convolution is inside a block, so there are no bare conv+LayerNorm slots and
+            # conv_type/poly-basis selection does not apply. No LayerNorm is appended between
+            # stages: each block opens with its own.
+            block_index = 0
+            for width, n_blocks in zip(stage_widths, stage_blocks):
+                self.layers.append(healpy_layers.HealpyPseudoConv(p=1, Fout=width, activation=activation))
+                for _ in range(int(n_blocks)):
+                    append_block(block_index)
+                    block_index += 1
+        else:
+            # pure pooling stages: strided HealpyPseudoConv, downsampling (nside halved) without a graph conv.
+            # Width grows by channel_multiplier per stage when pool_widen (applied after each append, so
+            # base_channels stays the width after the first layer).
+            n_channels = base_channels
+            for _ in range(pool_layers):
+                self.layers.append(healpy_layers.HealpyPseudoConv(p=1, Fout=n_channels, activation=activation))
+                if pool_widen:
+                    n_channels *= channel_multiplier
+
+            # graph-conv pooling stages: graph conv (basis per conv_type) + LayerNorm + strided HealpyPseudoConv.
+            # Width is handled identically to the pooling stages: grows by channel_multiplier per stage when
+            # conv_widen (graph-U-Net schedule), otherwise constant. NOTE the first of these widens, because
+            # the loop above applies its widening AFTER appending -- the staged form above has no such trap.
+            for _ in range(conv_layers):
+                self.layers.append(conv_helper(K=poly_degree, Fout=n_channels, activation=activation))
+                self.layers.append(tf.keras.layers.LayerNormalization(**{"axis": -1, **norm_kwargs}))
+                self.layers.append(healpy_layers.HealpyPseudoConv(p=1, Fout=n_channels, activation=activation))
+                if conv_widen:
+                    n_channels *= channel_multiplier
+
+            # residual body (channel-preserving). "residual" is the classic two-ChebK residual block;
+            # "convnext" is the depthwise-separable ConvNeXt block (one graph conv + pointwise MLP).
+            for i in range(residual_layers):
+                append_block(i)
 
         # optional global self-attention over the coarsest-nside pixel tokens, at the end of the
         # conv body (before the head). HealpyGCNN routes it through its passthrough branch and does
