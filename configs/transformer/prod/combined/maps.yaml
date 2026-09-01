@@ -104,7 +104,8 @@ dset:
       file_name_shuffle_buffer: 64
       examples_shuffle_buffer: 1024
   validation:
-    n_batches: 100
+    n_batches: 50  # halved from 100 on 2026-09-01 to cut host RAM, and to match the
+                   # DeepSphere prod value. Monitoring only.
     common:
       is_eval: True
       n_readers: 8

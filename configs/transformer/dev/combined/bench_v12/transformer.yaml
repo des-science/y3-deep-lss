@@ -79,8 +79,10 @@ dset:
       file_name_shuffle_buffer: 64
       examples_shuffle_buffer: 1024
   validation:
-    n_batches: 100  # matched across both architectures (prod GCNN is still 50). Monitoring
-                    # only, but it runs inside the wall budget: ~2% of the step count.
+    n_batches: 50  # matched across both architectures. Monitoring only, but it runs inside
+                   # the wall budget -- and at 100 it contributed to the host-RAM OOM that
+                   # killed both GCNN arms of this round (2026-09-01). 450 GB is the whole
+                   # LPDDR5X allocation on a GH200 node, so there is no --mem lever.
     common:
       is_eval: True
       n_readers: 8
