@@ -584,37 +584,6 @@ def evaluate_obs_des(model_fn, pred_file, msfm_conf, dlss_conf):
             append_obs_to_file(pred_file, f"obs/preds/{label}{rot_suffix}", pred)
 
 
-def evaluate_obs_buzzard(model_fn, pred_file, msfm_conf, dlss_conf, labels):
-    """Evaluate Buzzard N-body simulation realizations through the network."""
-    from msfm.utils import buzzard, observation
-
-    with_lensing = dlss_conf["dset"]["common"]["with_lensing"]
-    with_clustering = dlss_conf["dset"]["common"]["with_clustering"]
-
-    cls_bin_indices = _get_cls_bin_indices(msfm_conf, dlss_conf)
-
-    buzzard_indices, lensing_files, clustering_files = buzzard.get_filenames(msfm_conf)
-
-    for i, lensing_file, clustering_file in zip(buzzard_indices, lensing_files, clustering_files):
-        label = f"Buzzard_{i}"
-        if label not in labels:
-            continue
-        wl_map = buzzard.get_lensing_map(lensing_file) if with_lensing else None
-        gc_map = buzzard.get_clustering_map(clustering_file) if with_clustering else None
-        obs_map, obs_cls, _ = observation.forward_model_observation_map(
-            wl_gamma_map=wl_map,
-            gc_count_map=gc_map,
-            conf=msfm_conf,
-            apply_norm=True,
-            with_padding=True,
-            nest_in=False,
-        )
-        if obs_cls.shape[-1] != len(cls_bin_indices):
-            obs_cls = obs_cls[:, cls_bin_indices]
-        pred = model_fn(obs_map[np.newaxis], obs_cls[np.newaxis])
-        append_obs_to_file(pred_file, f"obs/preds/{label}", pred)
-
-
 def discover_mock_labels(data_dir):
     """Return sorted labels for every {label}_obs_maps.h5 in data_dir/obs/.
 
