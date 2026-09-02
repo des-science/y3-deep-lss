@@ -1,13 +1,11 @@
 # Nested hierarchical local-window transformer — clustering, maps only.
-# TWO KEYS DIFFER VS maps+cls.yaml -- the `cls:` BLOCK and `map_feature_dim` -- and the second
-# exists only because of the first. Both paths build one TransformerSummaryNetwork over the same
-# map encoder and the same regression head; the cls: block decides whether a Cls branch is
-# concatenated onto the map feature, and map_feature_dim is the width the map feature is
-# projected to FOR that concatenation. Here there is nothing to balance, so it is null: the
-# mean-pooled encoder feature goes straight into the regression head, whose
-# LayerNorm -> Dropout -> Dense is the only linear layer, and a projection would stack two Dense
-# layers with no activation between them. The key may equally be omitted (absent = None); it is
-# kept so the pair carries the same key SET and the diff is one value.
+# ONE KEY DIFFERS VS maps+cls.yaml -- the `cls:` BLOCK, which decides whether a Cls branch is
+# concatenated onto the map feature. Both paths build one TransformerSummaryNetwork over the same
+# map encoder and the same regression head. `map_feature_dim` is null in BOTH files as of
+# 2026-09-02: the mean-pooled encoder feature goes into the head (or the concatenation) at its
+# native width, with no projection Dense -- which here would stack two Dense layers with no
+# activation between them. The key may equally be omitted (absent = None); it is kept so the pair
+# carries the same key SET.
 # The GCNN prod pair does differ by the cls: block alone, and only because its arithmetic works
 # out: base_channels 64 x 3 pool_layers = a 512-d pooled map, already matching the 512-d Cls
 # embedding, so BOTH its files say null. Here the encoder ends at 1024 (base_embed_dim 32,
@@ -70,7 +68,12 @@ network:
   # exclude footprint-masked pixels from attention/merges/pooling (keeps checkpoint lineage)
   masked_attention: false
   head:
-    dropout_rate: 0.1
+    dropout_rate: 0.1  # KEEP IT ON. The one thing bench_v12 measured positively: turning it off
+                       # (transformer_nodrop) cost 7.3% paired FoM against this config at matched
+                       # 100% wall budget and near-identical steps -- well outside the 0.049 seed
+                       # floor, and vali_total agreed independently (-6.51 vs -10.77). Measured on
+                       # combined/maps+cls; carried to the other probes on the unified-recipe
+                       # convention, not on a per-probe measurement.
   kwargs: # -> HealpixNestedHierarchicalLocalWindowTransformer
     base_embed_dim: 32
     growth: double
@@ -81,7 +84,14 @@ network:
     mlp_ratio: 4
     layerscale_init: null
     fp32_softmax: true
-    block_dropout_rate: null
+    block_dropout_rate: null  # drops activations; drop_path_rate below drops whole branches
+    drop_path_rate: 0.0  # OFF, and stated rather than left to the default so the negative result
+                         # is recorded here. bench_v12 ran it at 0.1 with head dropout OFF and the
+                         # loss went non-finite inside 100 steps on two independent inits (jobs
+                         # 3242171, 3250568). It was never tried with head dropout ON, so read this
+                         # as "off, and not worth another 12 h" rather than "off, proven".
+                         # At 0.0 the DropPath layer is not constructed at all: a graph no-op, so
+                         # adding this key does not touch checkpoint lineage.
     # null (position-free) or geodesic (distance-kernel attention bias)
     pos_encoding: null
     # concat (order-sensitive concat+Dense) or deepsets (needs a pos_encoding)
