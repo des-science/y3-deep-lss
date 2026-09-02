@@ -1,0 +1,115 @@
+# bench_v12 -- COMBINED (multi-res: clustering injected at nside 256), maps + Cls.
+# "staged" -- the STAGED all-ConvNeXt layout with head dropout ON, i.e. the inherited
+# regularization. Only strided PseudoConvs and ConvNeXt blocks, no bare graph convs.
+# LAYOUT REFERENCE: STAGED_LAYOUT.md (stage table, cost, smoke test, what conv_type costs).
+# PARENT: staged_nodrop.yaml. THE ONLY KNOB: network.kwargs.dropout_rate null -> 0.1.
+# ADDED 2026-09-02, after the other five arms. It restores the (layout, head dropout) 2x2
+# that the bench_v13 fold broke, so question B1 reads on the ConvNeXt block and not only on
+# the classic one -- and it gives question A a second reading at dropout ON, against
+# bench_v11_simple, mirroring staged_nodrop vs classic_nodrop at dropout OFF.
+# Rationale, launch plan and scoring: README.md
+# NEW CHECKPOINT LINEAGE -- RUN_NUM=1, own MODEL_DIR.
+name: deepsphere_default
+
+training:
+  n_steps: auto  # an OUTPUT of the wall-clock budget; see throughput.json
+  wall_budget_seconds: 79200  # TRAINING seconds for the WHOLE run -- 2 x 12 h chain
+  job_budget_seconds: 39600  # this job's share (11 h of 12 h; ~1 h for the eval tail)
+  output_every: Null
+  checkpoint_every: 5000
+  vali_every: 1000
+  eval_every: Null
+
+optimization:
+  optimizer: adam
+  gradient_clipping:
+    clip_by_value: null
+    clip_by_norm: null
+    clip_by_global_norm: 1.0
+  mutual_info_loss:
+    learning_rate: 1.0e-4
+    optimizer_kwargs:
+      beta_1: 0.9
+      beta_2: 0.999
+    scheduler: cosine
+    warmup_steps: 5000
+    warmup_init_learning_rate: 1.0e-5
+    decay_alpha: 0.0
+    ema_momentum: null
+
+network:
+  name: resnet
+  spmm_backend: csr
+  n_neighbors: 60
+  max_checkpoints: 50
+  save_second_to_last_layer: False
+  z_bank_size: Null
+  input_norm: true
+  smooth_nside:  # clustering (fwhm >= 57') smoothed and injected at nside 256
+    clustering: 256
+  map_pool: mean  # the only readout the transformer can also do (its encoder mean-pools)
+  map_feature_dim: null  # no projection: the pooled map goes straight to map_norm + concat
+  cls:
+    n_bins: 16
+    transform: asinh_per_feature
+    asinh_default_scale: null
+    embedding_layers: [512, 512, 512, 512]
+    embedding_dropout_rate: 0.1
+  kwargs:
+    # The STAGED layout (see STAGED_LAYOUT.md). Replaces
+    # base_channels / pool_layers / conv_layers / residual_layers. One entry per nside halving,
+    # 512 -> 256 -> 128 -> 64 -> 32 -> 16. Each stage is a strided PseudoConv of that width
+    # followed by that many ConvNeXt blocks, so every width change is a PseudoConv and every
+    # graph convolution sits inside a block. Trunk stays nside 16 x 512, and the first block is
+    # still at nside 64, exactly as in the parent.
+    stage_widths: [64, 128, 256, 512, 512]
+    stage_blocks: [0, 0, 1, 1, 5]
+    residual_block_type: convnext  # the block used at every stage
+    mlp_ratio: 4  # ships with the ConvNeXt block; not a second knob
+    layer_scale_init: 1.0e-6  # ships with the ConvNeXt block; not a second knob
+    drop_path_rate: 0.0  # off, as in the parent; the body carries no regularization here
+    poly_degree: 5  # ChebK order of each block's depthwise conv; conv_type no longer applies
+    head_type: "dense"
+    dense_layers: []
+    dropout_rate: 0.1  # <-- THE KNOB: head dropout ON, the inherited default. Same
+                       # get_regression_head call every other arm uses, both architectures.
+
+dset:
+  training:
+    common:
+      is_eval: False
+      n_readers: 32
+      n_prefetch: 4
+      n_workers: 128  # NOT a knob: left Null the interleave/parse/augment stages all go to
+                      # tf.data.AUTOTUNE, whose ram_budget defaults to half the NODE's memory --
+                      # half of a GH200's 870 GB UNIFIED pool against a 450 GB cgroup. That
+                      # OOM-killed four GCNN jobs of this round. The five older arms ran at Null
+                      # because they predate the fix; this is host-side I/O parallelism only,
+                      # so it changes no sample, no gradient and no step. msfm now also caps the
+                      # budget from SLURM_MEM_PER_NODE, so this is belt and braces.
+    grid:
+      local_batch_size: 16
+      file_name_shuffle_buffer: 64
+      examples_shuffle_buffer: 256  # the parent's value. NOT raised to prod's 1024: a bigger
+                                    # shuffle buffer changes sample decorrelation, which is a
+                                    # training-side difference, not I/O -- it would not be a
+                                    # one-knob contrast against staged_nodrop.
+  validation:
+    n_batches: 50  # HELD at the round's value, not raised to prod's 100: validation runs inside
+                   # the wall budget, so 100 would cost this arm ~2% of its steps against the
+                   # partner it is scored on. Monitoring only -- no gradient flows from it.
+    common:
+      is_eval: True
+      n_readers: 8
+      n_prefetch: 2
+      n_workers: 16
+    grid:
+      local_batch_size: 16
+  eval:
+    common:
+      is_eval: True
+      n_readers: 64
+      n_prefetch: 2
+      n_workers: 128  # as above -- not a knob
+    grid:
+      local_batch_size: 16

@@ -1,5 +1,16 @@
 # bench_v12 — the SHARED-CORE round
 
+**Status: 14 jobs** (`staged` added 2026-09-02).
+
+**Host-RAM OOM, resolved 2026-09-02.** Four GCNN jobs (3242160, 3242161, 3245093, 3245095) were
+OOM-killed 2-8 h in, at 444.4-445.7 GiB against the 450 GiB cgroup. It was **not** a config
+difference: every GCNN job of this round ran the identical dataloader block, and two runs of the
+same architecture landed 41 GiB apart (432.0 vs 391.1 GiB). It was `tf.data`'s autotuner, whose
+`ram_budget` defaults to half the NODE's memory -- and on a GH200 that figure is the 870 GB UNIFIED
+Grace+HBM pool, so it budgeted ~425 GiB against an allocation of 450. msfm `f6bdca9` now caps it
+from `SLURM_MEM_PER_NODE`; since msfm is editable-installed into `tf_env`, that fix reaches
+**restored** jobs too, whose frozen `configs.yaml` still says `n_workers: null`.
+
 **Status: QUEUED, 12 jobs** (2026-08-31). Twelve submitted at 11:48 (3242160-3242173); none had
 started when the round was revised at 17:0x, so nothing was lost.
 
@@ -133,6 +144,7 @@ Optimizer is **Adam 1e-4 in every arm** — see question B on why weight decay i
 | `convnext.yaml` | legacy | **convnext** | 0.1 | 0.0 | `classic` |
 | `classic_nodrop.yaml` | legacy | classic | **null** | 0.0 | `classic` |
 | `staged_nodrop.yaml` | **staged** | **convnext** | **null** | 0.0 | `classic_nodrop` (a package, 9 keys) |
+| `staged.yaml` | **staged** | **convnext** | **0.1** | 0.0 | `staged_nodrop` (1 key) |
 | `staged_nodrop_droppath.yaml` | **staged** | **convnext** | **null** | **0.1** | `staged_nodrop` (1 key) |
 
 The two `_deferred/` files, `convnext_nodrop.yaml` and `convnext_nodrop_droppath.yaml`, are the
@@ -144,6 +156,29 @@ because they are what closes the 2 × 2 if the package ever needs taking apart.
 package, so the block×dropout interaction is no longer readable from this round alone. Accepted:
 three of the four cells are unchanged, the dropout edge still reads on the classic block, and the
 block edge is bench_v11's already-measured wash.
+
+**`staged.yaml` was added on 2026-09-02, after the other five arms had launched.** It is
+`staged_nodrop` with head dropout back on -- the cell the fold destroyed. Two reasons it is worth a
+2 x 12 h chain rather than being inferred:
+
+1. **B1 would otherwise read only on the classic block.** The transformer has already answered it in
+   the opposite direction to the round's expectation -- `transformer_nodrop` LOST 7.3% paired FoM at
+   matched wall, well outside the 0.049 floor, with `vali_total` agreeing independently (-6.51 vs
+   -10.77). So "expect washes on the regularization arms" is already falsified once. Whether that
+   transfers to a ConvNeXt body is exactly the kind of block-dependence DropPath's sign flip
+   (+5.0% ConvNeXt, 0.946 classic) says not to assume.
+2. **It gives question A a second, independent reading.** `staged` vs `bench_v11_simple` is the
+   all-ConvNeXt package against the classic GCNN at head dropout ON, mirroring
+   `staged_nodrop` vs `classic_nodrop` at OFF. Two readings that agree are a far better basis for
+   the paper's network than one contrast at one regularization setting.
+
+It carries **two non-knob deviations**, both stated on the lines themselves. `n_workers` is 128
+rather than Null in the training and eval loaders: left Null, the interleave/parse/augment stages
+all go to `tf.data.AUTOTUNE`, whose `ram_budget` defaults to half the NODE's memory -- half a
+GH200's 870 GB UNIFIED pool against a 450 GB cgroup. That killed four jobs of this round. It is
+host-side I/O parallelism and changes no sample, gradient or step. `examples_shuffle_buffer` is
+deliberately held at the parent's 256 rather than prod's 1024, and `n_batches` at 50 rather than
+prod's 100, because both of those WOULD be real knobs against the partner it is scored on.
 
 `staged_nodrop → staged_nodrop_droppath` is untouched by the fold and remains the clean one-knob
 pair that tests question B's second half: **is a bare head plus stochastic depth better than a
@@ -363,6 +398,7 @@ two.
 | `convnext` | GCNN | **0** — on disk as `bench_v11_convnext` | A (block) |
 | `classic_nodrop` | GCNN | 2 | B1 (head dropout) on the classic block |
 | `staged_nodrop` | GCNN | 2 | **A** — the all-ConvNeXt package vs the classic GCNN |
+| `staged` | GCNN | 2 | **B1 on the ConvNeXt block**, and A read a second time at dropout ON |
 | `staged_nodrop_droppath` | GCNN | 2 | B2 (body stochastic depth), one knob |
 | `transformer` | transformer | 2 | the first wall-matched transformer anchor |
 | `transformer_nodrop` | transformer | 2 | B1 |
