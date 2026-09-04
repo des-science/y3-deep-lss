@@ -588,7 +588,7 @@ def discover_mock_labels(data_dir):
     """Return sorted labels for every {label}_obs_maps.h5 in data_dir/obs/.
 
     A label is the file stem with the '_obs_maps.h5' suffix removed; passing one of
-    these labels to evaluate_obs_benchmark / evaluate_mock_cls resolves back to the file.
+    these labels to evaluate_obs_mocks / evaluate_mock_cls resolves back to the file.
     """
     import glob
 
@@ -598,14 +598,33 @@ def discover_mock_labels(data_dir):
     return [os.path.basename(f)[: -len(suffix)] for f in obs_files]
 
 
-def evaluate_obs_benchmark(model_fn, pred_file, msfm_conf, dlss_conf, data_dir, obs_labels):
-    """Evaluate benchmark simulations from data_dir/obs/.
+def mock_truth_cosmo(obs_file, params, msfm_conf):
+    """Truth cosmology of a mock observation file, ordered like params.
 
-    Writes obs/preds/{label}_stack (all realizations) and obs/preds/{label}_mean to pred_file,
-    and obs/cosmos/{label} containing the fiducial cosmology.
+    The CosmoGrid mocks are all drawn at the fiducial and carry no cosmology of their own, so
+    the fiducial is the fallback. A mock at any other cosmology (Buzzard) writes a cosmo/<param>
+    scalar per parameter when it is built, which is the only way evaluation can know its truth.
     """
     from msfm.utils import parameters
 
+    with h5py.File(obs_file, "r") as f:
+        if "cosmo" not in f:
+            return parameters.get_fiducials(params, msfm_conf)
+        cosmo = {key: f["cosmo"][key][()] for key in f["cosmo"]}
+
+    missing = [param for param in params if param not in cosmo]
+    if missing:
+        LOGGER.warning(f"{os.path.basename(obs_file)} defines no truth for {missing}, filling in NaN.")
+
+    return np.array([cosmo.get(param, np.nan) for param in params], dtype=np.float64)
+
+
+def evaluate_obs_mocks(model_fn, pred_file, msfm_conf, dlss_conf, data_dir, obs_labels):
+    """Evaluate mock observations from data_dir/obs/.
+
+    Writes obs/preds/{label}_stack (all realizations) and obs/preds/{label}_mean to pred_file,
+    and obs/cosmos/{label} containing the mock's truth cosmology.
+    """
     dset_common = dlss_conf["dset"]["common"]
     with_lensing = dset_common["with_lensing"]
     with_clustering = dset_common["with_clustering"]
@@ -614,23 +633,20 @@ def evaluate_obs_benchmark(model_fn, pred_file, msfm_conf, dlss_conf, data_dir, 
     norm_lensing = msfm_conf["analysis"]["normalization"]["lensing"]
     norm_clustering = msfm_conf["analysis"]["normalization"]["clustering"]
 
-    # obs/cls_raw in the benchmark file always stores all 36 lensing+clustering cross pairs;
+    # obs/cls_raw in the mock file always stores all 36 lensing+clustering cross pairs;
     # select the subset matching the model's probe configuration (mirrors the TFRecord
     # parsing in msfm.utils.tfrecords and deep_lss.utils.configuration.get_cls_bounds_per_pair)
     cls_bin_indices = _get_cls_bin_indices(msfm_conf, dlss_conf)
 
     target_params = dlss_conf["dset"]["training"]["params"]
-    fiducial_cosmo = parameters.get_fiducials(target_params, msfm_conf)
 
     obs_dir = os.path.join(data_dir, "obs")
 
     for label in obs_labels:
         obs_file = os.path.join(obs_dir, f"{label}_obs_maps.h5")
         if not os.path.exists(obs_file):
-            LOGGER.warning(f"Benchmark file not found: {obs_file}, skipping.")
+            LOGGER.warning(f"Mock file not found: {obs_file}, skipping.")
             continue
-
-        out_label = label
 
         with h5py.File(obs_file, "r") as f:
             obs_maps = f["obs/maps"][:].astype(np.float32)
@@ -657,9 +673,9 @@ def evaluate_obs_benchmark(model_fn, pred_file, msfm_conf, dlss_conf, data_dir, 
             [model_fn(obs_maps[i : i + 1], obs_cls_raw[i : i + 1]) for i in range(len(obs_maps))], axis=0
         )
 
-        append_obs_to_file(pred_file, f"obs/preds/{out_label}_stack", preds)
-        append_obs_to_file(pred_file, f"obs/preds/{out_label}_mean", np.mean(preds, axis=0))
-        append_obs_to_file(pred_file, f"obs/cosmos/{out_label}", fiducial_cosmo)
+        append_obs_to_file(pred_file, f"obs/preds/{label}_stack", preds)
+        append_obs_to_file(pred_file, f"obs/preds/{label}_mean", np.mean(preds, axis=0))
+        append_obs_to_file(pred_file, f"obs/cosmos/{label}", mock_truth_cosmo(obs_file, target_params, msfm_conf))
 
 
 def plot_summary_space_prior_predictive(grid_preds, obs_pred, n_rand=1_000, np_seed=12):

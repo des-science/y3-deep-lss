@@ -125,14 +125,11 @@ def evaluate_mock_cls(
     scale_cut="hard",
     cls_n_bins=None,
 ):
-    from msfm.utils import parameters as msfm_params
-
     obs_file = os.path.join(data_dir, "obs", f"{label}_obs_maps.h5")
-    out_label = label
     if not os.path.exists(obs_file):
         print(f"WARNING: mock file not found: {obs_file}, skipping")
         return
-    print(f"Evaluating {out_label}...")
+    print(f"Evaluating {label}...")
     with h5py.File(obs_file, "r") as f_in:
         obs_cls_raw = f_in["obs/cls_raw"][:]
     print(f"obs_cls_raw.shape = {obs_cls_raw.shape}")
@@ -155,7 +152,7 @@ def evaluate_mock_cls(
     )
     obs_cl = np.squeeze(obs_cl)
 
-    fidu_preds = np.concatenate(
+    mock_preds = np.concatenate(
         [
             model(tf.constant(obs_cl[i : i + batch_size], dtype=tf.float32), training=False).numpy()
             for i in range(0, len(obs_cl), batch_size)
@@ -163,12 +160,12 @@ def evaluate_mock_cls(
         axis=0,
     )
 
-    fiducial_cosmo = msfm_params.get_fiducials(params, msfm_conf)
-
-    evaluation.append_obs_to_file(pred_file, f"obs/preds/{out_label}_stack", fidu_preds)
-    evaluation.append_obs_to_file(pred_file, f"obs/preds/{out_label}_mean", np.mean(fidu_preds, axis=0))
-    evaluation.append_obs_to_file(pred_file, f"obs/cosmos/{out_label}", fiducial_cosmo)
-    print(f"Saved {out_label} ({len(fidu_preds)} realizations) to {pred_file}")
+    evaluation.append_obs_to_file(pred_file, f"obs/preds/{label}_stack", mock_preds)
+    evaluation.append_obs_to_file(pred_file, f"obs/preds/{label}_mean", np.mean(mock_preds, axis=0))
+    evaluation.append_obs_to_file(
+        pred_file, f"obs/cosmos/{label}", evaluation.mock_truth_cosmo(obs_file, params, msfm_conf)
+    )
+    print(f"Saved {label} ({len(mock_preds)} realizations) to {pred_file}")
 
 
 def evaluate_des_y3(

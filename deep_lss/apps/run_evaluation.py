@@ -565,7 +565,7 @@ if __name__ == "__main__":
                 if mock_labels is None:
                     mock_labels = evaluation.discover_mock_labels(args.data_dir)
                     LOGGER.info(f"Auto-discovered {len(mock_labels)} mock(s) in {args.data_dir}/obs: {mock_labels}")
-                evaluation.evaluate_obs_benchmark(model_fn, out_file, msfm_conf, dlss_conf, args.data_dir, mock_labels)
+                evaluation.evaluate_obs_mocks(model_fn, out_file, msfm_conf, dlss_conf, args.data_dir, mock_labels)
 
         if args.wandb and out_file is not None:
             LOGGER.info("Logged the predictions to weights & biases")

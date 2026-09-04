@@ -132,7 +132,7 @@ level, [`apps/benchmark/`](deep_lss/apps/benchmark/) for sizing a network before
 | App | What it does |
 |---|---|
 | `run_training.py` | The main entry point. Trains a network on the cosmology grid with the selected objective; handles the distribution strategy, checkpointing and restore, mixed precision, XLA, and logging to Weights & Biases or TensorBoard. `--n_steps` sets a step budget; `--wall_budget_seconds` instead trains for a fixed wall-clock time and anneals the learning-rate schedule to land exactly on it. |
-| `run_evaluation.py` | Runs a trained network over the cosmology grid (`--include_grid`), the DES Y3 catalogs (`--include_des`), mock observations (`--include_mocks`) and Buzzard realizations (`--include_buzzard`), writing the predicted summaries. |
+| `run_evaluation.py` | Runs a trained network over the cosmology grid (`--include_grid`), the DES Y3 catalogs (`--include_des`) and every mock observation in `data_dir/obs/`, CosmoGrid benchmarks and the Buzzard flock alike (`--include_mocks`), writing the predicted summaries. |
 | `run_cls_training+evaluation.py` | The Cls branch: trains and evaluates in one script on binned angular power spectra rather than maps, with `asinh` scaling and PCA whitening as input preprocessing. `--precache_only` builds just the rebinned-Cls cache, which the maps+Cls networks require. |
 
 **`benchmark/`** — what fits and how fast it steps, before a run is launched. Driven by
