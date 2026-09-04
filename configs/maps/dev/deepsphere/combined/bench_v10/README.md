@@ -232,6 +232,6 @@ programme, so they are the most exposed; none of them is adopted on the strength
 
 ### Standing against production
 
-`configs/deepsphere/prod/` carries `bench_v7 full` — `map_pool: mean` at 1× on the single probes —
+`configs/maps/prod/deepsphere/` carries `bench_v7 full` — `map_pool: mean` at 1× on the single probes —
 which this round beats by ~15% on lensing and ~7% on clustering. The prod defaults were written
 before these numbers were paired against the anchor and have **not** been revised to match.

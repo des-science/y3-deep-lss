@@ -35,7 +35,7 @@ instead of the one we intend to replace. See "The bench_v13 fold" below for what
 
 This file carries the shared rationale for **both architectures and all three probes**.
 `lensing/bench_v12/` and `clustering/bench_v12/` point here, as do the three
-`configs/transformer/dev/<probe>/bench_v12/` directories.
+`configs/maps/dev/transformer/<probe>/bench_v12/` directories.
 
 ## What the round is for
 
@@ -136,7 +136,7 @@ before it is used as a default.**
 
 Optimizer is **Adam 1e-4 in every arm** — see question B on why weight decay is not tested.
 
-### GCNN — `configs/deepsphere/dev/<probe>/bench_v12/`
+### GCNN — `configs/maps/dev/deepsphere/<probe>/bench_v12/`
 
 | file | layout | block | head dropout | body DropPath | knob vs |
 |---|---|---|---|---|---|
@@ -192,7 +192,7 @@ a residual branch — a slightly stronger dose of the same knob, worth noting wh
 **There is no `classic_droppath` arm.** DropPath measured **+5.0% on ConvNeXt and 0.946 — a loss —
 on the classic block**, so that arm would spend a 12 h slot re-measuring a known negative.
 
-### Transformer — `configs/transformer/dev/<probe>/bench_v12/`
+### Transformer — `configs/maps/dev/transformer/<probe>/bench_v12/`
 
 | file | head dropout | body DropPath | one knob vs |
 |---|---|---|---|
@@ -441,7 +441,7 @@ list must be derived from its own parked file; copying combined's would silently
 
 ```bash
 P=/users/athomsen/dlss/repos/y3-deep-lss/.venv/bin/python3
-D=configs/deepsphere/dev/combined
+D=configs/maps/dev/deepsphere/combined
 $P -m deep_lss.utils.config_check diff $D/bench_v11/simple.yaml $D/bench_v12/classic.yaml
 $P -m deep_lss.utils.config_check diff $D/bench_v11/convnext.yaml $D/bench_v12/convnext.yaml
 #   dset.validation.n_batches 50 -> 100                  -> 1 key each, validation monitoring

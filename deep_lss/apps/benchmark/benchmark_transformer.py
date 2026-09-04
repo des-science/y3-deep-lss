@@ -55,7 +55,7 @@ DEFAULTS = {
     "scales_config": f"{REPOS}/y3-deep-lss/configs/scales/8wl,32gc.yaml",
     "loss_config": f"{REPOS}/y3-deep-lss/configs/loss/vmim.yaml",
     "data_config": f"{REPOS}/y3-deep-lss/configs/data/default.yaml",
-    "configs_dir": f"{REPOS}/y3-deep-lss/configs/transformer/prod/lensing",
+    "configs_dir": f"{REPOS}/y3-deep-lss/configs/maps/prod/transformer/lensing",
 }
 
 

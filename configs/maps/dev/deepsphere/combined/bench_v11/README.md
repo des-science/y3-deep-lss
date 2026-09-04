@@ -175,7 +175,7 @@ percent, the arm carries a handicap that is not its knob.
 
 ```bash
 P=/users/athomsen/dlss/repos/y3-deep-lss/.venv/bin/python3
-D=configs/deepsphere/dev/combined
+D=configs/maps/dev/deepsphere/combined
 $P -m deep_lss.utils.config_check diff $D/bench_v7/simple.yaml   $D/bench_v11/simple.yaml
 #   training.{n_steps -> auto, wall_budget_seconds, job_budget_seconds}   -> 3 keys = the sizing MODE
 $P -m deep_lss.utils.config_check diff $D/bench_v11/simple.yaml  $D/bench_v11/simple_mean_std.yaml

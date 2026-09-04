@@ -606,7 +606,7 @@ def training(args=None):
         raise ValueError(
             "Legacy flat Cls keys (cls_n_bins / cls_transform / cls_embedding_* / asinh_default_scale) "
             "are no longer supported — move them under a nested `cls:` block in the network config "
-            "(see configs/transformer/prod/lensing/maps+cls.yaml)."
+            "(see configs/maps/prod/transformer/lensing/maps+cls.yaml)."
         )
     if return_cls:
         LOGGER.warning(

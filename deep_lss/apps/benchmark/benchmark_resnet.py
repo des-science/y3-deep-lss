@@ -6,7 +6,7 @@ Author: Arne Thomsen
 
 Benchmark the DeepSphere/ResNet GCNN network configs (network.name == "resnet") for GPU memory fit
 and step time, the GCNN analogue of ``benchmark_transformer.py``. Applies the same sizing recipe
-(``project_transformer_bench_sizing_recipe``) to the ``configs/deepsphere/prod/{lensing,clustering,
+(``project_transformer_bench_sizing_recipe``) to the ``configs/maps/prod/deepsphere/{lensing,clustering,
 combined}/{maps,maps+cls}.yaml`` lineage.
 
 It builds each model through the *exact* construction path used by run_training.py's resnet branch
@@ -59,7 +59,7 @@ DEFAULTS = {
     "scales_config": f"{REPOS}/y3-deep-lss/configs/scales/8wl,32gc.yaml",
     "loss_config": f"{REPOS}/y3-deep-lss/configs/loss/vmim.yaml",
     "data_config": f"{REPOS}/y3-deep-lss/configs/data/default.yaml",
-    "configs_dir": f"{REPOS}/y3-deep-lss/configs/deepsphere/prod/lensing",
+    "configs_dir": f"{REPOS}/y3-deep-lss/configs/maps/prod/deepsphere/lensing",
 }
 
 # Stand-in for `n_steps: auto`, which run_training resolves from a wall-clock budget this benchmark

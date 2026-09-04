@@ -28,9 +28,9 @@ visible: one differing key per arm is what the round is supposed to look like.
 
 Typical use::
 
-    python -m deep_lss.utils.config_check diff configs/deepsphere/dev/combined/bench_v8/mean_std.yaml \\
-        configs/deepsphere/dev/combined/bench_v9/moments.yaml
-    python -m deep_lss.utils.config_check check configs/deepsphere/dev/*/bench_v10/*.yaml
+    python -m deep_lss.utils.config_check diff configs/maps/dev/deepsphere/combined/bench_v8/mean_std.yaml \\
+        configs/maps/dev/deepsphere/combined/bench_v9/moments.yaml
+    python -m deep_lss.utils.config_check check configs/maps/dev/deepsphere/*/bench_v10/*.yaml
 """
 
 import argparse

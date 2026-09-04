@@ -19,7 +19,7 @@
 # shared/ rather than under maps/ or cls/.
 #
 # Usage:
-#   BENCH_SCRIPT=benchmark_transformer.py CONFIGS_GLOB="configs/transformer/dev/lensing/bench_t7/*.yaml" \
+#   BENCH_SCRIPT=benchmark_transformer.py CONFIGS_GLOB="configs/maps/dev/transformer/lensing/bench_t7/*.yaml" \
 #       OUT_DIR=/iopsstor/scratch/cscs/athomsen/deep_lss/claude/bench/<name> \
 #       BATCH_SIZES="16 32" sbatch shared/benchmark_sweep.sh
 #
@@ -34,7 +34,7 @@ DEEP_LSS="$REPOS/y3-deep-lss"
 
 # --- Overridable defaults ----------------------------------------------------------------------
 
-: "${CONFIGS_GLOB:?set CONFIGS_GLOB, e.g. configs/transformer/dev/lensing/bench_t7/*.yaml}"
+: "${CONFIGS_GLOB:?set CONFIGS_GLOB, e.g. configs/maps/dev/transformer/lensing/bench_t7/*.yaml}"
 : "${OUT_DIR:?set OUT_DIR, e.g. /iopsstor/scratch/cscs/athomsen/deep_lss/claude/bench/<name>}"
 
 BENCH_SCRIPT="${BENCH_SCRIPT:-benchmark_transformer.py}"  # any deep_lss/apps/benchmark/*.py
