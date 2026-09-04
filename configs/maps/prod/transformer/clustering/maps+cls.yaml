@@ -125,7 +125,7 @@ dset:
       file_name_shuffle_buffer: 64
       examples_shuffle_buffer: 1024
   validation:
-    n_batches: 100
+    n_batches: 50
     common:
       is_eval: True
       n_readers: 8

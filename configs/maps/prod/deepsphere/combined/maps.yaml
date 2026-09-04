@@ -1,5 +1,18 @@
 # DeepSphere ResNet GCNN -- combined probes (multi-res: clustering injected at nside 256), maps only.
-# Architecture: bench_v7 `full` -- see ../../dev/combined/bench_v7/ for the rationale.
+# Architecture: bench_v12 `classic_nodrop` -- THE BEST-PERFORMING GCNN MEASURED, either block
+# family. Adopted as the production GCNN 2026-09-04. Evidence, the step confound and the other
+# gates: ../../../dev/deepsphere/combined/bench_v12/README.md. Three things it drops versus the
+# bench_v7 `full` stack this replaces -- the ConvNeXt block, DropPath, and residual attention --
+# and it still wins 1.046 paired FoM against the staged all-ConvNeXt layout and ties `full` at
+# 1.029, so the tie rule takes the simpler net.
+#
+# !! COMBINED ONLY. !! bench_v12 was scoped to one probe and bench_v11 has already produced a
+# probe-DEPENDENT answer once, so lensing and clustering are a hypothesis here, not a result.
+# The combined production run is the measured one; these two are its transplant.
+#
+# NO ATTENTION and no ConvNeXt-only keys (mlp_ratio, layer_scale_init): the arm this was
+# scaffolded from carries neither, so what is here is what was run, not `full` minus a block.
+#
 # THE ONLY DIFFERENCE VS maps+cls.yaml IS THE `cls:` BLOCK. Both build one ResNetSummaryNetwork
 # over the same map branch; the cls: block decides only whether a Cls branch is concatenated onto
 # the map features before the regression head. map_pool therefore means exactly the same thing in
@@ -55,22 +68,14 @@ network:
     pool_layers: 3
     conv_layers: 2
     residual_layers: 5
-    residual_block_type: convnext
-    mlp_ratio: 4
-    layer_scale_init: 1.0e-6
-    drop_path_rate: 0.1
-    residual_attention_every: 2
-    residual_attention:
-      num_heads: 8
-      n_layers: 1
-      mlp_ratio: 2.0
-      dropout_rate: 0.1
-      positional_embedding: true
-      layer_scale_init: 1.0e-4
+    residual_block_type: residual  # the code default too, stated so the family is visible in the
+                                   # `config_check resolve` dump; same value, so no lineage change
+    drop_path_rate: 0.0  # OFF on evidence: 0.946, a LOSS, on this block (bench_v11)
     poly_degree: 5
     head_type: "dense"
     dense_layers: []
-    dropout_rate: 0.1
+    dropout_rate: null  # OFF: +7.6% paired FoM vs 0.1 on this block, vali_total agreeing.
+                        # ARCHITECTURE-SPECIFIC -- the transformer keeps it ON, same call.
 
 dset:
   # CANONICAL DATALOADER -- every VALUE here is identical in all twelve prod configs, both
@@ -94,7 +99,7 @@ dset:
       file_name_shuffle_buffer: 64
       examples_shuffle_buffer: 1024
   validation:
-    n_batches: 100
+    n_batches: 50
     common:
       is_eval: True
       n_readers: 8
