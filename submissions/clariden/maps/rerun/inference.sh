@@ -50,6 +50,19 @@ EXTEND_PARAMS="${EXTEND_PARAMS:-}"
 #   LOAD_FLOW=--load_flow sbatch inference.sh
 LOAD_FLOW="${LOAD_FLOW:-}"
 
+# Per-member DES chains for the flow-ensemble convergence test (chain_DESy3_flow_{m}.npy, next to
+# the ensemble chain, which is left alone). Needs --include_des and an ensemble flow.
+FLOW_MEMBERS="${FLOW_MEMBERS:-}"
+
+# Which stages the sampling tail runs. The defaults reproduce the training-tail behaviour; both use
+# ${VAR-default}, so an explicitly EMPTY value switches a stage off. A targeted re-run that adds
+# only the per-member chains to an existing flow, leaving mcmc_samples.h5 and the mock/grid chains
+# untouched:
+#   LOAD_FLOW=--load_flow FLOW_MEMBERS=--sample_flow_members SAMPLE_POSTERIOR= \
+#       INCLUDE_OBS=--include_des sbatch inference.sh
+SAMPLE_POSTERIOR="${SAMPLE_POSTERIOR---sample_posterior}"
+INCLUDE_OBS="${INCLUDE_OBS---include_grid --include_des --include_mocks}"
+
 # --- Fixed settings ----------------------------------------------------------------------------
 
 STRATEGY="mirrored"  # names the logs only -- inference itself is single-GPU pytorch
@@ -75,7 +88,6 @@ srun -N1 --ntasks-per-node=1 --gpus-per-task=1 --cpus-per-task=72 --mem=110G --c
         --n_flows=4 \
         $EXTEND_PARAMS \
         $LOAD_FLOW \
-        --sample_posterior \
-        --include_grid \
-        --include_des \
-        --include_mocks"
+        $FLOW_MEMBERS \
+        $SAMPLE_POSTERIOR \
+        $INCLUDE_OBS"
