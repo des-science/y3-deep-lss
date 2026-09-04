@@ -1,0 +1,24 @@
+# DeepSphere GCNN (STAGED ALL-CONVNEXT layout) -- lensing only, maps + Cls.
+# THE COMPARISON TRACK, NOT THE PRODUCTION DEFAULT. prod/deepsphere/ is the shipped GCNN; this
+# tree exists so the ConvNeXt family can be run alongside it rather than replacing it in place.
+# Architecture: bench_v12 `staged_nodrop`, which LOSES to classic on paired FoM (1.046 the other
+# way) -- though inside the 0.049 seed floor, which is why it is worth a reference run at all.
+#
+# Composed from configs/maps/shared/; this file defines nothing itself. Resolved at load time
+# and saved to the run dir FULLY RESOLVED, so a restore never re-resolves against an edited base.
+# Do NOT grep it -- the keys are not in it:
+#   python -m deep_lss.utils.config_check resolve <this file> --flat
+#
+# Partner maps.yaml is this file without the maps/shared/cls_branch.yaml base; one shared
+# encoder, so the pair cannot disagree about the network.
+#
+# The ONLY difference from prod/deepsphere/lensing/maps+cls.yaml is the two encoder lines below:
+# per_probe is namespaced by family because stage_widths is what selects the staged code path.
+
+extends:
+  - maps/shared/dataloader.yaml
+  - maps/shared/optimization.yaml
+  - maps/shared/budget/1x12h.yaml
+  - maps/shared/encoders/deepsphere/convnext.yaml
+  - maps/shared/encoders/deepsphere/per_probe/convnext/lensing.yaml
+  - maps/shared/cls_branch.yaml  # <- this line is the whole maps+cls distinction
