@@ -1,0 +1,72 @@
+# Cls summary encoder MATCHING the Cls branch inside the maps+Cls networks.
+#
+# Same data vector, same optimizer, same schedule and same early-stopping rule as
+# configs/cls/mlp/default.yaml -- the ONLY change is the encoder, so a v1-vs-v2 comparison
+# attributes cleanly to it.
+#
+# Three differences from the MLP baseline, all of them things the maps+Cls branch does not do:
+#   1. no PCA rotation                 (mlp/default.yaml: pca_components 9999, whiten false)
+#   2. 512-wide, not 1024
+#   3. LayerNorm after every Dense, not only at the input
+# The first two are config; the third is why this needs its own class -- MultiLayerPerceptron
+# norms only at the input. ClsBranchMLP is built from the SAME get_cls_embedding_layers and
+# get_regression_head calls the composite networks use, so the two cannot drift apart.
+#
+# The kwargs below must stay in step with configs/maps/shared/cls_branch.yaml (embedding side)
+# and configs/maps/shared/encoders/deepsphere/classic.yaml (head side). Head dropout is null,
+# matching the production GCNN; the transformer answers that knob the opposite way, so a Cls
+# baseline cannot match both and the GCNN is the one prod ships.
+
+network:
+  name: cls_branch
+  kwargs:
+    embedding_layers: [512, 512, 512, 512]  # = cls_branch.yaml embedding_layers
+    dropout_rate: 0.1  # = cls_branch.yaml embedding_dropout_rate
+    dropout_per_layer: true  # what the maps+Cls runs train with; checkpoints are position-sensitive
+    activation: relu
+    head_dense_layers: null  # head is LayerNorm -> Dense(n_summary)
+    head_dropout_rate: null  # = classic.yaml dropout_rate
+
+# Data -- identical to mlp/default.yaml
+scale_cut: hard_rebinned
+cls_n_bins: 16
+cls_transform: asinh_per_feature
+
+# NO PCA. The branch this mirrors has no whitening layer, and ClsBranchMLP rejects one rather
+# than silently ignoring it. (mlp/default.yaml sets pca_components 9999 / pca_whiten false.)
+pca_components: null
+
+# Training -- identical to mlp/default.yaml
+n_steps: 1000000
+batch_size: 1024
+learning_rate: 1.0e-4
+weight_decay: 1.0e-2
+clip_by_global_norm: 1.0
+
+lr_schedule: constant
+lr_warmup_steps: 5000
+
+early_stopping:
+  patience: 15 # must exceed plateau patience so the LR drops first
+  min_delta: 5.0e-2
+  min_steps: 10000
+
+# EMA weight averaging
+ema_momentum: null
+
+# Logging / checkpointing
+log_every: 100
+vali_every: 1000
+
+# Cap the eager full-test vali_loss (200k examples, ~76% of walltime) at a fixed random subset.
+# Must match configs/cls/mlp/default.yaml: early stopping fires on vali_loss, so a different
+# subsample size means a different stopping rule and the two are no longer comparable.
+vali_subsample: 10000
+n_vali_mse_examples: 8192
+
+# Compilation
+xla: true
+
+# Reproducibility
+seed: 42
+deterministic_ops: false

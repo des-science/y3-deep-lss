@@ -9,6 +9,7 @@ from .encoders.maps.legacy.one_d_conv import OneDConvLayers
 from .composite.resnet_summary import ResNetSummaryNetwork
 from .composite.transformer_summary import TransformerSummaryNetwork
 from .encoders.cls.mlp import MultiLayerPerceptron
+from .encoders.cls.branch_mlp import ClsBranchMLP
 from .encoders.cls.cnn import ClsConv1D
 from .encoders.cls.transformer import ClsTransformer
 
@@ -24,8 +25,11 @@ NETWORKS = {
 # call(inputs, training) -> (B, n_summary) contract on a flat (B, n_cls) input, so they are
 # drop-in swappable in GridLossModel (n_side=None). "mlp" is the default / backward-compatible
 # path; "cls_cnn" and "cls_transformer" reshape the flat vector to (bins, pairs) internally.
+# "cls_branch" is the standalone twin of the maps+Cls networks' Cls branch, built from the same
+# get_cls_embedding_layers / get_regression_head functions so the two cannot drift apart.
 CLS_NETWORKS = {
     "mlp": MultiLayerPerceptron,
+    "cls_branch": ClsBranchMLP,
     "cls_cnn": ClsConv1D,
     "cls_transformer": ClsTransformer,
 }

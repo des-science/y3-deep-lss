@@ -368,6 +368,32 @@ def main():
             residual=_mlp_arg("residual", False),
             input_transform=input_transform,
         )
+    elif net_name == "cls_branch":
+        # The standalone twin of the maps+Cls Cls branch. Flat-vector input like the MLP, but its
+        # stack comes from get_cls_embedding_layers/get_regression_head, so the two-point baseline
+        # and the Cls half of a maps+Cls run are the same function on the same data vector.
+        if scale_cut != "hard_rebinned":
+            raise ValueError(
+                f"network.name={net_name!r} requires scale_cut=hard_rebinned: the branch it mirrors is fed "
+                f"a fixed cls_n_bins per pair by ClsBinningAndTransformLayer; got scale_cut={scale_cut!r}."
+            )
+        if whitening_layer is not None:
+            raise ValueError(
+                f"network.name={net_name!r} is incompatible with PCA whitening (pca_components): the "
+                f"maps+Cls Cls branch has no whitening layer, and adding one here would defeat the point "
+                f"of the class. Remove pca_components."
+            )
+        # Non-sequential (embedding + head layer lists), like the channel nets below.
+        if z_layer == "penultimate":
+            raise ValueError(
+                f"network.name={net_name!r} does not support z_layer='penultimate' (that path assumes "
+                f"a sequential layer list); use z_layer='last'."
+            )
+        summary_net = CLS_NETWORKS[net_name](
+            output_size=n_summary,
+            input_transform=input_transform,
+            **net_kwargs,
+        )
     else:
         # Channel nets (cls_cnn / cls_transformer) reshape the flat vector to (bins, pairs) internally.
         # This needs the fixed-cls_n_bins-per-pair layout that only the hard_rebinned cache guarantees.
