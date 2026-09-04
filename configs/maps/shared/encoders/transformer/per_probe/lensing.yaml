@@ -1,0 +1,8 @@
+# Nested transformer, lensing. Pairs with ../nested.yaml, which must come FIRST in the extends:
+# list so these keys win. No smooth_nside override: lensing stays at the native n_side.
+
+network:
+  masked_attention: false  # exclude footprint-masked pixels from attention/merges/pooling
+  kwargs:
+    base_embed_dim: 32  # trunk = base_embed_dim * 2^levels = 1024, pinned across probes; nside 512
+                        # -> token_nside 16 is five levels (clustering gets four, so it needs 64)

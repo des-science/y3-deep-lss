@@ -1,0 +1,16 @@
+# Staged all-ConvNeXt GCNN, clustering. Pairs with ../../convnext.yaml, which must come FIRST in
+# the extends: list. Not shared with the classic family -- see combined.yaml.
+#
+# !! THIS PROBE'S LISTS ARE NOT COMBINED'S. !! Its map branch enters at nside 256, so the hierarchy
+# is FOUR halvings: 256 -> 128 -> 64 -> 32 -> 16. Copying combined's five-entry list would run five
+# halvings from 256 and land the trunk at nside 8 -- a silently different network. This is exactly
+# combined's list with the leading nside-512 stage dropped, so the width at every shared nside is
+# identical; all three invariants hold (first block at nside 64, trunk nside 16 x 512, 7 blocks).
+# DERIVED, not run: bench_v12 was combined-only.
+
+network:
+  smooth_nside:
+    clustering: 256
+  kwargs:
+    stage_widths: [128, 256, 512, 512]  # trunk is the LAST entry, not base_channels * 2^n
+    stage_blocks: [0, 1, 1, 5]  # 7 blocks; first at nside 64, trunk 5 at nside 16 x 512

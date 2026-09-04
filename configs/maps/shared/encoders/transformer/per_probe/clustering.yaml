@@ -1,0 +1,15 @@
+# Nested transformer, clustering. Pairs with ../nested.yaml, which must come FIRST in the extends:
+# list so these keys win.
+#
+# clustering-only, so nside 256 is the finest active smooth_nside and becomes the network's working
+# resolution: the pipeline downsamples the native-res maps to 256 and the transformer runs on those
+# ~4x fewer pixels. Raw tfrecord I/O stays at native res, so the dataloader values transfer.
+
+network:
+  smooth_nside:
+    clustering: 256
+  masked_attention: false  # exclude footprint-masked pixels from attention/merges/pooling
+  kwargs:
+    base_embed_dim: 64  # trunk = base_embed_dim * 2^levels = 1024, pinned across probes. THIS
+                        # PROBE NEEDS 64: its map branch runs at nside 256, so 256 -> token_nside
+                        # 16 is FOUR levels, not the five lensing/combined get from 512.

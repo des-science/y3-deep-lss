@@ -1,0 +1,53 @@
+# Nested hierarchical local-window transformer map encoder -- the only family, and THE PROD
+# DEFAULT. Architecture: the benchmarked winning base, bench_t8/default.yaml.
+#
+# Probe-independent: pairs with exactly one per_probe/<probe>.yaml (smooth_nside, base_embed_dim,
+# masked_attention). Kept as a named family file for the SHAPE -- every prod stub's extends: list
+# reads the same regardless of architecture, and a second family drops in beside it untouched.
+#
+# Both halves of a prod pair extend the same two files. THIS ARCHITECTURE IS WHY THAT MATTERS:
+# base_embed_dim was corrected 32 -> 64 on the clustering maps+cls copy only, the maps copy kept a
+# half-width trunk, and the two disagreed for two days under headers in both asserting the cls:
+# block was their only difference. One encoder per (family, probe) makes that impossible.
+#
+# There is no readout choice here as there is on the GCNN: the encoder mean-pools over tokens on
+# both paths, so map_pool has no meaning and is not a key.
+#
+# NOT YET BENCHMARKED maps-only: that path used to end in the encoder's own Dense(n_output) and now
+# ends in the shared regression head, one linear layer either way. No transformer maps-only run
+# exists on any dataset, so nothing on disk is invalidated -- but nothing validates it either.
+
+name: nested_transformer
+
+network:
+  name: nested_transformer
+  spmm_backend: csr  # coo / csr (cuSPARSE) / gather (XLA); csr is equivalent and faster
+  token_nside: 16
+  map_feature_dim: null  # no projection; measured at null, and a Dense here would stack two with
+                         # no activation between them
+  z_bank_size: Null
+  max_checkpoints: 50
+  jit_compile_body: true
+  precision: bfloat16
+  input_norm: true
+  head:
+    dropout_rate: 0.1  # KEEP IT ON. Turning it off cost 7.3% paired FoM at matched wall budget,
+                       # with vali_total agreeing. ARCHITECTURE-SPECIFIC -- the GCNN answers this
+                       # same call the opposite way. Measured on combined/maps+cls.
+  kwargs: # -> HealpixNestedHierarchicalLocalWindowTransformer
+    growth: double
+    num_heads: 4
+    window_levels: 3
+    local_blocks_per_level: 1
+    global_blocks: 1
+    mlp_ratio: 4
+    layerscale_init: null
+    fp32_softmax: true
+    block_dropout_rate: null  # drops activations; drop_path_rate below drops whole branches
+    drop_path_rate: 0.0  # OFF, stated so the negative result is recorded: at 0.1 with head dropout
+                         # off the loss went non-finite inside 100 steps on two independent inits.
+                         # Never tried with head dropout ON, so read this as "off, and not worth
+                         # another 12 h" rather than "off, proven". At 0.0 the layer is not built,
+                         # so adding the key does not touch checkpoint lineage.
+    pos_encoding: null  # null (position-free) or geodesic (distance-kernel attention bias)
+    merge_op: concat  # concat (order-sensitive concat+Dense) or deepsets (needs a pos_encoding)

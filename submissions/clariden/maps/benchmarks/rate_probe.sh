@@ -104,19 +104,31 @@ DATA_CONFIG="$DEEP_LSS/configs/data/${DATA}.yaml"
 # smoothing and all.
 PROBE_CONFIG="$NET_CONFIG"
 
+# The net config is composed: prod configs pull their dset: and cls: blocks in from shared/ via
+# extends:, so grepping the file itself finds nothing (and the old batch-size grep matched on
+# indentation depth, which composition changes anyway). Resolve once, read the key=value dump.
+# Under srun because a bare python3 on a Clariden node is 3.6 with no yaml.
+RESOLVED_NET="${LOG%.log}_net_config.txt"
+srun --environment=tensorflow --gpu-bind=none --output="$RESOLVED_NET" \
+    python -m deep_lss.utils.config_check resolve "$NET_CONFIG" --flat
+if [ $? -ne 0 ]; then
+    echo "Could not resolve $NET_CONFIG — see $RESOLVED_NET." >&2
+    exit 1
+fi
+
 echo "=== rate_probe: $TAG"
 echo "    net config : $NET_CONFIG"
 echo "    timed steps: $PROBE_STEPS"
-echo "    batch      : $(grep -E '^[[:space:]]{4,}local_batch_size:' "$NET_CONFIG" | head -1 | tr -s ' ')"
+echo "    batch      : $(grep -E '^dset\.training\.grid\.local_batch_size=' "$RESOLVED_NET" | cut -d= -f2)"
 echo "    run dir    : $RUN_DIR"
 
 # --- Cls precache (maps+cls configs only) --------------------------------------------------------
 
 # run_training.py only READS the rebinned-Cls cache and aborts if it is missing. Normally it is
 # already built; this is here so a rate probe on a fresh dataset is not a confusing failure.
-CLS_N_BINS=$(grep -E '^\s*n_bins:' "$NET_CONFIG" | head -1 | grep -oE '[0-9]+')
-CLS_CACHE="$INPUT/cls/rebinned_nb${CLS_N_BINS:-16}_${SCALES}.h5"
-if grep -qE '^\s*cls:' "$NET_CONFIG" && [ ! -f "$CLS_CACHE" ]; then
+CLS_N_BINS=$(grep -E '^network\.cls\.n_bins=' "$RESOLVED_NET" | cut -d= -f2)
+CLS_CACHE="$INPUT/cls/rebinned_nb${CLS_N_BINS}_${SCALES}.h5"
+if grep -qE '^network\.cls\.' "$RESOLVED_NET" && [ ! -f "$CLS_CACHE" ]; then
     echo "Cls cache $CLS_CACHE is missing; build it with maps/training.sh before probing." >&2
     exit 1
 fi

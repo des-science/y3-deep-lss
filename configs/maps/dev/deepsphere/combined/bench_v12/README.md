@@ -423,6 +423,65 @@ match.
 reaching the same 512-wide nside-16 trunk from a lower input nside in one halving fewer. Its stage
 list must be derived from its own parked file; copying combined's would silently change its trunk.
 
+## Results (2026-09-04)
+
+Paired CosmoGrid FoM, 1000 mocks, combined/maps+cls, seed floor **0.049**. A ratio is written as
+`A vs B`, so a value above 1.000 favours A.
+
+| contrast | ratio | read |
+|---|---|---|
+| `classic_nodrop` vs `bench_v7_full` (the OLD prod default) | **1.029** | `=` a wash |
+| `classic_nodrop` vs `bench_v11_simple` (same block, dropout 0.1) | **1.076** | resolved WIN |
+| `classic_nodrop` vs `staged_nodrop` | **1.046** | resolved WIN |
+| `staged_nodrop` vs `bench_v7_full` | **0.988** | `=` a wash |
+| `staged_nodrop` vs `staged_nodrop_droppath` | **0.954** | DropPath is a LOSS here |
+| `staged_nodrop` vs `bench_v7_full`, DropPath on | **0.938** | same, against the old default |
+
+Q4 DES/fid divergence: `classic_nodrop` **0.659**, `bench_v7_full` **0.629**, `staged_nodrop`
+**0.549** -- the staged layout carries the worst DES-vs-sim divergence in the whole v18 table.
+DES FoM is unsigned and ranks nothing, so this is a flag, not a score.
+
+**The step confound runs against the staged arm.** `staged_nodrop` reached 0.956-vs-classic having
+trained on **14% MORE** steps; discounted at the measured +7.3%-per-2x budget elasticity that is
+~0.943, outside the floor. `classic_nodrop` reached its 1.029 wash against prod on ~8% FEWER steps,
+being the slower block per step (3.015 vs ~3.25 it/s).
+
+### Two resolved knobs, and one that does not transfer
+
+- **Head dropout, GCNN: OFF.** `classic_nodrop` vs `bench_v11_simple` = 1.076, with `vali_total`
+  agreeing independently (-10.333 vs -10.129).
+- **Head dropout, transformer: ON.** `transformer_nodrop` LOST 7.3% against `transformer`, also
+  resolved, also with `vali_total` agreeing (-6.51 vs -10.77).
+
+Same knob, same `get_regression_head` call, **opposite sign by architecture**. Do not transfer
+either answer across the two. It remains untested on the ConvNeXt block: `staged` (job 3262004) is
+the arm that measures it and was still queued when this was written.
+
+- **DropPath** stays block-dependent: +5.0% on the legacy ConvNeXt stack, 0.946 on classic, and
+  0.954 in the staged layout, which doses 7 blocks where the legacy one dosed 5.
+
+### What prod resolves to, and why it is not the winner
+
+`configs/maps/shared/encoders/deepsphere/convnext.yaml` is `staged_nodrop`, and the six deepsphere
+prod stubs extend it. That was adopted **for architectural consistency, deliberately and against
+the FoM** -- nothing but strided PseudoConvs and ConvNeXt blocks, so the network is one consistent
+thing to describe and to draw beside the transformer in `paper_2_tex/figures/architectures.tex`.
+`STAGED_LAYOUT.md` anticipated "a change adopted for consistency, not for FoM"; the expected wash
+came in as a small loss. Say that in the paper rather than implying the block was chosen on
+performance.
+
+On the evidence above `classic.yaml` is the better network, and the standing tie rule agrees: at a
+wash the simpler net wins, and classic drops four things the staged layout carries (the ConvNeXt
+block with `mlp_ratio` and `layer_scale_init`, DropPath, residual attention, and head dropout).
+Q2 robustness is every row `=` against prod and Q3 is in-cohort with the paired HPD spanning zero,
+so no other gate separates them. Switching prod is two lines per stub -- the family file and its
+`per_probe/<family>/<probe>.yaml` partner.
+
+**COMBINED ONLY.** This round was deliberately scoped to one probe, and bench_v11 has already
+produced a probe-DEPENDENT answer once (`mean_std`: +6.9% combined, a wash on lensing, a resolved
+-6.7% LOSS on clustering). Lensing and clustering are a hypothesis here, not a result; the
+transplant runs are the check.
+
 ## Scoring
 
 **`compare-runs` (`run_comparison`), paired FoM, never by eye.** Floor **0.049**; a ratio inside

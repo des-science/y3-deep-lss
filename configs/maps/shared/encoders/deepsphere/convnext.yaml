@@ -1,0 +1,51 @@
+# DeepSphere ResNet GCNN map encoder -- STAGED ALL-CONVNEXT layout. A COMPARISON TRACK, NOT PROD.
+#
+# Nothing but strided HealpyPseudoConvs and ConvNeXt blocks: every width change is a PseudoConv,
+# every graph convolution lives inside a block, no bare Chebyshev conv + LayerNorm slots remain.
+# Architecture: bench_v12 `staged_nodrop`. Layer walk, cost and the smoke test are in
+# maps/dev/deepsphere/combined/bench_v12/STAGED_LAYOUT.md.
+#
+# !! IT LOSES TO classic.yaml, WHICH IS WHAT THE PROD STUBS EXTEND. !! 1.046 against it on paired
+# CosmoGrid FoM, and it carries the worst DES-vs-sim divergence in the v18 table (Q4 DES/fid 0.549
+# against classic's 0.659). It is kept because it is the layout that draws cleanly beside the
+# transformer in paper_2_tex/figures/architectures.tex -- if the paper wants one consistent block
+# type, this is the file, and that is a decision to argue for explicitly rather than inherit. Read
+# the Results section of maps/dev/deepsphere/combined/bench_v12/README.md first.
+#
+# Probe-independent: pairs with exactly one per_probe/convnext/<probe>.yaml, which supplies
+# smooth_nside and the two stage lists. !! THOSE FILES ARE NOT SHARED WITH THE CLASSIC FAMILY. !!
+# stage_widths is itself the switch that selects the staged code path (resnet.py:235), so a shared
+# file would silently rebuild the classic network as staged; a family swap changes BOTH extends
+# lines. Both halves of a prod pair extend the same two files, so there is one encoder per
+# (family, probe) and the pair cannot drift.
+#
+# !! THE POOLED READOUT IS NOT BENCHMARKED ON THE MAPS-ONLY PATH, AND IS NOT SCHEDULED TO BE. !!
+# It was switched on ON REQUEST, AHEAD OF THE EVIDENCE: the contrast that would have validated it
+# (flatten vs mean, maps-only) was written as bench_v11 and then shelved to its _deferred/ when
+# that round was re-scoped to maps+Cls only. This default rests on the maps+Cls +32.1%
+# flatten->mean result transplanted across paths. Reverting is deleting the map_pool line.
+
+name: deepsphere_default
+
+network:
+  name: resnet
+  n_neighbors: 60
+  spmm_backend: csr
+  max_checkpoints: 50
+  save_second_to_last_layer: False
+  z_bank_size: Null
+  input_norm: true
+  map_pool: mean  # readout over the (footprint-only) pixel axis instead of flatten
+  map_feature_dim: null  # the pooled map is already trunk-wide; no projection
+  kwargs:
+    # No conv_layers / residual_layers / base_channels / pool_layers: the stage lists in
+    # per_probe/convnext/<probe>.yaml replace all four wholesale (resnet.py:233).
+    residual_block_type: convnext
+    mlp_ratio: 4
+    layer_scale_init: 1.0e-6
+    drop_path_rate: 0.0  # a resolved LOSS in this layout (0.954); it doses 7 blocks here, not 5
+    poly_degree: 5  # ChebK order of each block's depthwise conv; conv_type no longer applies
+    head_type: "dense"
+    dense_layers: []
+    dropout_rate: null  # matches staged_nodrop; untested at 0.1 in this layout. ARCHITECTURE-
+                        # SPECIFIC -- the transformer answers this knob the opposite way.

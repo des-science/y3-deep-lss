@@ -106,12 +106,30 @@ check_stage() {
 
 # --- Stage 0: Cls precache (maps+cls runs only) ----------------------------------------------
 
+# The net config is composed: prod configs pull their cls: block in from maps/shared/cls_branch.yaml
+# via extends:, so grepping the file itself finds nothing. Resolve it once and read the resolved
+# key=value dump instead. This runs under srun because a bare python3 on a Clariden node is 3.6
+# with no yaml.
+RESOLVED_NET="${LOG}_net_config.txt"
+srun --environment=tensorflow --gpu-bind=none --output="$RESOLVED_NET" \
+    python -m deep_lss.utils.config_check resolve "$NET_CONFIG" --flat
+check_stage $? "Net config resolution" "$RESOLVED_NET"
+
 # run_training.py only reads the rebinned-Cls calibration cache and aborts if it is missing, so
 # build it here when the net config carries a cls block and the cache is absent. Idempotent.
-CLS_N_BINS=$(grep -E '^\s*n_bins:' "$NET_CONFIG" | head -1 | grep -oE '[0-9]+')
-CLS_CACHE="$INPUT/cls/rebinned_nb${CLS_N_BINS:-16}_${SCALES}.h5"
+IS_MAPS_CLS=0; grep -qE '^network\.cls\.' "$RESOLVED_NET" && IS_MAPS_CLS=1
+CLS_N_BINS=$(grep -E '^network\.cls\.n_bins=' "$RESOLVED_NET" | cut -d= -f2)
 
-if grep -qE '^\s*cls:' "$NET_CONFIG" && [ ! -f "$CLS_CACHE" ]; then
+# A maps+cls config without an n_bins is a broken config, not a reason to guess: the cache name has
+# to match what the training job will look for, so fail rather than build the wrong file. (This
+# used to default to 16, which would silently point at another config's cache.)
+if [ "$IS_MAPS_CLS" = "1" ] && [ -z "$CLS_N_BINS" ]; then
+    echo "maps+cls run but network.cls.n_bins is unset in $NET_CONFIG — cannot name the Cls cache." >&2
+    exit 1
+fi
+CLS_CACHE="$INPUT/cls/rebinned_nb${CLS_N_BINS}_${SCALES}.h5"
+
+if [ "$IS_MAPS_CLS" = "1" ] && [ ! -f "$CLS_CACHE" ]; then
     echo "maps+cls run: Cls cache $CLS_CACHE missing — building it before training."
     srun --environment=tensorflow --gpu-bind=none --output="${LOG}_precache.log" \
         python "$DEEP_LSS/deep_lss/apps/run_cls_training+evaluation.py" \

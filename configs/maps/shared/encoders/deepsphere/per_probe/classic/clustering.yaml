@@ -1,0 +1,13 @@
+# Classic-block GCNN, clustering. Pairs with ../../classic.yaml, which must come FIRST in the
+# extends: list. Not shared with the convnext family, which takes stage lists instead.
+#
+# Clustering is the only active probe, so its smooth_nside 256 sets the network's WORKING
+# resolution: the pipeline downsamples to 256 and the GCNN runs there. One fewer halving to spend
+# than lensing, so 128 x 2 rather than 64 x 3 -- the trunk still has to land at 512.
+
+network:
+  smooth_nside:
+    clustering: 256
+  kwargs:
+    base_channels: 128  # trunk = base_channels * 2^pool_layers = 512, pinned across probes
+    pool_layers: 2

@@ -1,0 +1,15 @@
+# Wall-clock budget: a single 12 h job. Used by the lensing and clustering prod configs.
+#
+# n_steps is an OUTPUT of the budget -- the cosine anneals to zero exactly when the allocation runs
+# out. `auto` REQUIRES wall_budget_seconds; run_training.py raises otherwise, but only after the job
+# has been queued and started. wall is the budget for the WHOLE run, job is this job's share of it;
+# keep job <= wall, or the share never binds and a chain silently does twice the intended work.
+
+training:
+  n_steps: auto
+  wall_budget_seconds: 39600  # the WHOLE run -- 1 x 12 h
+  job_budget_seconds: 39600  # this job's share (11 h of 12 h; ~1 h for the eval tail)
+  output_every: Null
+  checkpoint_every: 5000
+  vali_every: 1000
+  eval_every: Null

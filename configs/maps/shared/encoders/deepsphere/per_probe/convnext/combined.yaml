@@ -1,0 +1,18 @@
+# Staged all-ConvNeXt GCNN, combined probes. Pairs with ../../convnext.yaml, which must come FIRST
+# in the extends: list so these keys win.
+#
+# !! NOT SHARED WITH THE CLASSIC FAMILY. !! stage_widths is what selects the staged code path
+# (resnet.py:235), so inheriting it into a classic config would silently rebuild that network as
+# staged.
+#
+# Both probes active: lensing stays at the native n_side while clustering is smoothed at nside 256
+# and injected there (HealpixMultiResMapEncoder), so the network takes lensing's 5 halvings.
+# 512 -> 256 -> 128 -> 64 -> 32 -> 16; each entry is a strided PseudoConv of that width followed by
+# that many channel-preserving blocks. Verified layer walk in bench_v12/STAGED_LAYOUT.md.
+
+network:
+  smooth_nside:
+    clustering: 256
+  kwargs:
+    stage_widths: [64, 128, 256, 512, 512]  # trunk is the LAST entry, not base_channels * 2^n
+    stage_blocks: [0, 0, 1, 1, 5]  # 7 blocks; first at nside 64, trunk 5 at nside 16 x 512

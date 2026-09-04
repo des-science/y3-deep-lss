@@ -1,0 +1,17 @@
+# Nested transformer, combined probes. Pairs with ../nested.yaml, which must come FIRST in the
+# extends: list so these keys win.
+#
+# NOTE the absent masked_attention key: lensing and clustering set it explicitly to false, this
+# probe takes the code-side default (also false, run_training.py:825). Preserved rather than
+# normalized so the composed config is what bench_v12 actually ran on; setting it would be a
+# behavioral no-op.
+#
+# clustering (fwhm >= 57') is smoothed at nside 256 and injected at its native scale; lensing stays
+# at the native n_side. See scale_cuts.clustering.theta_fwhm_base in the scales config.
+
+network:
+  smooth_nside:
+    clustering: 256
+  kwargs:
+    base_embed_dim: 32  # trunk = base_embed_dim * 2^levels = 1024, pinned across probes; nside 512
+                        # -> token_nside 16 is five levels (clustering gets four, so it needs 64)

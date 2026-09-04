@@ -1,115 +1,19 @@
-# DeepSphere ResNet GCNN -- lensing, maps + Cls.
-# Architecture: bench_v12 `classic_nodrop` -- THE BEST-PERFORMING GCNN MEASURED, either block
-# family. Adopted as the production GCNN 2026-09-04. Evidence, the step confound and the other
-# gates: ../../../dev/deepsphere/combined/bench_v12/README.md. Three things it drops versus the
-# bench_v7 `full` stack this replaces -- the ConvNeXt block, DropPath, and residual attention --
-# and it still wins 1.046 paired FoM against the staged all-ConvNeXt layout and ties `full` at
-# 1.029, so the tie rule takes the simpler net.
+# DeepSphere GCNN (classic residual block) -- lensing only, maps + Cls.
+# Composed from configs/maps/shared/; this file defines nothing itself. Resolved at load time
+# and saved to the run dir FULLY RESOLVED, so a restore never re-resolves against an edited base.
+# Do NOT grep it -- the keys are not in it:
+#   python -m deep_lss.utils.config_check resolve <this file> --flat
 #
-# !! COMBINED ONLY. !! bench_v12 was scoped to one probe and bench_v11 has already produced a
-# probe-DEPENDENT answer once, so lensing and clustering are a hypothesis here, not a result.
-# The combined production run is the measured one; these two are its transplant.
+# Partner maps.yaml is this file without the maps/shared/cls_branch.yaml base; one shared
+# encoder, so the pair cannot disagree about the network.
 #
-# NO ATTENTION and no ConvNeXt-only keys (mlp_ratio, layer_scale_init): the arm this was
-# scaffolded from carries neither, so what is here is what was run, not `full` minus a block.
-#
-# THE ONLY DIFFERENCE VS maps.yaml IS THE `cls:` BLOCK. Both build one ResNetSummaryNetwork over
-# the same map branch; the cls: block decides only whether a Cls branch is concatenated onto the
-# map features before the regression head. map_pool therefore means exactly the same thing in both
-# files -- there is one implementation of the readout, not two.
-name: deepsphere_default
+# Family swap (-> convnext) means changing BOTH encoder lines: per_probe is namespaced by family
+# because stage_widths is what selects the staged code path. See shared/encoders/deepsphere/.
 
-training:
-  n_steps: auto  # an OUTPUT of the wall-clock budget; see throughput.json
-  wall_budget_seconds: 39600  # TRAINING seconds for the WHOLE run -- 1 x 12 h
-  job_budget_seconds: 39600  # this job's share (11 h of 12 h; ~1 h for the eval tail)
-  output_every: Null
-  checkpoint_every: 5000
-  vali_every: 1000
-  eval_every: Null
-
-optimization:
-  optimizer: adam
-  gradient_clipping:
-    clip_by_value: null
-    clip_by_norm: null
-    clip_by_global_norm: 1.0
-  mutual_info_loss:
-    learning_rate: 1.0e-4
-    optimizer_kwargs:
-      beta_1: 0.9
-      beta_2: 0.999
-    scheduler: cosine
-    warmup_steps: 5000
-    warmup_init_learning_rate: 1.0e-5
-    decay_alpha: 0.0
-    ema_momentum: null
-
-network:
-  name: resnet
-  n_neighbors: 60
-  spmm_backend: csr
-  max_checkpoints: 50
-  save_second_to_last_layer: False
-  z_bank_size: Null
-  input_norm: true
-  map_pool: mean  # readout over the (footprint-only) pixel axis instead of flatten
-  map_feature_dim: null  # the pooled map is already trunk-wide; no projection
-  cls:
-    n_bins: 16
-    transform: asinh_per_feature
-    asinh_default_scale: null
-    embedding_layers: [512, 512, 512, 512]  # last entry matches the 512-d pooled map
-    embedding_dropout_rate: 0.1
-  kwargs:
-    base_channels: 64  # trunk = base_channels * 2^pool_layers = 512, pinned across probes
-    pool_layers: 3
-    conv_layers: 2
-    residual_layers: 5
-    residual_block_type: residual  # the code default too, stated so the family is visible in the
-                                   # `config_check resolve` dump; same value, so no lineage change
-    drop_path_rate: 0.0  # OFF on evidence: 0.946, a LOSS, on this block (bench_v11)
-    poly_degree: 5
-    head_type: "dense"
-    dense_layers: []
-    dropout_rate: null  # OFF: +7.6% paired FoM vs 0.1 on this block, vali_total agreeing.
-                        # ARCHITECTURE-SPECIFIC -- the transformer keeps it ON, same call.
-
-dset:
-  # CANONICAL DATALOADER -- every VALUE here is identical in all twelve prod configs, both
-  # architectures and all three probes; local_batch_size is 16 throughout. Only comments differ,
-  # and only where the fact does: the NCCL-band note is a transformer constraint (the GCNN is
-  # not memory-bound), and clustering carries its own I/O-bound batch-sweep note.
-  # n_workers MUST stay set. Left null, the interleave, parse and augment stages all go to
-  # tf.data.AUTOTUNE, whose ram_budget defaults to half the NODE's memory -- on a GH200 that is half
-  # of the 870 GB UNIFIED pool (Grace + HBM), so ~425 GiB against a 450 GiB cgroup, leaving nothing
-  # for the model. Four bench_v12 GCNN jobs were OOM-killed 2-8 h in exactly that way (2026-09-01).
-  # msfm now also caps the budget from SLURM_MEM_PER_NODE (base_pipeline.apply_autotune_ram_budget),
-  # so this is belt and braces rather than the only guard.
-  training:
-    common:
-      is_eval: False
-      n_readers: 16
-      n_prefetch: 4
-      n_workers: 128
-    grid:
-      local_batch_size: 16
-      file_name_shuffle_buffer: 64
-      examples_shuffle_buffer: 1024
-  validation:
-    n_batches: 50
-    common:
-      is_eval: True
-      n_readers: 8
-      n_prefetch: 2
-      n_workers: 16
-    grid:
-      local_batch_size: 16
-  eval:
-    common:
-      is_eval: True
-      n_readers: 16
-      n_prefetch: 2
-      n_workers: 128
-    grid:
-      local_batch_size: 16
+extends:
+  - maps/shared/dataloader.yaml
+  - maps/shared/optimization.yaml
+  - maps/shared/budget/1x12h.yaml
+  - maps/shared/encoders/deepsphere/classic.yaml
+  - maps/shared/encoders/deepsphere/per_probe/classic/lensing.yaml
+  - maps/shared/cls_branch.yaml  # <- this line is the whole maps+cls distinction

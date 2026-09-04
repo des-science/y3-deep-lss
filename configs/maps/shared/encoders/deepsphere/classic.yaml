@@ -1,0 +1,53 @@
+# DeepSphere ResNet GCNN map encoder -- CLASSIC residual block family. THE PROD DEFAULT.
+#
+# THE BEST-PERFORMING GCNN MEASURED, EITHER FAMILY (bench_v12, combined, 2026-09-04): a wash
+# against the bench_v7 `full` stack it replaced and a resolved win over both the staged all-ConvNeXt
+# layout and its own dropout-on variant. The promotion rests on the tie rule, not on beating the old
+# default. Numbers, the step confound and the other gates:
+# maps/dev/deepsphere/combined/bench_v12/README.md.
+#
+# !! CHANGING THIS FILE CHANGES WHAT PROD RESOLVES TO. !! All six deepsphere prod stubs extend it.
+#
+# !! COMBINED ONLY. !! bench_v12 was scoped to one probe, and bench_v11 has already produced a
+# probe-DEPENDENT answer once. Lensing and clustering are a hypothesis here, not a result.
+#
+# Two deliberate omissions, both inherited from the arm this was scaffolded from
+# (maps/dev/deepsphere/combined/bench_v12/classic_nodrop.yaml), so what is here is what was run:
+#
+#   1. NO ATTENTION -- that arm omits residual_attention_every and residual_attention entirely.
+#      convnext.yaml omits them too (staged_nodrop carries no attention either), so the two
+#      families differ ONLY in block type and layout. residual_attention now survives in exactly
+#      one place, bench_v7/full.yaml, the old prod default this replaced.
+#   2. drop_path_rate 0.0, not by omission: it measured 0.946, a LOSS, on this block in bench_v11.
+#
+# mlp_ratio and layer_scale_init are ConvNeXt-only (resnet.py:137-139) and are therefore ABSENT
+# rather than set -- composition cannot delete an inherited key, so they must never be inherited.
+# That is why this file is a sibling of convnext.yaml and does not extend it.
+#
+# Pairs with per_probe/classic/<probe>.yaml. !! THOSE FILES ARE NOT SHARED WITH THE CONVNEXT
+# FAMILY. !! See convnext.yaml, which also carries the standing caveat that the pooled readout is
+# unbenchmarked on the maps-only path.
+
+name: deepsphere_default
+
+network:
+  name: resnet
+  n_neighbors: 60
+  spmm_backend: csr
+  max_checkpoints: 50
+  save_second_to_last_layer: False
+  z_bank_size: Null
+  input_norm: true
+  map_pool: mean  # readout over the (footprint-only) pixel axis instead of flatten
+  map_feature_dim: null  # the pooled map is already trunk-wide; no projection
+  kwargs:
+    conv_layers: 2
+    residual_layers: 5
+    residual_block_type: residual  # the code default too, stated so the family is visible in
+                                   # `resolve` output; same value, so no lineage change
+    drop_path_rate: 0.0  # measured 0.946 (a LOSS) on this block in bench_v11; off on evidence
+    poly_degree: 5
+    head_type: "dense"
+    dense_layers: []
+    dropout_rate: null  # OFF: +7.6% paired FoM vs 0.1 on this block, vali_total agreeing.
+                        # ARCHITECTURE-SPECIFIC -- the transformer keeps it ON, same call.

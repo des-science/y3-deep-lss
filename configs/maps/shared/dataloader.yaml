@@ -1,0 +1,40 @@
+# Canonical maps dataloader: the dset: block for every prod maps run, both architectures, all three
+# probes. local_batch_size 16 throughout.
+#
+# n_workers MUST stay set. Left null, the interleave/parse/augment stages go to tf.data.AUTOTUNE,
+# whose ram_budget defaults to half the NODE's memory -- on a GH200 that is half of the 870 GB
+# UNIFIED Grace+HBM pool, ~425 GiB against a 450 GiB cgroup. Four bench_v12 GCNN jobs were
+# OOM-killed 2-8 h in exactly that way (2026-09-01). msfm now also caps it from SLURM_MEM_PER_NODE,
+# so this is belt and braces.
+#
+# Raw tfrecord I/O is at native resolution for every probe, so these values transfer even where the
+# network's working resolution differs (clustering runs its map branch at nside 256).
+
+dset:
+  training:
+    common:
+      is_eval: False
+      n_readers: 16
+      n_prefetch: 4
+      n_workers: 128
+    grid:
+      local_batch_size: 16
+      file_name_shuffle_buffer: 64
+      examples_shuffle_buffer: 1024
+  validation:
+    n_batches: 50  # monitoring only; matches what the bench_v12 arms ran
+    common:
+      is_eval: True
+      n_readers: 8
+      n_prefetch: 2
+      n_workers: 16
+    grid:
+      local_batch_size: 16
+  eval:
+    common:
+      is_eval: True
+      n_readers: 16
+      n_prefetch: 2
+      n_workers: 128
+    grid:
+      local_batch_size: 16

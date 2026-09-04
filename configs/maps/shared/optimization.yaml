@@ -1,0 +1,22 @@
+# Adam + warmup-cosine: the optimization: block for every prod maps run, identical across both
+# architectures and all three probes.
+#
+# The learning rates carry an explicit decimal point on purpose -- a bare `1e-4` is a STRING in
+# YAML 1.1, and nothing downstream necessarily complains (config_check flags it).
+
+optimization:
+  optimizer: adam
+  gradient_clipping:
+    clip_by_value: null
+    clip_by_norm: null
+    clip_by_global_norm: 1.0
+  mutual_info_loss:
+    learning_rate: 1.0e-4
+    optimizer_kwargs:
+      beta_1: 0.9
+      beta_2: 0.999
+    scheduler: cosine
+    warmup_steps: 5000
+    warmup_init_learning_rate: 1.0e-5
+    decay_alpha: 0.0
+    ema_momentum: null

@@ -1,0 +1,15 @@
+# Wall-clock budget: a 2 x 12 h chain, for the combined prod configs. Chain with
+# submissions/clariden/maps/training_chainer.sh; the second job restores the checkpoint.
+#
+# See budget/1x12h.yaml for what n_steps: auto and the two budget keys mean. The only difference is
+# wall_budget_seconds: the whole run gets 79200 s while each job still takes a 39600 s share, which
+# is what makes this a two-job chain rather than one long job.
+
+training:
+  n_steps: auto
+  wall_budget_seconds: 79200  # the WHOLE run -- 2 x 12 h chain
+  job_budget_seconds: 39600  # this job's share (11 h of 12 h; ~1 h for the eval tail)
+  output_every: Null
+  checkpoint_every: 5000
+  vali_every: 1000
+  eval_every: Null

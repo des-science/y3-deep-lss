@@ -1,0 +1,10 @@
+# Staged all-ConvNeXt GCNN, lensing. Pairs with ../../convnext.yaml, which must come FIRST in the
+# extends: list. Not shared with the classic family -- see combined.yaml.
+#
+# No smooth_nside override: no clustering channel to inject, so the whole map branch runs at the
+# native n_side and the hierarchy is combined's 5 halvings verbatim. 512 -> 256 -> 128 -> 64 -> 32 -> 16.
+
+network:
+  kwargs:
+    stage_widths: [64, 128, 256, 512, 512]  # trunk is the LAST entry, not base_channels * 2^n
+    stage_blocks: [0, 0, 1, 1, 5]  # 7 blocks; first at nside 64, trunk 5 at nside 16 x 512

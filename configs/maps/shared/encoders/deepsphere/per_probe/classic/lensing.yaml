@@ -1,0 +1,10 @@
+# Classic-block GCNN, lensing. Pairs with ../../classic.yaml, which must come FIRST in the
+# extends: list. Not shared with the convnext family, which takes stage lists instead.
+#
+# No smooth_nside override: lensing stays at the native n_side, so 512 with 3 pool layers at
+# base_channels 64 is the 512 trunk.
+
+network:
+  kwargs:
+    base_channels: 64  # trunk = base_channels * 2^pool_layers = 512, pinned across probes
+    pool_layers: 3

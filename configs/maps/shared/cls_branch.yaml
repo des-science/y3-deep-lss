@@ -1,0 +1,20 @@
+# THE Cls BRANCH. Extending this file is what makes a run maps+Cls; not extending it is what makes
+# the same encoder maps-only. Maps+Cls is enabled by the mere PRESENCE of a cls: block, so there is
+# no on/off flag to get wrong -- the block is either composed in or it is not.
+#
+# n_bins must match the rebinned-Cls calibration cache the training job reads
+# (data/<version>/<subversion>/cls/rebinned_nb<n_bins>_<scales>.h5); the submission scripts build
+# that cache from this value, so changing it changes which cache is required.
+#
+# transform: asinh_per_feature is what drove the v33 -> v37 Cls gain, not the PCA that landed with
+# it. The embedding widths are uniform across architectures although the map trunks are not (GCNN
+# pools to 512, transformer to 1024); map_feature_dim stays null on both, so nothing is projected
+# before the concat.
+
+network:
+  cls:
+    n_bins: 16
+    transform: asinh_per_feature
+    asinh_default_scale: null
+    embedding_layers: [512, 512, 512, 512]
+    embedding_dropout_rate: 0.1
