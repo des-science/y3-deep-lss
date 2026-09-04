@@ -33,7 +33,7 @@ os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
 from msfm.grid_pipeline import GridPipeline
 from msfm.utils import input_output, files
 
-from deep_lss.utils import configuration
+from deep_lss.utils import config_compose, configuration
 
 
 def _vmhwm_gb():
@@ -81,7 +81,7 @@ class RSSSampler(threading.Thread):
 
 def build_dataset(args, params_dset):
     """Reconstruct the exact training grid pipeline for one parameter choice."""
-    net_conf = input_output.read_yaml(args.net_config)
+    net_conf = config_compose.load_composed(args.net_config)
     dlss_conf = configuration.read_split_configs(args.probes_config, args.scales_config)
     data_conf = input_output.read_yaml(args.data_config)
     msfm_conf = files.load_config(args.msfm_config)

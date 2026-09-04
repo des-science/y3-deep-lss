@@ -84,14 +84,14 @@ def run_single(args):
             pass
 
     from msfm.utils import input_output, files
-    from deep_lss.utils import configuration, optimization
+    from deep_lss.utils import config_compose, configuration, optimization
     from deep_lss.models.grid_model import GridLossModel
     from deep_lss.nets import NETWORKS
     from deep_lss.nets.composite.resnet_summary import ResNetSummaryNetwork
     from deep_lss.nets.encoders.maps.gcnn.resnet_multires import ResNetMultiResEncoder
     from deep_lss.nets.layers.cls.embedding import get_cls_branch_kwargs
 
-    net_conf = input_output.read_yaml(args.net_config)
+    net_conf = config_compose.load_composed(args.net_config)
     dlss_conf = configuration.read_split_configs(args.probes_config, args.scales_config)
     loss_conf = input_output.read_yaml(args.loss_config)
     msfm_conf = files.load_config(args.msfm_config)

@@ -61,6 +61,7 @@ from msfm.utils import logger, input_output, files, parameters
 from deep_lss.utils import (
     distribute,
     configuration,
+    config_compose,
     evaluation,
     optimization,
     delta_loss,
@@ -332,7 +333,7 @@ def training(args=None):
     # initialize a fresh model
     if not args.restore_checkpoint:
         # load the configs
-        net_conf = input_output.read_yaml(os.path.join(args.repo_dir, args.net_config))
+        net_conf = config_compose.load_composed(os.path.join(args.repo_dir, args.net_config))
         dlss_conf = configuration.read_split_configs(args.probes_config, args.scales_config)
         loss_conf = input_output.read_yaml(args.loss_config)
         data_conf = input_output.read_yaml(args.data_config)

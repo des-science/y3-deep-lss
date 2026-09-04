@@ -18,7 +18,7 @@ LOGGER = logger.get_logger(__file__)
 from deep_lss.models.grid_model import GridLossModel
 from deep_lss.nets import CLS_NETWORKS, MultiLayerPerceptron
 from deep_lss.nets.layers.cls.whitening import AsinhScaleLayer, PCAWhiteningLayer
-from deep_lss.utils import cls_evaluation, configuration, evaluation, training_helpers
+from deep_lss.utils import cls_evaluation, config_compose, configuration, evaluation, training_helpers
 
 from msi.utils import dataset
 
@@ -119,7 +119,7 @@ def main():
     from msfm.utils import input_output
 
     dlss_conf = configuration.read_split_configs(args.probes_config, args.scales_config)
-    net_conf = input_output.read_yaml(args.net_config)
+    net_conf = config_compose.load_composed(args.net_config)
     cls_n_bins = net_conf.get("cls_n_bins", 16)
 
     seed = net_conf.get("seed", 42)

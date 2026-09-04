@@ -39,6 +39,8 @@ import re
 
 import yaml
 
+from deep_lss.utils import config_compose
+
 # A float written without a decimal point or a sign on the exponent is not a float to YAML 1.1 --
 # it is a string, and nothing downstream necessarily complains.
 _BARE_EXPONENT = re.compile(r"^[-+]?\d+(\.\d*)?[eE][-+]?\d+$")
@@ -59,15 +61,13 @@ def flatten(node, prefix=""):
 
 
 def load(path):
-    """Parse one config, failing with the file name attached rather than a bare parser error."""
-    with open(path) as f:
-        try:
-            cfg = yaml.safe_load(f)
-        except yaml.YAMLError as exc:
-            raise ValueError(f"{path}: not parseable as YAML -- {exc}")
-    if not isinstance(cfg, dict):
-        raise ValueError(f"{path}: parsed as {type(cfg).__name__}, expected a mapping")
-    return cfg
+    """Parse one config, resolving any ``extends:`` chain so checks see what the run would see.
+
+    Everything here operates on the RESOLVED tree. Checking the raw file instead would report a
+    config that inherits `wall_budget_seconds` as violating the `n_steps: auto` contract, and would
+    report every inherited key as absent in the asymmetric-key-set note.
+    """
+    return config_compose.load_composed(path)
 
 
 def diff(parent_path, child_path):
@@ -95,6 +95,52 @@ def format_diff(parent_path, child_path, changes):
             "  MORE THAN ONE KNOB. If these are meant to be one contrast, the result cannot be "
             "attributed to either change; state which knob the arm is testing."
         )
+    return "\n".join(lines)
+
+
+def format_resolved(path, flat_output):
+    """Render one resolved config: as YAML, or as `dotted.key=value` lines for a shell to read.
+
+    The flat form exists so submission scripts stop parsing YAML themselves. They used to grep the
+    net config for `cls:` and `n_bins:` (and, by indentation depth, `local_batch_size:`) -- all of
+    which go dark the moment a key moves into a base file.
+    """
+    cfg = load(path)
+    if not flat_output:
+        return yaml.dump(cfg, default_flow_style=False, sort_keys=False).rstrip("\n")
+    return "\n".join(f"{key}={value}" for key, value in sorted(flatten(cfg).items()))
+
+
+# The maps/maps+cls pair is meant to differ by the Cls branch and nothing else. That claim sat in
+# the file headers, unchecked, while transformer/clustering carried two different base_embed_dim
+# values for two days. Post-refactor the pair extends one encoder and this is close to
+# tautological, which is the point: it now guards the extends: lists rather than two key sets.
+_CLS_BRANCH_PREFIX = "network.cls."
+
+
+def pair(maps_path, maps_cls_path):
+    """Keys on which a prod pair differs that are NOT part of the Cls branch, i.e. the violations."""
+    return [
+        (key, before, after)
+        for key, before, after in diff(maps_path, maps_cls_path)
+        if not key.startswith(_CLS_BRANCH_PREFIX)
+    ]
+
+
+def format_pair(maps_path, maps_cls_path, violations):
+    """Render the pair check: silence is the pass condition, so say so explicitly."""
+    lines = [f"{maps_path}", f"  vs {maps_cls_path}", ""]
+    if not violations:
+        lines.append("  OK -- the two differ only in the Cls branch (network.cls.*)")
+        return "\n".join(lines)
+    width = max(len(key) for key, _, _ in violations)
+    for key, before, after in violations:
+        lines.append(f"  {key:<{width}}  {before!r} -> {after!r}")
+    lines += [
+        "",
+        f"  {len(violations)} key(s) differ OUTSIDE the Cls branch. The pair is supposed to share one",
+        "  encoder; a difference here means the two halves have drifted apart.",
+    ]
     return "\n".join(lines)
 
 
@@ -190,11 +236,28 @@ def main(argv=None):
     check_parser = subparsers.add_parser("check", help="validate a group of configs and show what varies")
     check_parser.add_argument("configs", nargs="+", help="config paths (a shell glob over a round)")
 
+    resolve_parser = subparsers.add_parser("resolve", help="print a config with its extends: chain resolved")
+    resolve_parser.add_argument("config", help="the config to resolve")
+    resolve_parser.add_argument(
+        "--flat", action="store_true", help="emit dotted.key=value lines instead of YAML, for a shell to grep"
+    )
+
+    pair_parser = subparsers.add_parser("pair", help="check a prod pair differs only in the Cls branch")
+    pair_parser.add_argument("maps", help="the maps-only config")
+    pair_parser.add_argument("maps_cls", help="its maps+cls partner")
+
     args = parser.parse_args(argv)
     if args.command == "diff":
         changes = diff(args.parent, args.child)
         print(format_diff(args.parent, args.child, changes))
         return 0
+    if args.command == "resolve":
+        print(format_resolved(args.config, args.flat))
+        return 0
+    if args.command == "pair":
+        violations = pair(args.maps, args.maps_cls)
+        print(format_pair(args.maps, args.maps_cls, violations))
+        return 1 if violations else 0
     paths = sorted(args.configs)
     result = check(paths)
     print(format_check(result, paths))
