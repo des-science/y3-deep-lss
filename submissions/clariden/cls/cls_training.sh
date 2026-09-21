@@ -49,7 +49,14 @@ CLS_CONFIG="${CLS_CONFIG:-default}"
 LOSS="${LOSS:-vmim}"              # configs/loss/: also vmim_vicreg, vmim_vicreg_inv, vmim_vicreg_inv_10
 SCALES="${SCALES:-8wl,32gc}"      # configs/scales/: also 8wl,40gc, unsmoothed, lmax_1024
 DATA="${DATA:-default}"           # configs/data/<DATA>.yaml
-MODEL_NAME="${MODEL_NAME:-v1}"    # run dir under cls/<probe>/
+MODEL_NAME="${MODEL_NAME:-v1}"    # run dir under <CLS_DIR>/<probe>/
+
+# Representation directory under runs/<VERSION>/<SUBVERSION>/. Keep experiment series out of the
+# production `cls` tree by giving them their own, the way maps_gcnn_nocls does on the maps side.
+# msi.utils.tensions.get_identifier() reads the two directory levels above the run dir, so
+# cls_vicreg/combined/<run> is `cls_vicreg_combined` and cannot collide with `cls_combined`.
+# The DATA path is unaffected -- that is keyed by VERSION/SUBVERSION, not by this.
+CLS_DIR="${CLS_DIR:-cls}"
 
 # 1 builds the rebinned-Cls cache for (cls_n_bins, SCALES) and exits before any training. Use this
 # on a dataset whose cache does not exist yet: the build reads the full raw grid Cls into memory
@@ -59,10 +66,13 @@ MODEL_NAME="${MODEL_NAME:-v1}"    # run dir under cls/<probe>/
 #   VERSION=v18 SUBVERSION=default PRECACHE_ONLY=1 sbatch --time=02:00:00 cls/cls_training.sh
 PRECACHE_ONLY="${PRECACHE_ONLY:-0}"
 
+# Likelihood-flow ensemble size, in step with the maps path so the two stay comparable.
+N_FLOWS="${N_FLOWS:-8}"
+
 # --- Derived paths, configs and flags ----------------------------------------------------------
 
 INPUT="$MYSCRATCH/deep_lss/data/$VERSION/$SUBVERSION"
-RUNS="$MYSCRATCH/deep_lss/runs/$VERSION/$SUBVERSION/cls"
+RUNS="$MYSCRATCH/deep_lss/runs/$VERSION/$SUBVERSION/$CLS_DIR"
 
 MSFM_CONFIG="$MSFM/configs/$VERSION/$SUBVERSION.yaml"
 SCALES_CONFIG="$DEEP_LSS/configs/scales/${SCALES}.yaml"
@@ -85,10 +95,13 @@ check_stage() {
 
 # The rebinned-Cls cache is probe-independent (it covers all probe pairs), so it is built once up
 # front rather than raced for by the parallel probes below. Only hard_rebinned reads it.
+# Resolved, not yaml.safe_load'd: a net config may set scale_cut through extends:, and a bare
+# parse would read the default and silently skip the precache stage.
 SCALE_CUT=$(srun -N1 --ntasks-per-node=1 --environment=tensorflow python -c "
-import yaml
-with open('$NET_CONFIG') as f:
-    print(yaml.safe_load(f).get('scale_cut', 'soft_pruned'))
+import sys
+sys.path.insert(0, '$DEEP_LSS')
+from deep_lss.utils import config_compose
+print(config_compose.load_composed('$NET_CONFIG').get('scale_cut', 'soft_pruned'))
 ")
 
 if [ "$SCALE_CUT" = "hard_rebinned" ]; then
@@ -164,7 +177,7 @@ for ENTRY in "${PROBES[@]}"; do
                 --out_dir=\"$OUTPUT\" \
                 --model_name=\"$MODEL_NAME\" \
                 --flow_config=\"$FLOW_CONFIG\" \
-                --n_flows=4 \
+                --n_flows=$N_FLOWS \
                 --sample_posterior \
                 --include_grid \
                 --include_des \
