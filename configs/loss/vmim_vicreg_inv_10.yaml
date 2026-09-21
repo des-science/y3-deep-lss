@@ -1,19 +1,29 @@
+# VICReg invariance term only, weight 10 (the top of the ladder).
+#
+# vmim.yaml verbatim (RealNVP flow head, standardize_theta, 4 couplings, 2x128) plus the regu
+# block below -- the head is the only thing that must NOT differ from the default, so keep the
+# body in step with vmim.yaml by hand (loss configs are read with a plain read_yaml, there is no
+# extends: here). Ported to the flow head 2026-09-20; the pre-2026-07-12 versions of these files
+# ran the GMM head, which is the weaker variational head and not what prod uses.
 loss_function: mutual_info
 
 mutual_info_loss:
   estimator: variational
-  density_estimator: gmm
+  density_estimator: flow
+  standardize_theta: true
   dim_summary_fac: 1
   kwargs:
-    num_components: 4
     num_hidden_layers: 2
     num_hidden_units: 128
     activation: relu
-    full_covariance: true
+    num_layers: 4
+    scale_eps: 1.0e-5
+    log_scale_clip: 5.0
+    permute: true
   regu:
     z_layer: last
     z_type: vicreg
     z_weight:
       variance: null
       covariance: null
-      invariance: 1.0
+      invariance: 10.0
