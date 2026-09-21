@@ -465,6 +465,7 @@ def get_rebinned_cls_dsets(
     # matching the pattern of the existing hard-cut pipeline.
     if shuffle_buffer == "full":
         shuffle_buffer = grid_cls_train.shape[0]
+    LOGGER.info(f"Shuffling examples with shuffle_buffer = {shuffle_buffer}")
 
     def _sign_log(signal, label):
         if apply_log:

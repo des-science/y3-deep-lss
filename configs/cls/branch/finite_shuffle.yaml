@@ -1,0 +1,32 @@
+# The production Cls encoder (branch/default.yaml) with a FINITE shuffle buffer -- the only change.
+#
+# The VICReg invariance term finds its positives opportunistically: samples sharing
+# (i_sobol, i_signal) and differing in the noise realization have to land in the same batch. The
+# Cls training array is cosmology-major with 320 rows per cosmology (64 training signals x 5
+# noise) and the 5 members of a group sit 64 apart, so the default full 800k shuffle scatters
+# them: 2.6 pairs per batch of 1024, 0.5% of samples anchored. A finite buffer is a sliding
+# window, which keeps them together. Measured, batch 1024:
+#
+#   buffer     pairs/batch   anchored   cosmologies/batch
+#   full (800k)        2.6       0.5%              ~1000
+#   65536             17.9       3.4%                395
+#   32768             33.7       6.4%                268
+#   16384             64.8      11.9%                173
+#   4096             236.5      36.8%                 64
+#
+# 16384 is the chosen compromise: 25x the positive pairs of a full shuffle, still ~173 independent
+# cosmologies per batch. That drop in batch diversity is a real training change, so the CONTROL
+# arm must use this config too -- a vicreg run against the full-shuffle cls/<probe>/v1 would
+# confound the regularizer with the loader.
+#
+# The same knob exists on the maps side (dset.training.grid.examples_shuffle_buffer, 1024 in
+# maps/shared/dataloader.yaml), so this is the shared mechanism, not a Cls-only device.
+#
+# Only the training set is shuffled, so validation metrics stay comparable across arms. On the
+# non-rebinned scale cuts the same buffer also sizes the noise shuffle (msi dataset.py), which is
+# why this config is only meaningful with scale_cut=hard_rebinned -- the one the invariance term needs.
+
+extends:
+  - cls/branch/default.yaml
+
+shuffle_buffer: 16384

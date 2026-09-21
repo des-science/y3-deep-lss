@@ -166,6 +166,10 @@ def main():
 
     n_steps = net_conf["n_steps"]
     batch_size = net_conf["batch_size"]
+    # "full" (the default) shuffles the whole training set. A finite buffer is a sliding window over
+    # a cosmology-major array, so it trades batch diversity for co-occurring realizations of the same
+    # (i_sobol, i_signal) -- which is the only way the VICReg invariance term sees positive pairs.
+    shuffle_buffer = net_conf.get("shuffle_buffer", "full")
     log_every = net_conf["log_every"]
     vali_every = net_conf["vali_every"]
     signal_indices = data_conf["signal_indices"]
@@ -267,6 +271,7 @@ def main():
             with_cross_probe=with_cross_probe,
             lenses_before_sources=lenses_before_sources,
             batch_size=batch_size,
+            shuffle_buffer=shuffle_buffer,
             seed=seed,
             return_pair_ids=uses_invariance,
             apply_log=apply_log,
@@ -296,6 +301,7 @@ def main():
             with_cross_probe=with_cross_probe,
             lenses_before_sources=lenses_before_sources,
             batch_size=batch_size,
+            shuffle_buffer=shuffle_buffer,
             apply_log=apply_log,
             standardize=False,
             ell_weighting=ell_weighting,
