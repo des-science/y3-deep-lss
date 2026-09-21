@@ -54,6 +54,9 @@ DATA="${DATA:-default}"         # configs/data/<DATA>.yaml
 LOSS_CONFIG="${LOSS_CONFIG:-$DEEP_LSS/configs/loss/${LOSS}.yaml}"
 NET_CONFIG="${NET_CONFIG:-$DEEP_LSS/configs/cls/${NET}/${CLS_CONFIG}.yaml}"
 
+# Likelihood-flow ensemble size, in step with the maps path so the two stay comparable.
+N_FLOWS="${N_FLOWS:-8}"
+
 # --- Derived paths, configs and flags ----------------------------------------------------------
 
 INPUT="$MYSCRATCH/deep_lss/data/$VERSION/$SUBVERSION"
@@ -95,7 +98,7 @@ srun -N1 --ntasks-per-node=1 --exclusive --gpus-per-task=1 --cpus-per-gpu=72 --m
         --out_dir=\"$OUTPUT\" \
         --model_name=\"$MODEL_NAME\" \
         --flow_config=\"$FLOW_CONFIG\" \
-        --n_flows=4 \
+        --n_flows=$N_FLOWS \
         --sample_posterior \
         --include_grid \
         --include_des \

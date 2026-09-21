@@ -45,6 +45,9 @@ VERSION="v17"
 SUBVERSION="baseline"
 PROBE="lensing_nla"
 
+# Likelihood-flow ensemble size, in step with the maps path so the two stay comparable.
+N_FLOWS="${N_FLOWS:-8}"
+
 # --- Derived paths and configs -------------------------------------------------------------------
 
 OUTPUT="$MYSCRATCH/deep_lss/runs/$VERSION/$SUBVERSION/cls/$PROBE"
@@ -73,7 +76,7 @@ for M in "${MODELS[@]}"; do
                 --out_dir=\"$OUTPUT\" \
                 --model_name=\"$M\" \
                 --flow_config=\"$FLOW_CONFIG\" \
-                --n_flows=4 \
+                --n_flows=$N_FLOWS \
                 --sample_posterior \
                 --include_grid"
     ) &

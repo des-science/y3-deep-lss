@@ -54,6 +54,22 @@ LOAD_FLOW="${LOAD_FLOW:-}"
 # the ensemble chain, which is left alone). Needs --include_des and an ensemble flow.
 FLOW_MEMBERS="${FLOW_MEMBERS:-}"
 
+# Density estimator. FLOW_CONFIG names ONE architecture, replicated into N_FLOWS seed clones;
+# FLOW_CONFIGS instead lists several and builds a HETEROGENEOUS ensemble of one member per
+# (config, replica), so members disagree by architecture and not only by initialization. The two
+# are mutually exclusive in run_inference.py. FLOW_LABEL prefixes the checkpoint directory
+# (<label>_ensemble_flow_<steps>/), which is what keeps an experiment off the production flow:
+#   FLOW_CONFIGS="$MSI/configs/flow/maf.yaml $MSI/configs/flow/sigmoid.yaml" \
+#       N_FLOWS=4 FLOW_LABEL=hetero sbatch inference.sh
+# A lipschitz member cannot be reloaded from its checkpoint, so do not mix one in if the flow is
+# ever going to be re-sampled with LOAD_FLOW.
+FLOW_CONFIG="${FLOW_CONFIG:-$MSI/configs/flow/maf.yaml}"
+FLOW_CONFIGS="${FLOW_CONFIGS:-}"
+FLOW_LABEL="${FLOW_LABEL:-}"
+# Changing N_FLOWS rewrites the flow in place: the checkpoint dir is ensemble_flow_<n_steps>,
+# which records the training steps but not the member count.
+N_FLOWS="${N_FLOWS:-8}"
+
 # Which stages the sampling tail runs. The defaults reproduce the training-tail behaviour; both use
 # ${VAR-default}, so an explicitly EMPTY value switches a stage off. A targeted re-run that adds
 # only the per-member chains to an existing flow, leaving mcmc_samples.h5 and the mock/grid chains
@@ -73,7 +89,14 @@ OUTPUT="${OUTPUT:-$MYSCRATCH/deep_lss/runs/$VERSION/$SUBVERSION/maps/$PROBE}"
 LOG="$OUTPUT/$MODEL_DIR/logs/${SLURM_JOB_ID}_${RUN_NUM}_${STRATEGY}"
 mkdir -p "$(dirname "$LOG")"
 
-FLOW_CONFIG="$MSI/configs/flow/maf.yaml"
+# --flow_configs takes a bare list, --flow_config a single "=" argument; unquoted on purpose below
+# so the list splits into separate argv entries.
+if [ -n "$FLOW_CONFIGS" ]; then
+    FLOW_CONFIG_FLAGS="--flow_configs $FLOW_CONFIGS"
+else
+    FLOW_CONFIG_FLAGS="--flow_config=$FLOW_CONFIG"
+fi
+LABEL_FLAG=""; [ -n "$FLOW_LABEL" ] && LABEL_FLAG="--flow_label=$FLOW_LABEL"
 
 # --- Stage 1: Inference ------------------------------------------------------------------------
 
@@ -84,8 +107,9 @@ srun -N1 --ntasks-per-node=1 --gpus-per-task=1 --cpus-per-task=72 --mem=110G --c
     bash -c "source ~/dlss/torch_env/bin/activate && python $MSI/msi/apps/run_inference.py \
         --out_dir=\"$OUTPUT\" \
         --model_name=\"$MODEL_DIR\" \
-        --flow_config=\"$FLOW_CONFIG\" \
-        --n_flows=4 \
+        $FLOW_CONFIG_FLAGS \
+        $LABEL_FLAG \
+        --n_flows=$N_FLOWS \
         $EXTEND_PARAMS \
         $LOAD_FLOW \
         $FLOW_MEMBERS \

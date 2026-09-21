@@ -43,6 +43,14 @@ EVAL_SCOPE="${EVAL_SCOPE:-full}"  # mocks = --include_mocks only; full = grid+de
 LOAD_FLOW="${LOAD_FLOW:-0}"       # 1 reuses the existing flow (--load_flow) instead of retraining it
 RUN_NUM="${RUN_NUM:-1}"           # names the log only; there is no chain here
 
+# Inference tail, kept in step with ../training.sh: N_FLOWS ensemble members, plus the per-member
+# DES chains (chain_DESy3_flow_{m}.npy) the ensemble-convergence figure reads. FLOW_MEMBERS uses
+# ${VAR-default}, so an explicitly EMPTY value switches that stage off.
+# Changing N_FLOWS rewrites the flow in place: the checkpoint dir is ensemble_flow_<n_steps>,
+# which records the training steps but not the member count.
+N_FLOWS="${N_FLOWS:-8}"
+FLOW_MEMBERS="${FLOW_MEMBERS---sample_flow_members}"
+
 # --- Fixed settings ----------------------------------------------------------------------------
 
 STRATEGY="mirrored"  # TF distribution strategy; also names the logs
@@ -59,6 +67,7 @@ FLOW_CONFIG="$MSI/configs/flow/maf.yaml"
 
 EVAL_SCOPE_FLAGS="--include_grid --include_des --include_mocks"
 [ "$EVAL_SCOPE" = "mocks" ] && EVAL_SCOPE_FLAGS="--include_mocks"
+[ "$EVAL_SCOPE" = "mocks" ] && FLOW_MEMBERS=""  # no DES observation loaded, so there is nothing to sample
 
 FLOW_FLAG="--sample_posterior"
 [ "$LOAD_FLOW" = "1" ] && FLOW_FLAG="--load_flow"
@@ -96,6 +105,7 @@ srun -N1 --ntasks-per-node=1 --gpus-per-task=1 --cpus-per-task=72 --mem=110G --c
         --out_dir=\"$OUTPUT\" \
         --model_name=\"$MODEL_DIR\" \
         --flow_config=\"$FLOW_CONFIG\" \
-        --n_flows=4 \
+        --n_flows=$N_FLOWS \
+        $FLOW_MEMBERS \
         $FLOW_FLAG \
         $EVAL_SCOPE_FLAGS"

@@ -69,6 +69,13 @@ SKIP_EVAL="${SKIP_EVAL:-0}"  # 1 stops after training -- for benchmarks whose mo
 #   TRAIN_EXTRA="--wall_budget_seconds=41000"
 TRAIN_EXTRA="${TRAIN_EXTRA:-}"
 
+# Inference tail. N_FLOWS members are trained as one LikelihoodFlowEnsemble; the DES chains are then
+# additionally sampled per member (chain_DESy3_flow_{m}.npy) for the ensemble-convergence figure,
+# which leaves the production ensemble chain alone. FLOW_MEMBERS uses ${VAR-default}, so an
+# explicitly EMPTY value switches that stage off without touching the rest.
+N_FLOWS="${N_FLOWS:-8}"
+FLOW_MEMBERS="${FLOW_MEMBERS---sample_flow_members}"
+
 # --- Fixed settings --------------------------------------------------------------------------
 
 STRATEGY="mirrored"  # TF distribution strategy; also tags the run and names the logs
@@ -196,7 +203,8 @@ srun -N1 --ntasks-per-node=1 --gpus-per-task=1 --cpus-per-task=72 --mem=110G --c
         --out_dir=\"$OUTPUT\" \
         --model_name=\"$MODEL_DIR\" \
         --flow_config=\"$FLOW_CONFIG\" \
-        --n_flows=4 \
+        --n_flows=$N_FLOWS \
+        $FLOW_MEMBERS \
         --sample_posterior \
         --include_grid \
         --include_des \
