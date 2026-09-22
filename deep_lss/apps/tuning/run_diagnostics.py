@@ -101,8 +101,10 @@ from deep_lss.apps.tuning.run_comparison import (
     _param_column,
     align_to,
     checkpoint_warning,
+    drop_extension,
     find_chain_dir,
     find_flow_dir,
+    flow_extend_params,
     fom_per_mock,
     load_run_config,
     param_names,
@@ -238,11 +240,18 @@ def chain_params(params, variant):
 
 
 def load_chain(chain_dir, label, params):
-    """Load one chain and check its width against the parameter list, or return None if absent."""
+    """Load one chain and check its width against the parameter list, or return None if absent.
+
+    An inference flow conditioned on extension parameters (ns/Ob/H0) writes them as trailing columns;
+    `drop_extension` marginalizes over them so the chain arrives in the run's own trained space,
+    which is what every number below is defined in.
+    """
     path = os.path.join(chain_dir, f"chain_{label}.npy")
     if not os.path.isfile(path):
         return None
     chain = np.load(path)
+    if chain.ndim == 2:
+        chain = drop_extension(chain, params, chain_dir, source=path)
     if chain.ndim != 2 or chain.shape[1] != len(params):
         raise ValueError(
             f"{path}: shape {chain.shape} but {len(params)} parameters {params}. The column order "
@@ -632,12 +641,21 @@ def coverage(run_dirs, flow_name=None, n_alpha=100, n_boot=4000, seed=0, referen
         entry = dict(meta)
         with h5py.File(os.path.join(inference_dir, "mcmc_samples.h5"), "r") as h:
             n_samples, n_mocks, n_params = h["theta_sample"].shape
-            if n_params != len(params):
+            # An extended inference flow appends ns/Ob/H0, so the stored array is wider than the run's
+            # own list. SBC is a PER-PARAMETER rank, hence already marginal, and the leading columns
+            # are the trained vector unchanged -- so restricting the loop to them is the marginal SBC
+            # for exactly the parameters these tables report. (The HPD leg below reads `log_prob_*`,
+            # which is a JOINT density and cannot be marginalized by dropping columns: its coverage
+            # remains a statement about the full space the flow sampled.)
+            extend = flow_extend_params(inference_dir)
+            if n_params != len(params) + len(extend):
                 raise ValueError(
                     f"{inference_dir}/mcmc_samples.h5: theta_sample has {n_params} parameter columns "
-                    f"but the run declares {len(params)} {params}. The column order cannot be "
-                    f"established, so no per-parameter number out of this file would be trustworthy."
+                    f"but the run declares {len(params)} {params} and the flow records "
+                    f"extend_params={extend or '[]'}. The column order cannot be established, so no "
+                    f"per-parameter number out of this file would be trustworthy."
                 )
+            n_params = len(params)
             scales = sbc_null_scales(n_mocks)
             entry["sbc"] = {}
             for j, ranks in sbc_ranks(h, n_params, n_samples):

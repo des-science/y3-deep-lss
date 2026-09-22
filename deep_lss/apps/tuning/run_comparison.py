@@ -147,6 +147,54 @@ def param_names(cfg):
     return list(params)
 
 
+def flow_extend_params(inference_dir):
+    """Parameters msi's flow was conditioned on BEYOND the run's trained list, e.g. [ns, Ob, H0].
+
+    The inference flow can condition on CosmoGrid parameters the NETWORK never saw, to replace the
+    discontinuous implicit prior that CosmoGrid's two Sobol halves impose on them. msi appends them
+    to the conditioning vector and records them in the flow directory's own `flow_config.yaml`, so
+    every `chain_*.npy` and every `theta_sample` in that directory is wider than
+    `dlss.dset.eval.grid.params` by exactly those trailing columns.
+
+    Read from the flow directory rather than from the run config, because it is a property of the
+    chains sitting next to it: one run dir can hold an extended flow beside an archived unextended
+    one. The key is absent from every pre-2026-09-22 flow, so a missing file or key means `[]` and
+    is not an error.
+    """
+    path = os.path.join(inference_dir, "flow_config.yaml")
+    if not os.path.isfile(path):
+        return []
+    try:
+        import yaml
+
+        with open(path) as f:
+            return list((yaml.safe_load(f) or {}).get("extend_params") or [])
+    except Exception:  # noqa: BLE001 -- an unreadable flow config must not take a whole table down
+        return []
+
+
+def drop_extension(theta, params, inference_dir, source=""):
+    """Reduce theta to the run's own parameter list by dropping the flow's extension columns.
+
+    The extension is APPENDED, so the leading `len(params)` columns are the trained vector unchanged
+    and discarding the rest marginalizes over the extension exactly -- no reweighting, no
+    recomputation. Every number in these tables is defined in the trained parameter space, so this is
+    where the two meet. The width is reconciled first: an array that is neither the base nor the
+    extended shape raises rather than being truncated to something merely plausible.
+    """
+    n_base, n_found = len(params), theta.shape[-1]
+    if n_found == n_base:
+        return theta
+    extend = flow_extend_params(inference_dir)
+    if n_found != n_base + len(extend):
+        raise ValueError(
+            f"{source or inference_dir}: {n_found} parameter columns, but the run declares {n_base} "
+            f"{params} and the flow records extend_params={extend or '[]'}. The column order cannot "
+            f"be established, so no parameter read out of this file would be trustworthy."
+        )
+    return theta[..., :n_base]
+
+
 def _flow_dir_parts(path):
     """Split an inference directory name into (flow_name, steps).
 
@@ -306,7 +354,8 @@ def load_run(run_dir, pair=("Om", "S8"), flow_name=None):
                 f"exactly the bug this module exists to prevent)"
             )
         real_idx = h["real_idx"][:]
-        fom = fom_per_mock(h["theta_sample"][:], params, pair=pair)
+        theta_sample = drop_extension(h["theta_sample"][:], params, flow_dir, source=f"{run_dir} theta_sample")
+        fom = fom_per_mock(theta_sample, params, pair=pair)
     return real_idx, fom, cfg, provenance
 
 
