@@ -540,6 +540,18 @@ if __name__ == "__main__":
         else:
             LOGGER.warning("Skipping evaluation of the grid set")
 
+        # Adding an observation to a finished run: attach to its existing preds file rather than
+        # requiring a grid pass. evaluate_grid DELETES and rewrites grid/preds/test, so without this
+        # the only route to the obs stage below also regenerates every grid summary the flows and
+        # every published chain were built on. The obs writers are per-label and additive.
+        if out_file is None and (args.include_des or args.include_mocks):
+            existing = evaluation.get_out_file(args.dir_model, file_label)
+            if os.path.isfile(existing):
+                out_file = existing
+                LOGGER.info(f"No grid/fiducial pattern given; adding observations to the existing {out_file}")
+            else:
+                LOGGER.warning(f"No grid/fiducial pattern given and {existing} does not exist; nothing to attach to")
+
         # Individual observation evaluation (written into obs/ section of the same HDF5)
         if out_file is not None:
             if args.include_grid:

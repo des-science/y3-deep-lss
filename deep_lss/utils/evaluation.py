@@ -43,7 +43,7 @@ logging.getLogger("tensorflow").addFilter(
 )
 
 
-def _get_out_file(dir_out, label):
+def get_out_file(dir_out, label):
     if label is None:
         out_file = "preds.h5"
     else:
@@ -258,7 +258,7 @@ def evaluate_grid(
         second_to_last_layer = _stack_grid_cosmos(second_to_last_layer_batch, sorted_indices, n_examples_per_cosmo)
     LOGGER.info("Reshaped the results")
 
-    out_file = _get_out_file(dir_out, file_label)
+    out_file = get_out_file(dir_out, file_label)
 
     def write_out_file():
         with h5py.File(out_file, "a") as f:
@@ -454,7 +454,7 @@ def evaluate_fiducial(
         second_to_last_layer = tf.gather(second_to_last_layer, sorted_indices)
     LOGGER.info("Sorted the results")
 
-    out_file = _get_out_file(dir_out, file_label)
+    out_file = get_out_file(dir_out, file_label)
 
     def write_out_file():
         with h5py.File(out_file, "a") as f:

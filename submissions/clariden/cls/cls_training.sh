@@ -69,6 +69,10 @@ PRECACHE_ONLY="${PRECACHE_ONLY:-0}"
 # Likelihood-flow ensemble size, in step with the maps path so the two stay comparable.
 N_FLOWS="${N_FLOWS:-8}"
 
+# Per-member DES chains for the ensemble-convergence blinding test, on by default and for DESy3 only,
+# in step with the maps path (see maps/rerun/inference.sh). FLOW_MEMBERS= switches it off.
+FLOW_MEMBERS="${FLOW_MEMBERS---sample_flow_members}"
+
 # --- Derived paths, configs and flags ----------------------------------------------------------
 
 INPUT="$MYSCRATCH/deep_lss/data/$VERSION/$SUBVERSION"
@@ -179,6 +183,7 @@ for ENTRY in "${PROBES[@]}"; do
                 --flow_config=\"$FLOW_CONFIG\" \
                 --n_flows=$N_FLOWS \
                 --sample_posterior \
+                $FLOW_MEMBERS \
                 --include_grid \
                 --include_des \
                 --include_mocks"

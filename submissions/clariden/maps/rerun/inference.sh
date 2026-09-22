@@ -54,7 +54,14 @@ LOAD_FLOW="${LOAD_FLOW:-}"
 
 # Per-member DES chains for the flow-ensemble convergence test (chain_DESy3_flow_{m}.npy, next to
 # the ensemble chain, which is left alone). Needs --include_des and an ensemble flow.
-FLOW_MEMBERS="${FLOW_MEMBERS:-}"
+#
+# ON BY DEFAULT, matching eval_inference.sh: this is the blinding test, so every production run has
+# to carry it, and a run that silently lacks it is only noticed when the figure is drawn. run_inference
+# samples the unrestricted wCDM model for --flow_member_obs, which defaults to DESy3 alone -- the
+# systematics variants would each multiply the cost by N_FLOWS and answer a different question.
+# The ${VAR-default} form (one dash) means an explicitly EMPTY value switches the stage off:
+#   FLOW_MEMBERS= sbatch inference.sh
+FLOW_MEMBERS="${FLOW_MEMBERS---sample_flow_members}"
 
 # Density estimator. FLOW_CONFIG names ONE architecture, replicated into N_FLOWS seed clones;
 # FLOW_CONFIGS instead lists several and builds a HETEROGENEOUS ensemble of one member per
