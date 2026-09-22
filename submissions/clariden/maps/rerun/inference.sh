@@ -1,21 +1,25 @@
 #!/bin/bash
 #SBATCH --account=a0158
 #SBATCH --partition=normal
-#SBATCH --time=01:00:00
+#SBATCH --time=02:00:00
 #SBATCH --nodes=1
-#SBATCH --gpus-per-node=4
-#SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=288
-#SBATCH --gpus-per-task=4
+#SBATCH --exclusive
+#SBATCH --mem=450G
 #SBATCH --job-name=inference
 #SBATCH --output=/users/athomsen/dlss/repos/y3-deep-lss/submissions/clariden/slurm/slurm-%j.out
 
 # Standalone re-run of the inference tail of ../training.sh against an existing preds_*.h5 (no
-# retrain) -- use to recover a run whose inference step failed to launch. Override OUTPUT/MODEL_DIR
-# to target a specific run directory. Needs eval too? Use eval_inference.sh instead.
+# retrain) -- to recover a run whose inference step failed to launch, or to re-infer finished runs
+# after a change to the flow config. Needs eval too? Use eval_inference.sh instead.
+#
+# RUNS (below) fans several run dirs out over the node's 4 GPUs, one run per GPU, the same way
+# cls/cls_training.sh fans out its probes -- inference is a single-GPU pytorch job, so one run per
+# node would leave three GPUs idle. Nothing here is maps-specific (run_inference.py reads the run's
+# own configs.yaml), so a `cls/<probe>/v1` entry is as valid as a `maps_gcnn/<probe>/v1` one.
+#
 # EXTEND_PARAMS / LOAD_FLOW (below) also make this the entry point for an ALTERNATIVE conditioning
 # vector (production's lives in the flow config) and for re-sampling an already-trained flow.
-# Submit with --uenv-passthrough=ignore from inside a uenv session.
+# From inside a uenv session, submit as: env -u LD_LIBRARY_PATH sbatch --uenv-passthrough=ignore ...
 
 # --- Runtime environment ---------------------------------------------------------------------
 
@@ -33,8 +37,16 @@ MSI="$REPOS/multiprobe-simulation-inference"
 VERSION="${VERSION:-v17}"
 SUBVERSION="${SUBVERSION:-baseline}"
 
-PROBE="${PROBE:-lensing}"         # run dir under maps/<probe>/; ignored if OUTPUT is set directly
-MODEL_DIR="${MODEL_DIR:-t1_cls}"  # the run to re-infer
+# Run dirs to infer, space-separated, each "<representation>/<probe>/<run>" relative to RUNS_ROOT.
+# Up to GPUS_PER_NODE run concurrently; a longer list is processed in waves, so raise --time for it.
+#   RUNS="maps_gcnn/lensing/v1 maps_gcnn/clustering/v1 maps_gcnn/combined/v1 cls/lensing/v1" \
+#       VERSION=v18 SUBVERSION=default env -u LD_LIBRARY_PATH sbatch inference.sh
+# Empty keeps the original single-run behaviour: the PROBE/MODEL_DIR pair below, or OUTPUT directly.
+RUNS="${RUNS:-}"
+RUNS_ROOT="${RUNS_ROOT:-$MYSCRATCH/deep_lss/runs/$VERSION/$SUBVERSION}"
+
+PROBE="${PROBE:-lensing}"         # run dir under maps/<probe>/; ignored if RUNS or OUTPUT is set
+MODEL_DIR="${MODEL_DIR:-t1_cls}"  # the run to re-infer; ignored if RUNS is set
 RUN_NUM="${RUN_NUM:-1}"           # names the log only; there is no chain here
 
 # Extended conditioning vector. LEAVE THIS EMPTY for production: configs/flow/maf.yaml already sets
@@ -91,12 +103,22 @@ INCLUDE_OBS="${INCLUDE_OBS---include_grid --include_des --include_mocks}"
 # --- Fixed settings ----------------------------------------------------------------------------
 
 STRATEGY="mirrored"  # names the logs only -- inference itself is single-GPU pytorch
+GPUS_PER_NODE=4
 
 # --- Derived paths, configs and flags ----------------------------------------------------------
 
 OUTPUT="${OUTPUT:-$MYSCRATCH/deep_lss/runs/$VERSION/$SUBVERSION/maps/$PROBE}"
-LOG="$OUTPUT/$MODEL_DIR/logs/${SLURM_JOB_ID}_${RUN_NUM}_${STRATEGY}"
-mkdir -p "$(dirname "$LOG")"
+
+# One "<parent dir>|<run dir name>" pair per run to infer, since run_inference.py takes the two
+# separately (--out_dir / --model_name).
+PAIRS=()
+if [ -n "$RUNS" ]; then
+    for ENTRY in $RUNS; do
+        PAIRS+=("$RUNS_ROOT/$(dirname "$ENTRY")|$(basename "$ENTRY")")
+    done
+else
+    PAIRS=("$OUTPUT|$MODEL_DIR")
+fi
 
 # --flow_configs takes a bare list, --flow_config a single "=" argument; unquoted on purpose below
 # so the list splits into separate argv entries.
@@ -107,20 +129,44 @@ else
 fi
 LABEL_FLAG=""; [ -n "$FLOW_LABEL" ] && LABEL_FLAG="--flow_label=$FLOW_LABEL"
 
-# --- Stage 1: Inference ------------------------------------------------------------------------
+# --- Stage 1: Inference, one run per GPU -------------------------------------------------------
 
-# --cpu-bind=none: otherwise this 1-GPU/72-CPU sub-allocation fails to launch
-srun -N1 --ntasks-per-node=1 --gpus-per-task=1 --cpus-per-task=72 --mem=110G --cpu-bind=none \
-    --uenv=pytorch/v2.9.1:v2 --view=default \
-    --output="${LOG}_inference.log" \
-    bash -c "source ~/dlss/torch_env/bin/activate && python $MSI/msi/apps/run_inference.py \
-        --out_dir=\"$OUTPUT\" \
-        --model_name=\"$MODEL_DIR\" \
-        $FLOW_CONFIG_FLAGS \
-        $LABEL_FLAG \
-        --n_flows=$N_FLOWS \
-        $EXTEND_PARAMS \
-        $LOAD_FLOW \
-        $FLOW_MEMBERS \
-        $SAMPLE_POSTERIOR \
-        $INCLUDE_OBS"
+# Step flags copied from cls/cls_training.sh's inference step, which is the same run_inference.py
+# under the same uenv and is what proves 4 of these coexist on one node: --exclusive is what makes
+# SLURM hand each step its own GPU and CPU set instead of overlaying them all on the first.
+infer_one() {
+    local out_dir="$1" model="$2"
+    local log="$out_dir/$model/logs/${SLURM_JOB_ID}_${RUN_NUM}_${STRATEGY}"
+    mkdir -p "$(dirname "$log")"
+    echo "[$(date +%T)] inference: $out_dir/$model -> ${log}_inference.log"
+
+    srun -N1 --ntasks-per-node=1 --exclusive --gpus-per-task=1 --cpus-per-gpu=72 --mem=110G \
+        --uenv=pytorch/v2.9.1:v2 --view=default \
+        --output="${log}_inference.log" \
+        bash -c "source ~/dlss/torch_env/bin/activate && python $MSI/msi/apps/run_inference.py \
+            --out_dir=\"$out_dir\" \
+            --model_name=\"$model\" \
+            $FLOW_CONFIG_FLAGS \
+            $LABEL_FLAG \
+            --n_flows=$N_FLOWS \
+            $EXTEND_PARAMS \
+            $LOAD_FLOW \
+            $FLOW_MEMBERS \
+            $SAMPLE_POSTERIOR \
+            $INCLUDE_OBS"
+
+    local status=$?
+    if [ "$status" -ne 0 ]; then
+        echo "FAILED (exit $status): $out_dir/$model — see ${log}_inference.log" >&2
+    fi
+    return $status
+}
+
+launched=0
+for PAIR in "${PAIRS[@]}"; do
+    infer_one "${PAIR%%|*}" "${PAIR##*|}" &
+    launched=$((launched + 1))
+    # a list longer than the node's GPU count is processed in waves rather than oversubscribed
+    [ $((launched % GPUS_PER_NODE)) -eq 0 ] && wait
+done
+wait
