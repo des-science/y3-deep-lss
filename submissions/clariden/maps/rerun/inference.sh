@@ -109,7 +109,25 @@ INCLUDE_OBS="${INCLUDE_OBS---include_grid --include_des --include_mocks}"
 # --- Fixed settings ----------------------------------------------------------------------------
 
 STRATEGY="mirrored"  # names the logs only -- inference itself is single-GPU pytorch
-GPUS_PER_NODE=4
+
+# How many runs share a node. Lower it for memory-heavy runs and submit more jobs instead -- there
+# is no prize for filling a node, and STEP_MEM below is a direct function of this number.
+GPUS_PER_NODE="${GPUS_PER_NODE:-4}"
+
+# Per-step memory. BUDGET THIS AGAINST HOST DRAM, WHICH IS 476 GB -- NOT the 870 GB SLURM reports.
+# On GH200 each GPU's 95 GB of HBM is exposed as a CPU-less NUMA node, so `free` and RealMemory add
+# 4 x 95 GB of GPU memory to the 4 x 119 GB of Grace DRAM and report 856 / 870 GB. --mem is accounted
+# against that inflated figure, so SLURM will cheerfully admit a job that cannot fit in DRAM and let
+# the kernel OOM-killer sort it out at node level -- a far worse failure than a clean cgroup kill.
+# Real budget at 4-way packing: 476 / 4 = 119 GB per step.
+#
+# The coverage stage holds the whole (n_obs x n_samples x n_params) chain: 1000 mocks x 1024000
+# samples is 41 GB at ten parameters but 53 GB under the extended ns/Ob/H0 vector, and it holds a
+# host copy alongside the device one. Measured peaks: lensing/clustering ~62 GB, so four fit
+# comfortably; `combined` exceeds 110 GB and was OOM-killed there at the old limit, AFTER sampling
+# finished, so its chains were written and only mcmc_samples.h5 and the 2_* plots were missing.
+# SO: combined packs at most 3 per node:  GPUS_PER_NODE=3 STEP_MEM=150G, three entries in RUNS.
+STEP_MEM="${STEP_MEM:-110G}"
 
 # --- Derived paths, configs and flags ----------------------------------------------------------
 
@@ -147,7 +165,7 @@ infer_one() {
     mkdir -p "$(dirname "$log")"
     echo "[$(date +%T)] inference: $out_dir/$model -> ${log}_inference.log"
 
-    srun -N1 --ntasks-per-node=1 --exclusive --gpus-per-task=1 --cpus-per-gpu=72 --mem=110G \
+    srun -N1 --ntasks-per-node=1 --exclusive --gpus-per-task=1 --cpus-per-gpu=72 --mem="$STEP_MEM" \
         --cpu-bind=none --uenv=pytorch/v2.9.1:v2 --view=default \
         --output="${log}_inference.log" \
         bash -c "source ~/dlss/torch_env/bin/activate && python $MSI/msi/apps/run_inference.py \
@@ -169,11 +187,25 @@ infer_one() {
     return $status
 }
 
+# A bare `wait` returns only the LAST background job's status, so a job with one failed run inside
+# it used to exit 0 and be recorded COMPLETED -- which is how five OOM-killed runs were first
+# reported as a clean sweep. Wait on each pid and propagate.
+rc=0
+pids=()
+flush() {
+    for pid in "${pids[@]}"; do wait "$pid" || rc=1; done
+    pids=()
+}
+
 launched=0
 for PAIR in "${PAIRS[@]}"; do
     infer_one "${PAIR%%|*}" "${PAIR##*|}" &
+    pids+=($!)
     launched=$((launched + 1))
     # a list longer than the node's GPU count is processed in waves rather than oversubscribed
-    [ $((launched % GPUS_PER_NODE)) -eq 0 ] && wait
+    [ $((launched % GPUS_PER_NODE)) -eq 0 ] && flush
 done
-wait
+flush
+
+[ "$rc" -ne 0 ] && echo "One or more runs FAILED -- see the FAILED lines above." >&2
+exit "$rc"
