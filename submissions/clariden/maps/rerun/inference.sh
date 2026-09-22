@@ -13,8 +13,8 @@
 # Standalone re-run of the inference tail of ../training.sh against an existing preds_*.h5 (no
 # retrain) -- use to recover a run whose inference step failed to launch. Override OUTPUT/MODEL_DIR
 # to target a specific run directory. Needs eval too? Use eval_inference.sh instead.
-# EXTEND_PARAMS / LOAD_FLOW (below) also make this the entry point for extended-conditioning-vector
-# inference and for re-sampling an already-trained flow.
+# EXTEND_PARAMS / LOAD_FLOW (below) also make this the entry point for an ALTERNATIVE conditioning
+# vector (production's lives in the flow config) and for re-sampling an already-trained flow.
 # Submit with --uenv-passthrough=ignore from inside a uenv session.
 
 # --- Runtime environment ---------------------------------------------------------------------
@@ -37,13 +37,15 @@ PROBE="${PROBE:-lensing}"         # run dir under maps/<probe>/; ignored if OUTP
 MODEL_DIR="${MODEL_DIR:-t1_cls}"  # the run to re-infer
 RUN_NUM="${RUN_NUM:-1}"           # names the log only; there is no chain here
 
-# Extended conditioning vector: retrain the flow on the EXISTING network summaries with the
-# implicitly marginalized grid parameters appended (looked up per grid row via i_sobol -- no summary
-# recomputation), and additionally sample the reference-prior DES chains. Everything saves under
-# ext_<flow>_<steps>/, so the baseline flow is untouched. Set to the flag alone for the default set
-# (ns Ob H0 bary_Mc bary_nu), or pass an explicit list:
-#   EXTEND_PARAMS="--extend_params" sbatch inference.sh
-#   EXTEND_PARAMS="--extend_params ns Ob H0" sbatch inference.sh
+# Extended conditioning vector. LEAVE THIS EMPTY for production: configs/flow/maf.yaml already sets
+# extend_params: [ns, Ob, H0], so the flow conditions on the weakly constrained nuisance parameters
+# by default and saves under the unprefixed <flow>_<steps>/ directory. See that config's header.
+#
+# Setting it here OVERRIDES the config and marks the run as an experiment: everything then saves
+# under ext_<flow>_<steps>/ instead, so the production flow is untouched. Use it to try a different
+# vector, or to train the unextended baseline for comparison:
+#   EXTEND_PARAMS="--extend_params ns Ob H0 bary_Mc bary_nu" sbatch inference.sh
+# There is no CLI way to ask for NO extension; point FLOW_CONFIG at a config with extend_params: [].
 EXTEND_PARAMS="${EXTEND_PARAMS:-}"
 
 # Rerun only the sampling stages against an already-trained flow (e.g. after a plotting fix):
