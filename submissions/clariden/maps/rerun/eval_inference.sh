@@ -58,7 +58,12 @@ STRATEGY="mirrored"  # TF distribution strategy; also names the logs
 # --- Derived paths, configs and flags ----------------------------------------------------------
 
 INPUT="$MYSCRATCH/deep_lss/data/$VERSION/$SUBVERSION"
-OUTPUT="$MYSCRATCH/deep_lss/runs/$VERSION/$SUBVERSION/maps/$PROBE"
+# Mock observations come from the PROJECT STORE (see ../training.sh for why): 12 GB of obs beside
+# 14 TB of tfrecords, and scratch is purged. run_evaluation.py's --data_dir is obs-only.
+OBS_INPUT="${OBS_INPUT:-/capstor/store/cscs/swissai/a0158/athomsen/deep_lss/data/$VERSION/$SUBVERSION}"
+# Overridable, like ../inference.sh's: production inference now lives on the project store, and the
+# run tree there is <store>/deep_lss/runs/<version>/<subversion>/<representation>/<probe>.
+OUTPUT="${OUTPUT:-$MYSCRATCH/deep_lss/runs/$VERSION/$SUBVERSION/maps/$PROBE}"
 LOG="$OUTPUT/$MODEL_DIR/logs/${SLURM_JOB_ID}_${RUN_NUM}_${STRATEGY}"
 mkdir -p "$(dirname "$LOG")"
 
@@ -90,7 +95,7 @@ srun --environment=tensorflow --gpu-bind=none --output="${LOG}_evaluation.log" \
         --dir_model="$OUTPUT/$MODEL_DIR" \
         --dist_strategy="$STRATEGY" \
         --grid_vali_tfr_pattern="$TRAIN_TFR" \
-        --data_dir="$INPUT" \
+        --data_dir="$OBS_INPUT" \
         $EVAL_SCOPE_FLAGS
 check_stage $? "Evaluation" "${LOG}_evaluation.log"
 

@@ -84,6 +84,12 @@ DATA="default"       # configs/data/<DATA>.yaml
 # --- Derived paths, configs and flags --------------------------------------------------------
 
 INPUT="$MYSCRATCH/deep_lss/data/$VERSION/$SUBVERSION"
+# Mock observations come from the PROJECT STORE, not scratch. They are 12 GB against the 14 TB of
+# tfrecords beside them, they are what every systematics posterior in the paper is evaluated on, and
+# scratch is purged -- so the store holds the canonical copy and $INPUT keeps only what is too large
+# to live there. Only run_evaluation.py reads this (its --data_dir is obs-only); the Cls path's
+# --data_dir additionally resolves the 216 GB rebinned-Cls cache and therefore stays on $INPUT.
+OBS_INPUT="${OBS_INPUT:-/capstor/store/cscs/swissai/a0158/athomsen/deep_lss/data/$VERSION/$SUBVERSION}"
 # Overridable so throwaway runs (SKIP_EVAL=1 sizing probes, smoke tests) can write under
 # deep_lss/claude/ instead of polluting runs/. Unset => the production path, unchanged.
 OUTPUT="${OUTPUT:-$MYSCRATCH/deep_lss/runs/$VERSION/$SUBVERSION/maps/$PROBE}"
@@ -186,7 +192,7 @@ srun --environment=tensorflow --gpu-bind=none --output="${LOG}_evaluation.log" \
     python "$DEEP_LSS/deep_lss/apps/run_evaluation.py" \
         --dist_strategy="$STRATEGY" \
         --grid_vali_tfr_pattern="$TRAIN_TFR" \
-        --data_dir="$INPUT" \
+        --data_dir="$OBS_INPUT" \
         --include_grid \
         --include_des \
         --include_mocks
