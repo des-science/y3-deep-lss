@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --account=a0158
 #SBATCH --partition=normal
-#SBATCH --time=02:00:00
+#SBATCH --time=01:00:00
 #SBATCH --nodes=1
 #SBATCH --exclusive
 #SBATCH --mem=450G
@@ -24,6 +24,12 @@
 # --- Runtime environment ---------------------------------------------------------------------
 
 ulimit -c 0  # a crashing task would otherwise fill the /users quota with a core dump
+
+# Each run is its own 1-GPU/72-CPU srun step, so the per-step CPU count has to be stated here too.
+# Left at the node's 288 (what --exclusive gives the batch step), every step asks to bind 288 CPUs
+# inside its own 72-CPU allocation and dies instantly with "CPU binding outside of job step
+# allocation" -- which is what cls/cls_training.sh's identical export is preventing.
+export SLURM_CPUS_PER_TASK=72
 
 # --- Repository and scratch roots ------------------------------------------------------------
 
@@ -133,7 +139,8 @@ LABEL_FLAG=""; [ -n "$FLOW_LABEL" ] && LABEL_FLAG="--flow_label=$FLOW_LABEL"
 
 # Step flags copied from cls/cls_training.sh's inference step, which is the same run_inference.py
 # under the same uenv and is what proves 4 of these coexist on one node: --exclusive is what makes
-# SLURM hand each step its own GPU and CPU set instead of overlaying them all on the first.
+# SLURM hand each step its own GPU and CPU set instead of overlaying them all on the first, and
+# --cpu-bind=none is the sub-allocation rule this script has always needed.
 infer_one() {
     local out_dir="$1" model="$2"
     local log="$out_dir/$model/logs/${SLURM_JOB_ID}_${RUN_NUM}_${STRATEGY}"
@@ -141,7 +148,7 @@ infer_one() {
     echo "[$(date +%T)] inference: $out_dir/$model -> ${log}_inference.log"
 
     srun -N1 --ntasks-per-node=1 --exclusive --gpus-per-task=1 --cpus-per-gpu=72 --mem=110G \
-        --uenv=pytorch/v2.9.1:v2 --view=default \
+        --cpu-bind=none --uenv=pytorch/v2.9.1:v2 --view=default \
         --output="${log}_inference.log" \
         bash -c "source ~/dlss/torch_env/bin/activate && python $MSI/msi/apps/run_inference.py \
             --out_dir=\"$out_dir\" \
