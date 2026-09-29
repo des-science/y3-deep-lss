@@ -24,7 +24,7 @@
 # a round is an experiment, and pointing at someone else's by accident is the failure this avoids.
 #
 #   ROUNDS=/path/to/round sbatch coverage_round.sh                  # every incomplete arm
-#   ROUNDS=/path/to/round:joint_long,conditional_long sbatch ...    # named arms
+#   ROUNDS=/path/to/round:all_long,extended_long sbatch ...         # named arms
 #   ROUNDS="$A:all_long,extended_long $B:all_long,extended_long" SCORE=1 sbatch ...
 #   ROUNDS=/path/to/round DRYRUN=1 bash coverage_round.sh           # plan only, login node
 #
