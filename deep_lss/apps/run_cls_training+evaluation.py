@@ -94,6 +94,13 @@ def setup():
         action="store_true",
         help="Build the hard_rebinned Cls cache then exit (no training). Requires scale_cut=hard_rebinned.",
     )
+    parser.add_argument(
+        "--eval_only",
+        action="store_true",
+        help="Restore the latest checkpoint and append the named --mock_labels to the existing preds file. "
+        "No training, and configs.yaml and every stored summary are left untouched. Aborts unless the "
+        "restored network reproduces the stored test-set summaries.",
+    )
 
     # Observation inclusion flags (all default off)
     parser.add_argument("--include_grid", action="store_true")
@@ -110,6 +117,11 @@ def setup():
     args = parser.parse_args()
     if not args.probes_config:
         parser.error("--probes_config is required")
+    if args.eval_only:
+        # grid/DES would overwrite summaries the trained flows and published chains were built on
+        if args.include_grid or args.include_des or not (args.include_mocks and args.mock_labels):
+            parser.error("--eval_only takes --include_mocks with explicit --mock_labels, and nothing else")
+        args.restore_checkpoint = True
     return args
 
 
@@ -202,18 +214,19 @@ def main():
     LOGGER.info(f"z_layer        = {z_layer}")
 
     # provenance only: the cls app always re-reads from CLI flags, never reloads this file
-    with open(os.path.join(pred_dir, "configs.yaml"), "w") as f:
-        yaml.dump(
-            {
-                "mlp": net_conf,
-                "dlss": dlss_conf,
-                "loss": loss_conf,
-                "data": data_conf,
-                "msfm": msfm_conf,
-                "run": {"model_name": args.model_name, "scale_cut": scale_cut},
-            },
-            f,
-        )
+    if not args.eval_only:
+        with open(os.path.join(pred_dir, "configs.yaml"), "w") as f:
+            yaml.dump(
+                {
+                    "mlp": net_conf,
+                    "dlss": dlss_conf,
+                    "loss": loss_conf,
+                    "data": data_conf,
+                    "msfm": msfm_conf,
+                    "run": {"model_name": args.model_name, "scale_cut": scale_cut},
+                },
+                f,
+            )
 
     # cls_transform selects how the binned Cls are transformed before the network:
     #   "asinh_per_feature":     per-feature asinh(x/s), applied INSIDE the model via an
@@ -632,7 +645,7 @@ def main():
     vali_nmse_cosmo_history = []
 
     for i, batch in LOGGER.progressbar(enumerate(cl_dset_train), at_level="info", total=n_steps + 1, desc="training"):
-        if i > n_steps:
+        if i > n_steps or args.eval_only:
             break
 
         # Linear warmup for the scalar-LR modes; after warmup the plateau reducer owns the LR.
@@ -713,7 +726,9 @@ def main():
                     )
                     break
 
-    if ema_momentum is not None:
+    if args.eval_only:
+        pass  # the restored checkpoint already is the final network: nothing to finalize or save
+    elif ema_momentum is not None:
         # Overwrite live weights with their EMA average (in place), then save/evaluate with those.
         # This supersedes the early-stopping "best vali" restore as the final-weight selector;
         # early stopping still controls *when* the loop stops.
@@ -725,17 +740,18 @@ def main():
     else:
         model.restore_model()
 
-    cls_evaluation.save_loss_curve(
-        pred_dir=pred_dir,
-        pred_file=pred_file,
-        train_steps=train_steps,
-        train_losses=train_losses,
-        vali_steps=vali_steps,
-        vali_losses=vali_losses_history,
-        vali_mse=vali_mse_history,
-        vali_nmse_cosmo=vali_nmse_cosmo_history,
-        log_every=log_every,
-    )
+    if not args.eval_only:
+        cls_evaluation.save_loss_curve(
+            pred_dir=pred_dir,
+            pred_file=pred_file,
+            train_steps=train_steps,
+            train_losses=train_losses,
+            vali_steps=vali_steps,
+            vali_losses=vali_losses_history,
+            vali_mse=vali_mse_history,
+            vali_nmse_cosmo=vali_nmse_cosmo_history,
+            log_every=log_every,
+        )
 
     # --- evaluate on test set (directly from out_dict, matching the notebook) ---
     LOGGER.info("Evaluating on test set...")
@@ -750,14 +766,24 @@ def main():
         axis=0,
     )
 
-    with h5py.File(pred_file, "w") as f:
-        f.create_dataset("grid/preds/test", data=grid_preds)
-        f.create_dataset("grid/cosmos/test", data=grid_cosmos)
-        f.create_dataset("grid/i_sobol/test", data=out_dict["grid/i_sobol/test"])
-        f.create_dataset("grid/i_signal/test", data=out_dict["grid/i_signal/test"])
-        f.create_dataset("grid/i_noise/test", data=out_dict["grid/i_noise/test"])
+    if args.eval_only:
+        # a new mock summary is only comparable with the old ones if this is the network that made them
+        with h5py.File(pred_file, "r") as f:
+            stored_preds, stored_cosmos = f["grid/preds/test"][:], f["grid/cosmos/test"][:]
+        same = stored_preds.shape == grid_preds.shape and np.array_equal(stored_cosmos, grid_cosmos)
+        max_diff = float(np.max(np.abs(grid_preds - stored_preds))) if same else float("nan")
+        LOGGER.info(f"eval_only: restored network vs stored test summaries, max |diff| = {max_diff:.3e}")
+        if not (same and np.allclose(grid_preds, stored_preds, rtol=1e-4, atol=1e-5)):
+            raise RuntimeError(f"restored network does not reproduce {pred_file}; not appending anything")
+    else:
+        with h5py.File(pred_file, "w") as f:
+            f.create_dataset("grid/preds/test", data=grid_preds)
+            f.create_dataset("grid/cosmos/test", data=grid_cosmos)
+            f.create_dataset("grid/i_sobol/test", data=out_dict["grid/i_sobol/test"])
+            f.create_dataset("grid/i_signal/test", data=out_dict["grid/i_signal/test"])
+            f.create_dataset("grid/i_noise/test", data=out_dict["grid/i_noise/test"])
 
-    LOGGER.info(f"Saved {len(grid_preds)} test predictions to {pred_file}")
+        LOGGER.info(f"Saved {len(grid_preds)} test predictions to {pred_file}")
 
     # --- named grid observations (example 0 per cosmology, labeled by simulation indices) ---
     if args.include_grid:
@@ -811,6 +837,8 @@ def main():
                     cls_n_bins=cls_n_bins,
                 )
             except Exception as e:
+                if args.eval_only:
+                    raise  # the mocks are the whole point of an eval_only run
                 LOGGER.warning(f"mock {label} evaluation failed ({e}), skipping")
 
     # --- DES Y3 real-data observation ---

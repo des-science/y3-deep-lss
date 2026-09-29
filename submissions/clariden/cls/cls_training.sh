@@ -8,9 +8,10 @@
 #SBATCH --job-name=cls_training
 #SBATCH --output=/users/athomsen/dlss/repos/y3-deep-lss/submissions/clariden/slurm/slurm-%j.out
 
-# Cls-summary train+eval+infer, one probe per GPU in parallel. Unlike maps/, there is no
-# eval-only/infer-only recovery counterpart (no cls/rerun/) -- a failed stage means rerunning the
-# whole script. One-off Cls ablations go through experiments/cls_experiment.sh.
+# Cls-summary train+eval+infer, one probe per GPU in parallel. There is no infer-only counterpart
+# (no cls/rerun/) -- a failed inference means rerunning the whole script. EVAL_ONLY=1 below is the
+# exception, and covers only the case of attaching new mock observations to finished runs.
+# One-off Cls ablations go through experiments/cls_experiment.sh.
 
 # --- Runtime environment ---------------------------------------------------------------------
 
@@ -66,6 +67,16 @@ CLS_DIR="${CLS_DIR:-cls}"
 #   VERSION=v18 SUBVERSION=default PRECACHE_ONLY=1 sbatch --time=02:00:00 cls/cls_training.sh
 PRECACHE_ONLY="${PRECACHE_ONLY:-0}"
 
+# 1 restores each probe's latest checkpoint and only APPENDS the named MOCK_LABELS to its existing
+# preds file, skipping both training and inference. This is the Cls counterpart of
+# maps/rerun/eval_inference.sh's EVAL_SCOPE=mocks SKIP_INFERENCE=1, and exists for the same reason:
+# a finished run gains an observation without regenerating the grid summaries that its trained flow
+# and every published chain were built on.
+#   VERSION=v18 SUBVERSION=default EVAL_ONLY=1 MOCK_LABELS="buzzard_flock" sbatch cls/cls_training.sh
+# MOCK_LABELS is required with it, because --eval_only refuses to auto-discover.
+EVAL_ONLY="${EVAL_ONLY:-0}"
+MOCK_LABELS="${MOCK_LABELS:-}"
+
 # Likelihood-flow ensemble size, in step with the maps path so the two stay comparable.
 N_FLOWS="${N_FLOWS:-8}"
 
@@ -84,6 +95,17 @@ LOSS_CONFIG="$DEEP_LSS/configs/loss/${LOSS}.yaml"
 DATA_CONFIG="$DEEP_LSS/configs/data/${DATA}.yaml"
 NET_CONFIG="$DEEP_LSS/configs/cls/${NET}/${CLS_CONFIG}.yaml"
 FLOW_CONFIG="$MSI/configs/flow/maf.yaml"
+
+# --eval_only takes --include_mocks with explicit --mock_labels and nothing else, see the app's
+# own argument check.
+EVAL_FLAGS="--include_grid --include_des --include_mocks"
+if [ "$EVAL_ONLY" = "1" ]; then
+    if [ -z "$MOCK_LABELS" ]; then
+        echo "EVAL_ONLY=1 needs MOCK_LABELS -- --eval_only does not auto-discover." >&2
+        exit 1
+    fi
+    EVAL_FLAGS="--eval_only --include_mocks --mock_labels $MOCK_LABELS"
+fi
 
 # Aborts the per-probe subshell instead of letting inference silently run against a stale
 # preds_*.h5 if the training+eval stage fails. Inherited by the "( ... ) &" subshells below.
@@ -169,10 +191,13 @@ for ENTRY in "${PROBES[@]}"; do
                 --data_dir="$INPUT" \
                 --out_dir="$OUTPUT" \
                 --model_name="$MODEL_NAME" \
-                --include_grid \
-                --include_des \
-                --include_mocks
+                $EVAL_FLAGS
         check_stage $? "Training+evaluation ($PROBE)" "${LOG}_training.log"
+
+        if [ "$EVAL_ONLY" = "1" ]; then
+            echo "EVAL_ONLY=1: $PROBE evaluation done, stopping before inference."
+            exit 0
+        fi
 
         srun -N1 --ntasks-per-node=1 --exclusive --gpus-per-task=1 --cpus-per-gpu=72 --mem=110G \
             --uenv=pytorch/v2.9.1:v2 --view=default \

@@ -127,8 +127,7 @@ def evaluate_mock_cls(
 ):
     obs_file = os.path.join(data_dir, "obs", f"{label}_obs_maps.h5")
     if not os.path.exists(obs_file):
-        print(f"WARNING: mock file not found: {obs_file}, skipping")
-        return
+        raise FileNotFoundError(f"mock file not found: {obs_file}")
     print(f"Evaluating {label}...")
     with h5py.File(obs_file, "r") as f_in:
         obs_cls_raw = f_in["obs/cls_raw"][:]
