@@ -189,7 +189,12 @@ if [ -z "$GPUS_PER_NODE" ]; then
     [ "$GPUS_PER_NODE" -gt 4 ] && GPUS_PER_NODE=4
     [ "$GPUS_PER_NODE" -lt 1 ] && GPUS_PER_NODE=1
 fi
-[ -z "$STEP_MEM" ] && STEP_MEM="$((DRAM_GB / GPUS_PER_NODE))G"
+# Split the job's own --mem, not host DRAM: the steps are carved out of the job allocation, so
+# 3 x 158G against --mem=450G left the third step waiting for the first to finish (job 3552137).
+JOB_MEM_GB=$DRAM_GB
+[ -n "${SLURM_MEM_PER_NODE:-}" ] && [ $((SLURM_MEM_PER_NODE / 1024)) -lt "$JOB_MEM_GB" ] \
+    && JOB_MEM_GB=$((SLURM_MEM_PER_NODE / 1024))
+[ -z "$STEP_MEM" ] && STEP_MEM="$((JOB_MEM_GB / GPUS_PER_NODE))G"
 
 # THE GUARD. Whatever the two values are -- derived above, or set by hand from a number SLURM
 # reported -- their product may not exceed host DRAM. This is the check that would have refused
