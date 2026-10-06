@@ -115,7 +115,8 @@ from deep_lss.apps.tuning.run_comparison import (
 # `cosmo_*` in older runs; Buzzard is a separate N-body suite. Same rule as msi's _load_mock_chains,
 # which writes them. (The `_mean` suffix already excludes the grid on its own -- this is belt and
 # braces, kept in step with msi rather than trimmed to what today's naming happens to need.)
-EXCLUDE_PREFIXES = ("cosmo", "grid", "Buzzard")
+# Matched case-insensitively: the Buzzard flock mocks are labelled `buzzard_flock*`.
+EXCLUDE_PREFIXES = ("cosmo", "grid", "buzzard")
 
 # The correctly-specified baseline every contaminated mock is referenced against.
 FIDUCIAL_LABEL = "fiducial_bench"
@@ -269,7 +270,7 @@ def discover_mock_labels(chain_dir):
     labels = []
     for path in sorted(glob.glob(os.path.join(chain_dir, "chain_*_mean.npy"))):
         label = os.path.basename(path)[len("chain_") : -len("_mean.npy")]
-        if label.startswith(EXCLUDE_PREFIXES):
+        if label.lower().startswith(EXCLUDE_PREFIXES):
             continue
         labels.append(label)
     return labels
