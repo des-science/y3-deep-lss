@@ -1,5 +1,5 @@
 # Wall-clock budget: a 2 x 12 h chain, for the combined prod configs. Chain with
-# submissions/clariden/maps/training_chainer.sh; the second job restores the checkpoint.
+# submissions/clariden/prod/maps_chain.sh; the second job restores the checkpoint.
 #
 # See budget/1x12h.yaml for what n_steps: auto and the two budget keys mean. The only difference is
 # wall_budget_seconds: the whole run gets 79200 s while each job still takes a 39600 s share, which

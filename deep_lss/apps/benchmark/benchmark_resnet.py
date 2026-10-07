@@ -52,7 +52,7 @@ warnings.filterwarnings("once", category=UserWarning)
 
 REPOS = "/users/athomsen/dlss/repos"
 
-# Defaults mirroring submissions/clariden/training.sh (v16/rot_in_place, lensing, vmim).
+# Defaults: v16/rot_in_place, lensing, vmim.
 DEFAULTS = {
     "msfm_config": f"{REPOS}/multiprobe-simulation-forward-model/configs/v16/rot_in_place.yaml",
     "probes_config": f"{REPOS}/y3-deep-lss/configs/probes/lensing.yaml",

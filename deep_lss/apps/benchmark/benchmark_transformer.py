@@ -26,7 +26,7 @@ Two modes:
 
   * child (``--single``): build + time a single (config, batch) and emit one JSON line.
 
-Run inside the TensorFlow container on a single GPU, e.g. via submissions/clariden/benchmark.sh
+Run inside the TensorFlow container on a single GPU, e.g. via submissions/clariden/benchmarks/benchmark_sweep.sh
 or an interactive ``srun --environment=tensorflow`` allocation.
 """
 
@@ -48,7 +48,7 @@ warnings.filterwarnings("once", category=UserWarning)
 
 REPOS = "/users/athomsen/dlss/repos"
 
-# Defaults mirroring submissions/clariden/training.sh (v16/rot_in_place, lensing, vmim).
+# Defaults: v16/rot_in_place, lensing, vmim.
 DEFAULTS = {
     "msfm_config": f"{REPOS}/multiprobe-simulation-forward-model/configs/v16/rot_in_place.yaml",
     "probes_config": f"{REPOS}/y3-deep-lss/configs/probes/lensing.yaml",
@@ -393,7 +393,7 @@ def _write_outputs(rows, out_dir):
 def run_aggregate(args):
     """Read a JSONL of per-(config, batch) results and write the CSV/markdown overview.
 
-    Stdlib only (no TensorFlow), so it can run anywhere. Used by submissions/clariden/benchmark.sh,
+    Stdlib only (no TensorFlow), so it can run anywhere. Used by submissions/clariden/benchmarks/benchmark_sweep.sh,
     which drives each (config, batch) as its own ``srun --environment=tensorflow`` step (the only
     form that reliably has TF inside the CSCS container) and collects the JSON lines here.
     """
@@ -459,7 +459,7 @@ def main():
         run_aggregate(args)
     else:
         # in-process driver (subprocess children). Works under a *direct* interactive
-        # `srun --environment=tensorflow`; under sbatch use benchmark.sh instead, which
+        # `srun --environment=tensorflow`; under sbatch use benchmark_sweep.sh instead, which
         # drives each child as its own srun step (see run_aggregate docstring).
         run_driver(args)
 

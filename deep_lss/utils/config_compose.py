@@ -26,7 +26,7 @@ The contract:
     `embedding_layers: [512, 512, 512, 512]` must not become eight entries.
   * A base path resolves against the nearest ancestor directory named ``configs``, falling back to
     the including file's own directory; an absolute path is used as-is. The fallback is what keeps
-    ad hoc yamls outside `configs/` working, which `submissions/clariden/shared/benchmark_sweep.sh`
+    ad hoc yamls outside `configs/` working, which `submissions/clariden/benchmarks/benchmark_sweep.sh`
     explicitly supports.
   * A cycle, an over-deep chain, or a missing base is an error naming the files involved.
   * **`extends:` is stripped from the result.** run_training.py dumps the resolved net config into

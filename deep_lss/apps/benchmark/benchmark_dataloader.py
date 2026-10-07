@@ -9,7 +9,7 @@ Measures the sustained throughput (examples/s) and the peak host RSS of a *singl
 pipeline built exactly like run_training.py builds it for the grid dataset, for one choice of
 (local_batch_size, n_readers, n_prefetch, n_workers, file_name_shuffle_buffer,
 examples_shuffle_buffer). One configuration per process, so the peak RSS (VmHWM) is clean and
-attributable; sweep by calling this script many times (see submissions/clariden/benchmark_dataloader.sh).
+attributable; sweep by calling this script many times (see submissions/clariden/benchmarks/benchmark_dataloader.sh).
 
 The pipeline is the one MirroredStrategy actually runs: a single, un-sharded pipeline (input_context
 is None here, matching num_input_pipelines=1 on one node) that feeds all local GPUs. So the measured
