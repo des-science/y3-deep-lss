@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --account=a0158
+#SBATCH --account=lp184
 #SBATCH --partition=normal
 #SBATCH --time=00:45:00
 #SBATCH --job-name=bench_2node
