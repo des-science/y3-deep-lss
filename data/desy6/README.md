@@ -29,12 +29,12 @@ The method is that of the DES Y3 `configs/scales/8wl,32gc.yaml`, derived for Y3 
   power at `l_max`: `sigma = sqrt(high_pass² · low_pass² · C_ℓ(l_max) / Ω_pix)`. Here
   `high_pass` is the ℓ_min = 30 filter, and the signal is lensing `κ + A_IA I` and clustering
   galaxy counts at the fiducial bias and n_gal.
-- **Base kernel.** The per-probe clustering smoothing repeats one kernel of `theta_fwhm_base`
-  ⌈(θ / base)²⌉ times, so its effective FWHMs are base·√n. The step takes the base ≤ min θ with the
-  smallest worst overshoot among bases that cost no more repetitions than Y3's rule (just above
+- **Base kernel.** The clustering smoothing repeats one kernel of `theta_fwhm_base` ⌈(θ / base)²⌉
+  times, so its effective FWHMs are base·√n. The step takes the base ≤ min θ with the smallest
+  worst overshoot among bases that cost no more repetitions than Y3's rule (just above
   min θ / √2). On the Y3 beams this rule gives Y3's 40.4′ exactly.
 
-Three differences to Y3, all deliberate:
+Four differences to Y3, all deliberate:
 
 - **Fiducial stand-in.** There is no DES Y6 fiducial projection, so the signal is that of the grid
   cosmology nearest the fiducial: prior-normalized distance over the CosmoGrid parameters, averaged
@@ -51,6 +51,12 @@ Three differences to Y3, all deliberate:
 - **Base kernel by overshoot.** Y3's rule only places the smallest bin. On Y3 the others happened
   to land just below a step (+2.9% at most). On Y6 it would give +15.4%: the extra lens bins
   MagLim 5 and 6 sit close to MagLim 4, between the coarse √2/√3/√4 steps.
+- **Base kernel in clustering-only runs too.** On Y3, only the combined runs use
+  `theta_fwhm_base`; the clustering-only runs take the smallest beam as the base, which on Y6
+  would smooth MagLim 5 at 65.2′ instead of 50.2′ (+29.9%; Y3's worst bin is +18.4%). The Y6
+  config sets `theta_fwhm_base_single_probe: True`, so its clustering-only runs smooth exactly as
+  the combined runs' clustering. Lensing keeps the smallest beam as its base on both surveys (Y6
+  +11.4% at most, Y3 +18.8%).
 
 ## Running
 

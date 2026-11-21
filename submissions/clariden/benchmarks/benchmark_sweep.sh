@@ -24,7 +24,7 @@ source /users/athomsen/dlss/repos/y3-deep-lss/submissions/clariden/common.sh
 : "${OUT_DIR:?set OUT_DIR, e.g. /iopsstor/scratch/cscs/athomsen/deep_lss/claude/bench/<name>}"
 BENCH_SCRIPT="${BENCH_SCRIPT:-benchmark_transformer.py}"
 BATCH_SIZES="${BATCH_SIZES:-16}"
-PROBE="${PROBE:-combined}"  # configs/probes/<PROBE>.yaml
+PROBE="${PROBE:-combined}"  # configs/probes/[<survey>/]<PROBE>.yaml
 
 SCRIPT="$DEEP_LSS/deep_lss/apps/benchmark/$BENCH_SCRIPT"
 TF_PY="$HOME/dlss/tf_env/bin/python"  # the benchmark apps run from the tf_env venv

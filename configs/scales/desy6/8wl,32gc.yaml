@@ -26,10 +26,12 @@ scale_cuts:
     # in Mpc/h, as for lensing
     transverse_scale: 32
     theta_fwhm: [128.1, 67.8, 56.5, 50.2, 46.1] # <- step values: scale_cuts.clustering.theta_fwhm
-    # base kernel FWHM when clustering gets its own kernel (per-probe smooth_nside), applied ceil((theta_fwhm /
-    # base)^2) times: the base with the smallest overshoot of the effective FWHM at no more repetitions than
-    # min(theta_fwhm) / sqrt(2) would take. Ignored by the uniform-nside smoothing path
+    # base kernel FWHM wherever clustering gets a kernel of its own, applied ceil((theta_fwhm / base)^2) times: the
+    # base with the smallest overshoot of the effective FWHM at no more repetitions than min(theta_fwhm) / sqrt(2)
+    # would take. The combined runs (per-probe smooth_nside) always use it
     theta_fwhm_base: 35.5 # <- step values: scale_cuts.clustering.theta_fwhm_base
+    # the clustering-only runs too; without this key (as for DES Y3) their base is min(theta_fwhm), +29.9% on MagLim 5
+    theta_fwhm_base_single_probe: True
     white_noise_sigma: [0.73882, 0.32222, 0.3336, 0.25215, 0.19879] # <- step values: scale_cuts.clustering.white_noise_sigma
     l_max: [136, 256, 307, 346, 377] # <- step values: scale_cuts.clustering.l_max
     l_min: [30, 30, 30, 30, 30]

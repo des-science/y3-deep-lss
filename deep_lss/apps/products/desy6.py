@@ -49,6 +49,8 @@ from msfm.utils import clustering, cosmogrid, files, filenames, logger, paramete
 from msfm.utils import input_output
 from msfm.utils import source_clustering_bias as scb
 
+from deep_lss.utils.configuration import PROBE_SAMPLES
+
 LOGGER = logger.get_logger(__file__)
 
 REPO_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.."))
@@ -62,8 +64,6 @@ PROVENANCE_FILE = "data/desy6/provenance.yaml"
 # the code a step runs, in this repository and in msfm
 CODE_PATHS = ("deep_lss", "configs")
 MSFM_CODE_PATHS = ("msfm", "configs")
-# the probes of the scales config and their msfm galaxy samples, in channel order
-PROBE_SAMPLES = {"lensing": "metacal", "clustering": "maglim"}
 
 
 def _out_path(rel_path):
@@ -226,7 +226,7 @@ def _scale_cut(cls, fwhm, l_min, threshold, n_side):
 
 
 def _fwhm_base(fwhm):
-    """The base FWHM of the per-probe smoothing kernel, which deepsphere repeats ceil((fwhm / base)^2) times per bin.
+    """The base FWHM of the clustering smoothing kernel, which deepsphere repeats ceil((fwhm / base)^2) times per bin.
 
     Among bases <= min(fwhm) on a 0.1 arcmin grid that cost no more repetitions than the DES Y3 rule (just above
     min(fwhm) / sqrt(2)), the one with the smallest worst overshoot of the effective FWHM base * sqrt(repetitions);
@@ -256,7 +256,7 @@ def step_values(conf, scales_conf, args):
     cosmology of msfm's config, rounded to 0.1 arcmin. l_max and white_noise_sigma follow from the rounded beam and the
     signal C_l of the nearest grid cosmology (step signal); the next cosmologies only report the spread. A bin whose
     beam does not reach the threshold below the band limit keeps its beam and gets l_max there, with a warning.
-    theta_fwhm_base: the base of the per-probe clustering kernel with the smallest overshoot at no more cost than the
+    theta_fwhm_base: the base of the clustering kernel with the smallest overshoot at no more cost than the
     DES Y3 rule (_fwhm_base).
 
     Returns:

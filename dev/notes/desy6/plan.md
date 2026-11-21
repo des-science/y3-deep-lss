@@ -143,6 +143,10 @@ What is not survey-agnostic:
 - **D10** (2026-11-21): `require_y3_inference` is removed, since msi's branch `desy6` selects the
   `<survey>` observations. The infer stage needs that msi checkout; an older msi writes no DES Y6
   chain, with only a warning.
+- **D11** (2026-11-21): the Y6 clustering-only runs use `theta_fwhm_base` (35.5′) too, through the
+  opt-in key `scale_cuts.clustering.theta_fwhm_base_single_probe: True`. Without it, their base is
+  min θ = 46.1′, which smooths MagLim 5 at 65.2′ (+29.9%; Y3's worst bin +18.4%). Y3 configs lack
+  the key, so every Y3 run keeps base = min θ. Lensing keeps min θ on both surveys (Y6 +11.4%).
 
 ## 4. Verification
 

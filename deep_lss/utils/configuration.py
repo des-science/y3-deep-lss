@@ -9,6 +9,9 @@ LOGGER = logger.get_logger(__file__)
 # the loss-block keys that the legacy maps configs.yaml stream folded into dlss_conf
 _LEGACY_LOSS_KEYS = ("loss_function", "delta_loss", "likelihood_loss", "mutual_info_loss")
 
+# the map probes of a scales config and their msfm galaxy samples, in channel order
+PROBE_SAMPLES = {"lensing": "metacal", "clustering": "maglim"}
+
 
 def read_split_configs(probes_config, scales_config=None):
     """Build the dlss_conf dict from the orthogonal split configs.
@@ -37,7 +40,8 @@ def check_scale_cuts(msfm_conf, dlss_conf):
 
     ``scale_cuts.survey`` (``DESy3`` when absent) must equal msfm's ``survey.name``, and every per-bin list of a
     probe block needs one entry per ``z_bins`` label of that probe's sample. A short list would otherwise fall back to
-    defaults without notice (``get_cls_bounds_per_pair``).
+    defaults without notice (``get_cls_bounds_per_pair``). ``theta_fwhm_base_single_probe`` needs a
+    ``theta_fwhm_base``.
 
     Args:
         msfm_conf (dict): Multiprobe-simulation-forward-model config.
@@ -51,7 +55,7 @@ def check_scale_cuts(msfm_conf, dlss_conf):
     if scales_survey != survey:
         raise ValueError(f"The scales config is for {scales_survey}, the msfm config for {survey}")
 
-    for probe, sample in (("lensing", "metacal"), ("clustering", "maglim")):
+    for probe, sample in PROBE_SAMPLES.items():
         n_z = len(msfm_conf["survey"][sample]["z_bins"])
         for key in ("theta_fwhm", "white_noise_sigma", "l_max", "l_min"):
             if key not in scale_cuts.get(probe, {}):
@@ -61,6 +65,11 @@ def check_scale_cuts(msfm_conf, dlss_conf):
                 raise ValueError(f"scale_cuts.{probe}.{key} is not set")
             if len(value) != n_z:
                 raise ValueError(f"scale_cuts.{probe}.{key} has {len(value)} entries for the {n_z} {sample} bins")
+        probe_conf = scale_cuts.get(probe, {})
+        if probe_conf.get("theta_fwhm_base_single_probe", False) and probe_conf.get("theta_fwhm_base") is None:
+            raise ValueError(
+                f"scale_cuts.{probe}.theta_fwhm_base_single_probe needs scale_cuts.{probe}.theta_fwhm_base"
+            )
 
 
 def load_run_configs(path):
@@ -260,8 +269,6 @@ def _get_split_probe_specs(
     output (finest) nside additionally carries the ``parent_output_idx`` that maps the output
     footprint to its coarse footprint, driving the in-network down/upsampling.
     """
-    _PROBE_SURVEYS = {"lensing": "metacal", "clustering": "maglim"}
-
     output_nside = max(probe_nsides.values())
     if output_nside < n_side:
         output_indices, _ = get_smooth_nside_indices(data_vec_pix, n_side, output_nside)
@@ -279,7 +286,7 @@ def _get_split_probe_specs(
         scale_conf = dlss_conf["scale_cuts"][probe]
         fwhm = list(scale_conf["theta_fwhm"])
         fwhm_base = scale_conf.get("theta_fwhm_base", None)
-        mask = mask_dict[_PROBE_SURVEYS[probe]]
+        mask = mask_dict[PROBE_SAMPLES[probe]]
 
         white_noise_sigma = np.array(scale_conf["white_noise_sigma"], dtype=float)
         if apply_norm:
@@ -331,6 +338,21 @@ def _get_split_probe_specs(
         )
 
     return {"split_probes": probe_specs}
+
+
+def _single_probe_fwhm_base(dlss_conf, probe_nsides, with_cross):
+    """``theta_fwhm_base`` for a run that smooths one probe's channels only, if that probe's scales block sets
+    ``theta_fwhm_base_single_probe: True``. Otherwise None, and the kernel's base is min(fwhm) (as for DES Y3)."""
+    if with_cross or len(probe_nsides) != 1:
+        return None
+    (probe,) = probe_nsides
+    scale_conf = dlss_conf.get("scale_cuts", {}).get(probe, {})
+    if not scale_conf.get("theta_fwhm_base_single_probe", False):
+        return None
+    if scale_conf.get("theta_fwhm_base") is None:
+        raise ValueError(f"scale_cuts.{probe}.theta_fwhm_base_single_probe needs scale_cuts.{probe}.theta_fwhm_base")
+    LOGGER.info(f"Single-probe smoothing for {probe}: fwhm_base={scale_conf['theta_fwhm_base']}")
+    return scale_conf["theta_fwhm_base"]
 
 
 def get_smoothing_kwargs(loss_function, msfm_conf, dlss_conf, net_conf, dir_base=None, mode="training"):
@@ -403,6 +425,9 @@ def get_smoothing_kwargs(loss_function, msfm_conf, dlss_conf, net_conf, dir_base
         smooth_indices = data_vec_pix
         mask_smooth = mask
 
+    # outside the try below, whose KeyError fallback would drop the smoothing layer silently
+    fwhm_base = _single_probe_fwhm_base(dlss_conf, probe_nsides, with_cross)
+
     try:
         fwhm = []
         white_noise_sigma = []
@@ -470,6 +495,8 @@ def get_smoothing_kwargs(loss_function, msfm_conf, dlss_conf, net_conf, dir_base
             "max_batch_size": effective_local_batch_size,
             "white_noise_sigma": white_noise_sigma,
         }
+        if fwhm_base is not None:
+            smoothing_kwargs["fwhm_base"] = fwhm_base
 
         if dir_base is not None:
             smoothing_kwargs["data_path"] = os.path.join(dir_base, "smoothing")

@@ -136,7 +136,10 @@ another survey.
 The DES Y6 scale cuts are derived, not typed in: `python -m deep_lss.apps.products.desy6 <step>`
 computes the signal power spectra and writes the smoothing scales, ℓ cuts and noise levels into the
 marked lines of `configs/scales/desy6/*.yaml`, recording each step in `data/desy6/provenance.yaml`.
-[`data/desy6/README.md`](data/desy6/README.md) describes the steps and their checks.
+[`data/desy6/README.md`](data/desy6/README.md) describes the steps and their checks. The DES Y6
+clustering block also sets `theta_fwhm_base_single_probe: True`, so the clustering-only runs smooth
+with its `theta_fwhm_base` as the combined runs do; without the key, as for DES Y3, a single-probe
+run takes its smallest beam as the base kernel.
 
 On the cluster, `VERSION=desy6/v1 SUBVERSION=default` selects the DES Y6 msfm config, and with it
 the `desy6/` configs and the `DESy6_grid_dmb_????.tfrecord` files; `INPUT` points at the

@@ -520,7 +520,7 @@ def evaluate_obs_grid(pred_file, grid_preds, grid_cosmos, i_sobols, i_signals, i
 
 
 def _get_cls_bin_indices(msfm_conf, dlss_conf):
-    """Indices selecting the probe-configured pairs from a full 36-pair raw Cl tensor,
+    """Indices selecting the probe-configured pairs from the raw Cl tensor of all bin pairs,
     matching configuration.get_cls_bounds_per_pair / ClsBinningAndTransformLayer."""
     from msfm.utils import cross_statistics
 
@@ -642,7 +642,7 @@ def evaluate_obs_mocks(model_fn, pred_file, msfm_conf, dlss_conf, data_dir, obs_
     norm_lensing = msfm_conf["analysis"]["normalization"]["lensing"]
     norm_clustering = msfm_conf["analysis"]["normalization"]["clustering"]
 
-    # obs/cls_raw in the mock file always stores all 36 lensing+clustering cross pairs;
+    # obs/cls_raw in the mock file always stores all lensing+clustering bin pairs;
     # select the subset matching the model's probe configuration (mirrors the TFRecord
     # parsing in msfm.utils.tfrecords and deep_lss.utils.configuration.get_cls_bounds_per_pair)
     cls_bin_indices = _get_cls_bin_indices(msfm_conf, dlss_conf)
