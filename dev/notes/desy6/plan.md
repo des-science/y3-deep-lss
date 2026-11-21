@@ -1,7 +1,8 @@
 # DES Y6 port of y3-deep-lss: plan
 
 Dev-phase plan, started 2026-11-20 on branch `desy6`. Repo docs must not point here. The upstream
-counterpart is msfm `dev/notes/desy6/plan.md`.
+counterpart is msfm `dev/notes/desy6/plan.md`. The differences to the Y3 v18 runs are in
+`differences_to_y3.md` (this folder).
 
 ## Goal and rules
 
