@@ -21,6 +21,13 @@ Rules:
   are selected from the msfm config's `survey.name`.
 - **Every `sbatch` waits for the user's OK.**
 
+## State (2026-11-21)
+
+Items 1-7 of section 2 are done and committed (msfm `d0abff2`; y3-deep-lss `e55676b`..). The Y3
+regression checks of section 4 (items 1-3) passed. The Y6 scale cuts are derived, with results in
+`data/desy6/README.md`. **Open: the Y6 smoke training (section 4, item 4)**, which needs an OK for
+the sbatch.
+
 ## 1. What is Y3-specific today (sweep of 2026-11-20)
 
 The Python package is survey-agnostic already:
@@ -109,6 +116,15 @@ What is not survey-agnostic:
 - **D4** (2026-11-20): Y6 configs in `configs/{probes,scales}/desy6/`. Y3 stays at the top level.
 - **D5** (2026-11-20): bias names stay msfm's (`bg1, bg3-bg6`, msfm D3). y3-deep-lss looks names
   up. msi's `plotting.py` is the port that must accept them.
+- **D6** (2026-11-21): metacal 4 keeps its 8 Mpc/h beam (10.4′) although its 1% crossing
+  (ℓ ≈ 1670) lies above the band limit. Its `l_max` is the band limit 1535 (2.0% of the squared
+  beam left), and the step warns. Rejected: capping the beam at the band-limit crossing (11.4′).
+  The cause is the deeper Y6 sources (mean z 1.16 against Y3's 0.94).
+- **D7** (2026-11-21): `theta_fwhm_base` is the base with the smallest overshoot at no more
+  repetitions than the Y3 rule: 35.5′, +8.9% at most. The literal Y3 rule gives +15.4% on Y6, since
+  MagLim 4-6 sit between the coarse √n steps. On the Y3 beams the new rule returns Y3's 40.4′.
+- **D8** (2026-11-21): σ stays on the nearest grid cosmology although the next four give 7-31%
+  more lensing noise (README, Results).
 
 ## 4. Verification
 
