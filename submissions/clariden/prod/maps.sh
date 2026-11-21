@@ -23,7 +23,6 @@ PROBE="${PROBE:-lensing}"             # configs/probes/[<survey>/]<PROBE>.yaml
 ARCH="${ARCH:-deepsphere}"            # configs/maps/prod/<ARCH>/: deepsphere | deepsphere_convnext | transformer
 INPUTS="${INPUTS:-maps+cls}"          # maps+cls | maps
 STAGES="${STAGES:-train eval infer}"
-has_stage infer && require_y3_inference
 MOCK_LABELS="${MOCK_LABELS:-}"        # without train: evaluate only these mocks, appended to the preds
 RUN_NUM="${RUN_NUM:-1}"               # position in a chain; >1 restores the checkpoint
 TRAIN_EXTRA="${TRAIN_EXTRA:-}"        # extra run_training.py flags, e.g. --profile, --n_steps=N

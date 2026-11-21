@@ -140,7 +140,8 @@ marked lines of `configs/scales/desy6/*.yaml`, recording each step in `data/desy
 
 On the cluster, `VERSION=desy6/v1 SUBVERSION=default` selects the DES Y6 msfm config, and with it
 the `desy6/` configs and the `DESy6_grid_dmb_????.tfrecord` files; `INPUT` points at the
-tfrecords. Inference (`msi`) does not handle DES Y6 yet, so DES Y6 runs take `STAGES="train eval"`.
+tfrecords. The infer stage needs an msi checkout that handles DES Y6; an older one writes no DES Y6
+chain.
 
 ### Entry points
 

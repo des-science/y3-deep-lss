@@ -21,7 +21,6 @@ source /users/athomsen/dlss/repos/y3-deep-lss/submissions/clariden/common.sh
 # "probe" or "probe:probes_config"; v17 needs e.g. "lensing:lensing_nla combined:combined_nla"
 read -r -a PROBES <<< "${PROBES:-lensing clustering combined}"
 STAGES="${STAGES:-train infer}"       # cache | train | eval | infer
-has_stage infer && require_y3_inference
 MOCK_LABELS="${MOCK_LABELS:-}"        # required with eval and no train: mocks appended to the preds
 
 PROD_NET_CONFIG="$DEEP_LSS/configs/cls/branch/default.yaml"

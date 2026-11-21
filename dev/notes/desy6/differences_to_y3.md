@@ -56,8 +56,8 @@ and `plan.md` (this folder). The forward-model differences are in msfm
 - **Production training.** It waits for msfm's production grid tfrecords (`INPUT`). The smoke
   training passed on the 24 msfm benchmark tfrecords (job 5416191, 2026-11-21).
 - **The Cls path and maps+cls.** Both need msfm's merged `grid_cls.h5` of the production grid.
-- **Inference.** `require_y3_inference` still blocks the infer stage. msi accepts `DESy6` on its
-  `desy6` branch, so lifting the guard is a y3-deep-lss step.
+- **Inference.** The infer stage runs msi as on Y3 and needs msi's branch `desy6`. No Y6 inference
+  has run yet.
 - **Other probes.** 2x2pt and 3x2pt are not ported: msfm's `lenses_before_sources` works by bin
   position, which is wrong for lens labels 1, 3-6. Neither are the `_nla`, `_min`, `_ext`,
   `cross` and `clustering_auto` variants.

@@ -54,13 +54,6 @@ make_log_dir() { [ "$DRYRUN" = "1" ] || mkdir -p "$1"; }
 
 has_stage() { [[ " $STAGES " == *" $1 "* ]]; }
 
-# msi selects only DES Y3 observations, so another survey's inference would end without chains and without an error.
-require_y3_inference() {
-    [ "$SURVEY" = "DESy3" ] && return 0
-    echo "msi is not ported to $SURVEY; drop the infer stage, e.g. STAGES=\"train eval\"." >&2
-    exit 1
-}
-
 # Pause between two stages of one job, so the previous step has released its GPUs.
 settle() { [ "$DRYRUN" = "1" ] || sleep 30; }
 

@@ -33,8 +33,10 @@ regression checks of section 4 (items 1-3) passed. The Y6 scale cuts are derived
 - 11 labels, and the W&B tag `desy6/v1` accepted;
 - the eval wrote `obs/preds/DESy6` only (D9) and 24 × 80 grid predictions, all finite.
 
-The run is in `claude/bench/desy6_deep_lss_smoke/`. **Next:** the production tfrecords (msfm), the
-Cls path on msfm's `grid_cls.h5`, and the msi port.
+The run is in `claude/bench/desy6_deep_lss_smoke/`. msi is ported on its branch `desy6`, so the
+`require_y3_inference` guard is gone (D10); the Y3 dry runs are unchanged, and the Y6 one reaches
+msi's `run_inference.py`. **Next:** the production tfrecords (msfm), and the Cls path on msfm's
+`grid_cls.h5`.
 
 ## 1. What is Y3-specific today (sweep of 2026-11-20)
 
@@ -108,7 +110,8 @@ What is not survey-agnostic:
      - `SURVEY` from `$MSFM_CONFIG` (`DESy3` if the file is missing);
      - survey subdirs for `SCALES_CONFIG` and a new `PROBES_DIR`;
      - `INPUT` and `TRAIN_TFR` overridable, the glob prefix from `SURVEY`;
-     - `require_y3_inference`, called after `STAGES=` in `prod/maps.sh` and `prod/cls.sh`.
+     - `require_y3_inference`, called after `STAGES=` in `prod/maps.sh` and `prod/cls.sh` (removed
+       again, D10).
    - Use `$PROBES_DIR` wherever `configs/probes/` was spelled out.
 7. **Docs.** A DES Y6 paragraph in the README.
 
@@ -137,6 +140,9 @@ What is not survey-agnostic:
   `DESy3`. The test variants `_no_sys` and `_no_psi_rot` are opt-in (`--des_variants`). Their
   default stays on for DES Y3, whose frozen runs and msi chains carry them. The msi port has to
   follow the same default.
+- **D10** (2026-11-21): `require_y3_inference` is removed, since msi's branch `desy6` selects the
+  `<survey>` observations. The infer stage needs that msi checkout; an older msi writes no DES Y6
+  chain, with only a warning.
 
 ## 4. Verification
 
@@ -152,7 +158,7 @@ What is not survey-agnostic:
    - Y3 `combined.yaml` on Y6 raises on `bg2`.
    - `values --check` exits 1 after a hand edit.
 3. **Y6 dry run.** `VERSION=desy6/v1 DRYRUN=1 PROBE=combined INPUTS=maps STAGES="train eval"`; with
-   the default STAGES it stops at `require_y3_inference`.
+   the default STAGES it stopped at `require_y3_inference` until D10, and now reaches msi.
 4. **Y6 smoke training** (debug, <30 min).
    - Inputs: the 24 tfrecords of the msfm CPU benchmark,
      `claude/bench/desy6_grid_cpu/s24/tfrecords/` (production schema, stand-in bias table).
