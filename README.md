@@ -121,6 +121,25 @@ tuple, and any two runs differ in a readable way.
 `msi/apps/run_inference.py` reads it back from there. That file — not the repository YAML — is the
 record of what a run actually did.
 
+### Surveys: DES Y3 and DES Y6
+
+The survey is the one of the msfm config, its `survey.name`. The DES Y3 probes and scales configs
+sit at the top of `configs/probes/` and `configs/scales/`; those of DES Y6 sit in their `desy6/`
+subdirectories. DES Y6 has five lens bins (MagLim 1, 3, 4, 5, 6), so its bias parameters are
+`bg1, bg3, bg4, bg5, bg6`. A scales config states its survey as `scale_cuts.survey` (DES Y3 when
+absent), and the entry points refuse a scales config of another survey or with a per-bin list that
+does not match the msfm config's bins. The observation keys follow the survey too, e.g.
+`obs/preds/DESy6` and `obs/preds/DESy6_no_sys`.
+
+The DES Y6 scale cuts are derived, not typed in: `python -m deep_lss.apps.products.desy6 <step>`
+computes the signal power spectra and writes the smoothing scales, ℓ cuts and noise levels into the
+marked lines of `configs/scales/desy6/*.yaml`, recording each step in `data/desy6/provenance.yaml`.
+[`data/desy6/README.md`](data/desy6/README.md) describes the steps and their checks.
+
+On the cluster, `VERSION=desy6/v1 SUBVERSION=default` selects the DES Y6 msfm config, and with it
+the `desy6/` configs and the `DESy6_grid_dmb_????.tfrecord` files; `INPUT` points at the
+tfrecords. Inference (`msi`) does not handle DES Y6 yet, so DES Y6 runs take `STAGES="train eval"`.
+
 ### Entry points
 
 All under [`deep_lss/apps/`](deep_lss/apps/), in three groups: the production scripts at the top
@@ -173,7 +192,8 @@ GPU and are run on a login node as `python -m deep_lss.apps.tuning.<module>`.
 ```
 deep_lss/
   apps/            the entry points above: the production scripts, plus benchmark/ (pre-training
-                   sizing) and tuning/ (post-training scoring, login-node only)
+                   sizing), tuning/ (post-training scoring, login-node only) and products/ (the
+                   derived DES Y6 scale cuts)
   models/          one model class per loss function, combining data loading, network and loss
                      base_model.py, delta_model.py, grid_model.py
   nets/            the architecture tree above
@@ -181,6 +201,7 @@ deep_lss/
                    multi-GPU distribution (distribute/), evaluation, throughput, Cls
                    preprocessing, configuration, config_check (the benchmark-config validator,
                    with a `python -m` command line of its own)
+data/desy6/        the products behind the DES Y6 scale cuts, with their provenance
 configs/           analysis choices (data/ probes/ scales/ loss/) and architectures
                    (deepsphere/ transformer/ cls/, each split by probe)
 submissions/       SLURM scripts, parameterized by environment variable rather than copied

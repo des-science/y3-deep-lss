@@ -1,0 +1,34 @@
+# DES Y6 scale cuts: 8 Mpc/h (lensing) and 32 Mpc/h (clustering) transverse comoving scales at each bin's mean
+# redshift, by the method of the DES Y3 configs/scales/8wl,32gc.yaml. Bins follow the msfm config's z_bins.
+#
+# The derived values come from `python -m deep_lss.apps.products.desy6 <step>` (data/desy6/README.md). A line marked
+#   # <- step values: <dotted.key>
+# is written by the step values; do not edit it by hand (`values --check` catches a stale value).
+#
+# white_noise_sigma is the smoothed signal power at l_max of the grid cosmology nearest the fiducial, since there is
+# no DES Y6 fiducial projection yet. The same noise enters the simulations and the data, so the stand-in moves the
+# effective scale cut, not the posterior's centre.
+scale_cuts:
+  survey: DESy6
+  n_sigma_support: 3
+  arcmin: True
+  # l_max is where the squared beam falls below this fraction
+  threshold: 0.01
+  lensing:
+    # in Mpc/h; theta_fwhm is this scale at each bin's mean redshift, in msfm's fiducial cosmology
+    transverse_scale: 8
+    theta_fwhm: null # <- step values: scale_cuts.lensing.theta_fwhm
+    white_noise_sigma: null # <- step values: scale_cuts.lensing.white_noise_sigma
+    l_max: null # <- step values: scale_cuts.lensing.l_max
+    l_min: [30, 30, 30, 30]
+  clustering:
+    # in Mpc/h, as for lensing
+    transverse_scale: 32
+    theta_fwhm: null # <- step values: scale_cuts.clustering.theta_fwhm
+    # base kernel FWHM when clustering gets its own kernel (per-probe smooth_nside): just above min(theta_fwhm) /
+    # sqrt(2), so every ratio stays below 2 under the ceil, reps = ceil((theta_fwhm / base)^2). Ignored by the
+    # uniform-nside smoothing path
+    theta_fwhm_base: null # <- step values: scale_cuts.clustering.theta_fwhm_base
+    white_noise_sigma: null # <- step values: scale_cuts.clustering.white_noise_sigma
+    l_max: null # <- step values: scale_cuts.clustering.l_max
+    l_min: [30, 30, 30, 30, 30]

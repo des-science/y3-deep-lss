@@ -1,0 +1,14 @@
+dset:
+  common:
+    with_lensing: True
+    with_clustering: True
+    with_cross_z: True
+    with_cross_probe: True
+    apply_norm: True
+  training:
+    params: [Om, s8, w0, Aia, n_Aia, bta, bg1, bg3, bg4, bg5, bg6]
+  eval:
+    fiducial:
+      params: []
+    grid:
+      params: [Om, s8, w0, Aia, n_Aia, bta, bg1, bg3, bg4, bg5, bg6]
