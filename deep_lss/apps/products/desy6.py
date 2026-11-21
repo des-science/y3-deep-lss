@@ -22,9 +22,9 @@ Steps, in order:
 Usage:
     OMP_NUM_THREADS=4 python -m deep_lss.apps.products.desy6 signal --msfm-config <msfm>/configs/desy6/v1/default.yaml \
         --scales configs/scales/desy6/8wl,32gc.yaml --source <projection> --max-perms 1 --n-nearest 1   # smoke test
-    OMP_NUM_THREADS=4 taskset -c 0-15 python -m deep_lss.apps.products.desy6 signal \
+    OMP_NUM_THREADS=4 python -m deep_lss.apps.products.desy6 signal \
         --msfm-config <msfm>/configs/desy6/v1/default.yaml --scales configs/scales/desy6/8wl,32gc.yaml \
-        --source <projection>   # about a minute; the pool fills the cores taskset leaves it
+        --source <projection>   # the pool fills the CPUs of the process (48 in a daint login session)
     python -m deep_lss.apps.products.desy6 values --msfm-config <msfm>/configs/desy6/v1/default.yaml \
         --scales configs/scales/desy6/8wl,32gc.yaml
     python -m deep_lss.apps.products.desy6 values ... --check   # exit 1 if stale
@@ -211,6 +211,10 @@ def _scale_cut(cls, fwhm, l_min, threshold, n_side):
     """l_max where the squared beam falls below threshold, and the white noise of the smoothed signal power there.
 
     Follows msfm dev/scripts/noise_models/derive_scale_cut_noise.py, the port of msfm notebooks/desy3/scale_cuts.ipynb.
+    A beam too narrow to reach the threshold below the band limit 3 n_side - 1 gets l_max there instead.
+
+    Returns:
+        tuple: (l_max, sigma, squared beam at l_max), the last above threshold only at the band limit
     """
     ell = np.arange(len(cls))
     low_pass = scales.gaussian_low_pass_factor_alm(ell, theta_fwhm=fwhm, arcmin=True) ** 2
@@ -218,7 +222,31 @@ def _scale_cut(cls, fwhm, l_min, threshold, n_side):
     below = ell[low_pass < threshold]
     l_max = int(below[0]) if len(below) else int(ell[-1])
     cl_noise = high_pass[l_max] * low_pass[l_max] * cls[l_max]
-    return l_max, float(np.sqrt(cl_noise / hp.nside2pixarea(n_side)))
+    return l_max, float(np.sqrt(cl_noise / hp.nside2pixarea(n_side))), float(low_pass[l_max])
+
+
+def _fwhm_base(fwhm):
+    """The base FWHM of the per-probe smoothing kernel, which deepsphere repeats ceil((fwhm / base)^2) times per bin.
+
+    Among bases <= min(fwhm) on a 0.1 arcmin grid that cost no more repetitions than the DES Y3 rule (just above
+    min(fwhm) / sqrt(2)), the one with the smallest worst overshoot of the effective FWHM base * sqrt(repetitions);
+    a tie goes to the larger base. The ceil never smooths less than asked.
+
+    Returns:
+        tuple: (base, repetitions, effective FWHM)
+    """
+    fwhm = np.asarray(fwhm, dtype=np.float64)
+
+    def reps(base):
+        return np.ceil((fwhm / base) ** 2)
+
+    def overshoot(base):
+        return np.max(base * np.sqrt(reps(base)) / fwhm)
+
+    budget = np.sum(reps(np.floor(10 * np.min(fwhm) / np.sqrt(2)) / 10 + 0.1))
+    bases = [b for b in np.arange(1, int(round(10 * np.min(fwhm))) + 1) / 10 if b <= np.min(fwhm)]
+    base = min((b for b in bases if np.sum(reps(b)) <= budget), key=lambda b: (overshoot(b), -b))
+    return float(base), reps(base).astype(int), base * np.sqrt(reps(base))
 
 
 def step_values(conf, scales_conf, args):
@@ -226,9 +254,10 @@ def step_values(conf, scales_conf, args):
 
     theta_fwhm: the beam of scale_cuts.<probe>.transverse_scale (Mpc/h) at the bin's mean redshift, in the fiducial
     cosmology of msfm's config, rounded to 0.1 arcmin. l_max and white_noise_sigma follow from the rounded beam and the
-    signal C_l of the nearest grid cosmology (step signal); the next cosmologies only report the spread.
-    theta_fwhm_base: just above the smallest clustering beam / sqrt(2), so that every ratio of the per-probe smoothing
-    stays below 2 under the ceil.
+    signal C_l of the nearest grid cosmology (step signal); the next cosmologies only report the spread. A bin whose
+    beam does not reach the threshold below the band limit keeps its beam and gets l_max there, with a warning.
+    theta_fwhm_base: the base of the per-probe clustering kernel with the smallest overshoot at no more cost than the
+    DES Y3 rule (_fwhm_base).
 
     Returns:
         tuple: (input paths, output paths), or None with --dry-run, --check or when every value is up to date
@@ -284,6 +313,11 @@ def step_values(conf, scales_conf, args):
             l_max.append(cut[0][0])
             sigma.append(float(f"{cut[0][1]:.5g}"))
             sigmas.append([c[1] for c in cut])
+            if cut[0][2] >= threshold:
+                LOGGER.warning(
+                    f"{conf['survey'][sample]['z_bins'][j]}: the squared {f_j} arcmin beam is still {cut[0][2]:.4f} at "
+                    f"the band limit, so l_max is the band limit {cut[0][0]}, not a {threshold} crossing"
+                )
         i_bin += len(fwhm)
         LOGGER.info(f"{probe}: mean z {np.round(z_bar, 4).tolist()}, theta_fwhm {fwhm.tolist()}, l_max {l_max}")
 
@@ -291,7 +325,12 @@ def step_values(conf, scales_conf, args):
         values[f"scale_cuts.{probe}.white_noise_sigma"] = sigma
         values[f"scale_cuts.{probe}.l_max"] = l_max
         if probe == "clustering":
-            values[f"scale_cuts.{probe}.theta_fwhm_base"] = float(np.floor(10 * np.min(fwhm) / np.sqrt(2)) / 10 + 0.1)
+            base, reps, effective = _fwhm_base(fwhm)
+            values[f"scale_cuts.{probe}.theta_fwhm_base"] = base
+            LOGGER.info(
+                f"{probe}: theta_fwhm_base {base}, repetitions {reps.tolist()}, effective FWHM "
+                f"{np.round(effective, 1).tolist()} (+{100 * np.max(effective / fwhm - 1):.1f}% at most)"
+            )
 
     # how much the noise level depends on the stand-in cosmology
     sigmas = np.array(sigmas)
