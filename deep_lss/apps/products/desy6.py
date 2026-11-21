@@ -260,7 +260,8 @@ def step_values(conf, scales_conf, args):
     DES Y3 rule (_fwhm_base).
 
     Returns:
-        tuple: (input paths, output paths), or None with --dry-run, --check or when every value is up to date
+        tuple: (input paths, output paths), or None with --dry-run, --check, or when every value is up to date and
+            --provenance is not set
     """
     scales_path = os.path.abspath(args.scales)
     signal_path = _out_path(SIGNAL_FILE)
@@ -338,7 +339,9 @@ def step_values(conf, scales_conf, args):
         ratio = sigmas[:, k] / sigmas[:, 0]
         LOGGER.info(f"sigma of {cosmo_keys[k]} / {cosmo_keys[0]}: {np.round(ratio, 3).tolist()}")
 
-    if not products.write_marked_values(scales_conf, scales_path, values, args.check, rel=_rel):
+    written = products.write_marked_values(scales_conf, scales_path, values, args.check, rel=_rel)
+    # with --provenance an up-to-date config is recorded too: these inputs at this commit give its values
+    if args.check or not (written or args.provenance):
         return None
     return inputs, [scales_path]
 
