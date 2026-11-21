@@ -25,8 +25,15 @@ Rules:
 
 Items 1-7 of section 2 are done and committed (msfm `d0abff2`; y3-deep-lss `e55676b`..). The Y3
 regression checks of section 4 (items 1-3) passed. The Y6 scale cuts are derived, with results in
-`data/desy6/README.md`. **Open: the Y6 smoke training (section 4, item 4)**, which needs an OK for
-the sbatch.
+`data/desy6/README.md`. The Y6 smoke training (section 4, item 4) passed on 2026-11-21 (job 5416191,
+5:28):
+- 200 steps on the 24 msfm benchmark tfrecords;
+- 4 + 5 smoothing channels, with the predicted clustering repetitions [14, 4, 3, 2, 2];
+- 11 labels, and the W&B tag `desy6/v1` accepted;
+- the eval wrote `obs/preds/DESy6` only (D9) and 24 × 80 grid predictions, all finite.
+
+The run is in `claude/bench/desy6_deep_lss_smoke/`. **Next:** the production tfrecords (msfm), the
+Cls path on msfm's `grid_cls.h5`, and the msi port.
 
 ## 1. What is Y3-specific today (sweep of 2026-11-20)
 
