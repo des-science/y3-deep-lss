@@ -22,12 +22,12 @@ steps:
     - path: data/desy6/desy6_signal_cls.h5
       sha256: b9d8a552ceefa6df573062693e9fb70147ffadbb2cc51773e0b365dc62f7d637
   values:
-    date: '2026-11-21T14:02:29+01:00'
+    date: '2026-11-21T15:12:08+01:00'
     command: python -m deep_lss.apps.products.desy6 values --msfm-config /users/athomsen/dlss/repos/multiprobe-simulation-forward-model/configs/desy6/v1/default.yaml
       --scales configs/scales/desy6/8wl,32gc.yaml --provenance
     config: configs/scales/desy6/8wl,32gc.yaml
-    deep_lss_commit: 480b92f7e296f51d49ed690aeac2e9a3d961f55f
-    msfm_commit: af6e565ec51d1771298846fe9488273c5cf91c05
+    deep_lss_commit: e2fbcba43c8edcf58333d88452b19722ec33e9ba
+    msfm_commit: fd3a8d1645f44f02b86e8585c2d8f73f061aab9b
     inputs:
     - path: /users/athomsen/dlss/repos/multiprobe-simulation-forward-model/configs/desy6/v1/default.yaml
       bytes: 7198
@@ -64,4 +64,4 @@ steps:
       mtime: '2026-11-20T17:55:51+01:00'
     outputs:
     - path: configs/scales/desy6/8wl,32gc.yaml
-      sha256: a3ce85e9d21a140e56e27ff5e15bf145ec3e260191afa301e412b6d869554925
+      sha256: 82292f0e5800f6ec4fd048f2f6d9e0c47075561f12ea2b4be9ecff1fafb7a4ba
