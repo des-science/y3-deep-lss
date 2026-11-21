@@ -35,7 +35,7 @@ run_probe() {
             python "$SCRIPT" \
                 --train_tfr_pattern="$TRAIN_TFR" \
                 --net_config="$NET_CONFIG" \
-                --probes_config="$DEEP_LSS/configs/probes/$PROBE.yaml" \
+                --probes_config="$PROBES_DIR$PROBE.yaml" \
                 --scales_config="$SCALES_CONFIG" \
                 --data_config="$DATA_CONFIG" \
                 --msfm_config="$MSFM_CONFIG" \

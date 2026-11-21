@@ -23,13 +23,21 @@ SCALES="${SCALES:-8wl,32gc}"  # configs/scales/
 LOSS="${LOSS:-vmim}"          # configs/loss/
 DATA="${DATA:-default}"       # configs/data/
 
-INPUT="$MYSCRATCH/deep_lss/data/$VERSION/$SUBVERSION"
+MSFM_CONFIG="$MSFM/configs/$VERSION/$SUBVERSION.yaml"
+# survey.name of the msfm config; DES Y3 (VERSION=v18) when the config is not on this msfm checkout
+SURVEY=$(awk '/^survey:/{s=1} s&&/^  name:/{print $2; exit}' "$MSFM_CONFIG" 2>/dev/null)
+SURVEY="${SURVEY:-DESy3}"
+# DES Y3 probes and scales configs sit at the top of their dirs, every other survey's in a subdir, e.g. desy6/
+SURVEY_DIR=""
+[ "$SURVEY" = "DESy3" ] || SURVEY_DIR="${SURVEY,,}/"
+
+INPUT="${INPUT:-$MYSCRATCH/deep_lss/data/$VERSION/$SUBVERSION}"
 OBS_INPUT="${OBS_INPUT:-$STORE/deep_lss/data/$VERSION/$SUBVERSION}"  # mock observations live on the store
 RUNS_ROOT="${RUNS_ROOT:-$MYSCRATCH/deep_lss/runs/$VERSION/$SUBVERSION}"
-TRAIN_TFR="$INPUT/tfrecords/grid/DESy3_grid_dmb_????.tfrecord"
+TRAIN_TFR="${TRAIN_TFR:-$INPUT/tfrecords/grid/${SURVEY}_grid_dmb_????.tfrecord}"
 
-MSFM_CONFIG="$MSFM/configs/$VERSION/$SUBVERSION.yaml"
-SCALES_CONFIG="$DEEP_LSS/configs/scales/$SCALES.yaml"
+PROBES_DIR="$DEEP_LSS/configs/probes/$SURVEY_DIR"
+SCALES_CONFIG="$DEEP_LSS/configs/scales/$SURVEY_DIR$SCALES.yaml"
 LOSS_CONFIG="$DEEP_LSS/configs/loss/$LOSS.yaml"
 DATA_CONFIG="$DEEP_LSS/configs/data/$DATA.yaml"
 
@@ -45,6 +53,13 @@ SLURM_JOB_ID="${SLURM_JOB_ID:-dryrun}"
 make_log_dir() { [ "$DRYRUN" = "1" ] || mkdir -p "$1"; }
 
 has_stage() { [[ " $STAGES " == *" $1 "* ]]; }
+
+# msi selects only DES Y3 observations, so another survey's inference would end without chains and without an error.
+require_y3_inference() {
+    [ "$SURVEY" = "DESy3" ] && return 0
+    echo "msi is not ported to $SURVEY; drop the infer stage, e.g. STAGES=\"train eval\"." >&2
+    exit 1
+}
 
 # Pause between two stages of one job, so the previous step has released its GPUs.
 settle() { [ "$DRYRUN" = "1" ] || sleep 30; }
@@ -99,7 +114,7 @@ ensure_cls_cache() {
         --output="$log" \
         python "$DEEP_LSS/deep_lss/apps/run_cls_training+evaluation.py" \
             --msfm_config="$MSFM_CONFIG" \
-            --probes_config="$DEEP_LSS/configs/probes/combined.yaml" \
+            --probes_config="${PROBES_DIR}combined.yaml" \
             --scales_config="$SCALES_CONFIG" \
             --loss_config="$LOSS_CONFIG" \
             --net_config="$build_config" \

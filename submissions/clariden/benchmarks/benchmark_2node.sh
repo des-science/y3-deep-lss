@@ -41,7 +41,7 @@ $SRUN $SRUN_MPI --environment=tensorflow --gpu-bind="$GPU_BIND" --output="${LOG}
         --train_tfr_pattern="$TRAIN_TFR" \
         --data_dir="$INPUT" \
         --msfm_config="$MSFM_CONFIG" \
-        --probes_config="$DEEP_LSS/configs/probes/$PROBE.yaml" \
+        --probes_config="$PROBES_DIR$PROBE.yaml" \
         --scales_config="$SCALES_CONFIG" \
         --loss_config="$LOSS_CONFIG" \
         --data_config="$DATA_CONFIG" \

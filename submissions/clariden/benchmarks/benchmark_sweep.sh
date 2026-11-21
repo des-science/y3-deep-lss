@@ -63,7 +63,7 @@ for cfg in "${CONFIGS[@]}"; do
         $SRUN --overlap --environment=tensorflow --gpu-bind=none --ntasks=1 \
             "$TF_PY" "$SCRIPT" --single \
                 --net_config "$cfg" --batch_size "$bs" \
-                --msfm_config "$MSFM_CONFIG" --probes_config "$DEEP_LSS/configs/probes/$PROBE.yaml" \
+                --msfm_config "$MSFM_CONFIG" --probes_config "$PROBES_DIR$PROBE.yaml" \
                 --scales_config "$SCALES_CONFIG" --loss_config "$LOSS_CONFIG" --data_config "$DATA_CONFIG" \
             > "$log" 2>&1
         [ "$DRYRUN" = "1" ] && { cat "$log"; rm -f "$log"; continue; }

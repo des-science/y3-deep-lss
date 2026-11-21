@@ -19,10 +19,11 @@
 
 source /users/athomsen/dlss/repos/y3-deep-lss/submissions/clariden/common.sh
 
-PROBE="${PROBE:-lensing}"             # configs/probes/<PROBE>.yaml
+PROBE="${PROBE:-lensing}"             # configs/probes/[<survey>/]<PROBE>.yaml
 ARCH="${ARCH:-deepsphere}"            # configs/maps/prod/<ARCH>/: deepsphere | deepsphere_convnext | transformer
 INPUTS="${INPUTS:-maps+cls}"          # maps+cls | maps
 STAGES="${STAGES:-train eval infer}"
+has_stage infer && require_y3_inference
 MOCK_LABELS="${MOCK_LABELS:-}"        # without train: evaluate only these mocks, appended to the preds
 RUN_NUM="${RUN_NUM:-1}"               # position in a chain; >1 restores the checkpoint
 TRAIN_EXTRA="${TRAIN_EXTRA:-}"        # extra run_training.py flags, e.g. --profile, --n_steps=N
@@ -69,7 +70,7 @@ if has_stage train; then
             --train_tfr_pattern="$TRAIN_TFR" \
             --data_dir="$INPUT" \
             --msfm_config="$MSFM_CONFIG" \
-            --probes_config="$DEEP_LSS/configs/probes/$PROBE.yaml" \
+            --probes_config="$PROBES_DIR$PROBE.yaml" \
             --scales_config="$SCALES_CONFIG" \
             --loss_config="$LOSS_CONFIG" \
             --data_config="$DATA_CONFIG" \
