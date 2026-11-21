@@ -12,23 +12,24 @@ scale_cuts:
   survey: DESy6
   n_sigma_support: 3
   arcmin: True
-  # l_max is where the squared beam falls below this fraction
+  # l_max is where the squared beam falls below this fraction, or the band limit 3 n_side - 1 for a beam too narrow
+  # to get there
   threshold: 0.01
   lensing:
     # in Mpc/h; theta_fwhm is this scale at each bin's mean redshift, in msfm's fiducial cosmology
     transverse_scale: 8
-    theta_fwhm: null # <- step values: scale_cuts.lensing.theta_fwhm
-    white_noise_sigma: null # <- step values: scale_cuts.lensing.white_noise_sigma
-    l_max: null # <- step values: scale_cuts.lensing.l_max
+    theta_fwhm: [24.3, 19.2, 13.2, 10.4] # <- step values: scale_cuts.lensing.theta_fwhm
+    white_noise_sigma: [0.00028229, 0.00036721, 0.00043742, 0.00073373] # <- step values: scale_cuts.lensing.white_noise_sigma
+    l_max: [715, 905, 1316, 1535] # <- step values: scale_cuts.lensing.l_max
     l_min: [30, 30, 30, 30]
   clustering:
     # in Mpc/h, as for lensing
     transverse_scale: 32
-    theta_fwhm: null # <- step values: scale_cuts.clustering.theta_fwhm
-    # base kernel FWHM when clustering gets its own kernel (per-probe smooth_nside): just above min(theta_fwhm) /
-    # sqrt(2), so every ratio stays below 2 under the ceil, reps = ceil((theta_fwhm / base)^2). Ignored by the
-    # uniform-nside smoothing path
-    theta_fwhm_base: null # <- step values: scale_cuts.clustering.theta_fwhm_base
-    white_noise_sigma: null # <- step values: scale_cuts.clustering.white_noise_sigma
-    l_max: null # <- step values: scale_cuts.clustering.l_max
+    theta_fwhm: [128.1, 67.8, 56.5, 50.2, 46.1] # <- step values: scale_cuts.clustering.theta_fwhm
+    # base kernel FWHM when clustering gets its own kernel (per-probe smooth_nside), applied ceil((theta_fwhm /
+    # base)^2) times: the base with the smallest overshoot of the effective FWHM at no more repetitions than
+    # min(theta_fwhm) / sqrt(2) would take. Ignored by the uniform-nside smoothing path
+    theta_fwhm_base: 35.5 # <- step values: scale_cuts.clustering.theta_fwhm_base
+    white_noise_sigma: [0.73882, 0.32222, 0.3336, 0.25215, 0.19879] # <- step values: scale_cuts.clustering.white_noise_sigma
+    l_max: [136, 256, 307, 346, 377] # <- step values: scale_cuts.clustering.l_max
     l_min: [30, 30, 30, 30, 30]
