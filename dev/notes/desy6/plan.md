@@ -125,6 +125,10 @@ What is not survey-agnostic:
   MagLim 4-6 sit between the coarse √n steps. On the Y3 beams the new rule returns Y3's 40.4′.
 - **D8** (2026-11-21): σ stays on the nearest grid cosmology although the next four give 7-31%
   more lensing noise (README, Results).
+- **D9** (2026-11-21): DES Y6 evaluates only the default observation `DESy6`, the analogue of Y3's
+  `DESy3`. The test variants `_no_sys` and `_no_psi_rot` are opt-in (`--des_variants`). Their
+  default stays on for DES Y3, whose frozen runs and msi chains carry them. The msi port has to
+  follow the same default.
 
 ## 4. Verification
 

@@ -128,8 +128,10 @@ sit at the top of `configs/probes/` and `configs/scales/`; those of DES Y6 sit i
 subdirectories. DES Y6 has five lens bins (MagLim 1, 3, 4, 5, 6), so its bias parameters are
 `bg1, bg3, bg4, bg5, bg6`. A scales config states its survey as `scale_cuts.survey` (DES Y3 when
 absent), and the entry points refuse a scales config of another survey or with a per-bin list that
-does not match the msfm config's bins. The observation keys follow the survey too, e.g.
-`obs/preds/DESy6` and `obs/preds/DESy6_no_sys`.
+does not match the msfm config's bins. The observation key follows the survey too, e.g.
+`obs/preds/DESy6`. Its test variants, without the lens weight maps (`_no_sys`) and without the shear
+rotation (`_no_psi_rot`), are evaluated by default for DES Y3 only; `--des_variants` adds them for
+another survey.
 
 The DES Y6 scale cuts are derived, not typed in: `python -m deep_lss.apps.products.desy6 <step>`
 computes the signal power spectra and writes the smoothing scales, ℓ cuts and noise levels into the

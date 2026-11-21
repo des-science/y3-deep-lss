@@ -542,8 +542,16 @@ def _get_cls_bin_indices(msfm_conf, dlss_conf):
     return cls_bin_indices
 
 
-def evaluate_obs_des(model_fn, pred_file, msfm_conf, dlss_conf):
-    """Evaluate the real DES catalogs of msfm's survey.name through the network, with and without systematics."""
+def des_variants(msfm_conf, requested=None):
+    """Whether the DES observation is also evaluated in its test variants, without the lens weight maps (_no_sys) and
+    without the shear rotation (_no_psi_rot). Unless requested, on for DES Y3, whose frozen runs carry them."""
+    if requested is not None:
+        return requested
+    return msfm_conf["survey"]["name"] == "DESy3"
+
+
+def evaluate_obs_des(model_fn, pred_file, msfm_conf, dlss_conf, with_variants=True):
+    """Evaluate the real DES catalogs of msfm's survey.name through the network, with the variants if requested."""
     from msfm.utils import catalog, observation
 
     with_lensing = dlss_conf["dset"]["common"]["with_lensing"]
@@ -559,13 +567,13 @@ def evaluate_obs_des(model_fn, pred_file, msfm_conf, dlss_conf):
     gc_map = catalog.build_maglim_map_from_cat(msfm_conf) if use_gc else None
 
     lensing_variants = [(wl_map, "")]
-    if use_wl:
+    if use_wl and with_variants:
         wl_map_no_psi_rot = catalog.build_metacal_map_from_cat(msfm_conf, apply_shear_rotation=False, debug=False)[0]
         lensing_variants.append((wl_map_no_psi_rot, "_no_psi_rot"))
 
     survey = msfm_conf["survey"]["name"]
     sys_variants = [(True, survey)]
-    if use_gc:
+    if use_gc and with_variants:
         sys_variants.append((False, f"{survey}_no_sys"))
 
     for wl, rot_suffix in lensing_variants:

@@ -182,7 +182,10 @@ def evaluate_des(
     ell_weighting=None,
     scale_cut="hard",
     cls_n_bins=None,
+    with_variants=True,
 ):
+    """Evaluate the real DES catalogs of msfm's survey.name through the Cls network; with_variants adds the
+    evaluation.des_variants (_no_sys, _no_psi_rot)."""
     from msfm.utils import catalog
 
     use_wl = with_lensing or with_cross_probe
@@ -197,14 +200,14 @@ def evaluate_des(
     gc_count_map = catalog.build_maglim_map_from_cat(msfm_conf)
 
     lensing_variants = [(wl_gamma_map, "")]
-    if use_wl:
+    if use_wl and with_variants:
         wl_gamma_map_no_psi_rot, _ = catalog.build_metacal_map_from_cat(
             msfm_conf, apply_shear_rotation=False, debug=False
         )
         lensing_variants.append((wl_gamma_map_no_psi_rot, "_no_psi_rot"))
 
     sys_variants = [(True, survey)]
-    if use_gc:
+    if use_gc and with_variants:
         sys_variants.append((False, f"{survey}_no_sys"))
 
     print(f"Computing {survey} binned Cls...")

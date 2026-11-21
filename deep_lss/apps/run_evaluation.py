@@ -102,6 +102,12 @@ def setup():
     parser.add_argument("--include_grid", action="store_true", help="write stride-spaced grid examples into obs/")
     parser.add_argument("--n_grid_examples", type=int, default=16)
     parser.add_argument("--include_des", action="store_true", help="evaluate the DES catalogs of msfm's survey.name")
+    parser.add_argument(
+        "--des_variants",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="with --include_des, also the test variants <survey>_no_sys and _no_psi_rot; default on for DES Y3 only",
+    )
     parser.add_argument("--include_mocks", action="store_true", help="evaluate mock observations from data_dir/obs/")
     parser.add_argument(
         "--mock_labels",
@@ -571,7 +577,8 @@ if __name__ == "__main__":
                 evaluation.evaluate_obs_grid(out_file, _gp, _gc, _isob, _isig, _inoi, args.n_grid_examples)
 
             if args.include_des:
-                evaluation.evaluate_obs_des(model_fn, out_file, msfm_conf, dlss_conf)
+                with_variants = evaluation.des_variants(msfm_conf, args.des_variants)
+                evaluation.evaluate_obs_des(model_fn, out_file, msfm_conf, dlss_conf, with_variants=with_variants)
 
             if args.include_mocks:
                 mock_labels = args.mock_labels

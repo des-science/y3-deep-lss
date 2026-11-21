@@ -106,6 +106,12 @@ def setup():
     parser.add_argument("--include_grid", action="store_true")
     parser.add_argument("--n_grid_examples", type=int, default=16)
     parser.add_argument("--include_des", action="store_true")
+    parser.add_argument(
+        "--des_variants",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="with --include_des, also the test variants <survey>_no_sys and _no_psi_rot; default on for DES Y3 only",
+    )
     parser.add_argument("--include_mocks", action="store_true", help="evaluate mock observations from data_dir/obs/")
     parser.add_argument(
         "--mock_labels",
@@ -860,6 +866,7 @@ def main():
                 ell_weighting=ell_weighting,
                 scale_cut=scale_cut,
                 cls_n_bins=cls_n_bins,
+                with_variants=evaluation.des_variants(msfm_conf, args.des_variants),
             )
         except Exception as e:
             LOGGER.warning(f"{msfm_conf['survey']['name']} evaluation failed ({e}), skipping")
