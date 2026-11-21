@@ -167,7 +167,7 @@ def evaluate_mock_cls(
     print(f"Saved {label} ({len(mock_preds)} realizations) to {pred_file}")
 
 
-def evaluate_des_y3(
+def evaluate_des(
     model,
     msfm_conf,
     dlss_conf,
@@ -191,7 +191,8 @@ def evaluate_des_y3(
     # Build both maps regardless of probe selection: preprocess_obs_hard_rebinned
     # rebins the full (lensing+clustering) set of pairs and applies probe
     # selection afterwards, so obs_cl must cover all pairs just like the grid cache.
-    print("Building DES Y3 maps from catalogs...")
+    survey = msfm_conf["survey"]["name"]
+    print(f"Building {survey} maps from catalogs...")
     wl_gamma_map, _ = catalog.build_metacal_map_from_cat(msfm_conf)
     gc_count_map = catalog.build_maglim_map_from_cat(msfm_conf)
 
@@ -202,11 +203,11 @@ def evaluate_des_y3(
         )
         lensing_variants.append((wl_gamma_map_no_psi_rot, "_no_psi_rot"))
 
-    sys_variants = [(True, "DESy3")]
+    sys_variants = [(True, survey)]
     if use_gc:
-        sys_variants.append((False, "DESy3_no_sys"))
+        sys_variants.append((False, f"{survey}_no_sys"))
 
-    print("Computing DES Y3 binned Cls...")
+    print(f"Computing {survey} binned Cls...")
     for wl_map, rot_suffix in lensing_variants:
         for apply_sys, sys_label in sys_variants:
             des_cl = _obs_preprocessing_fn(scale_cut, cls_n_bins=cls_n_bins)(

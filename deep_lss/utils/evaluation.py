@@ -543,7 +543,7 @@ def _get_cls_bin_indices(msfm_conf, dlss_conf):
 
 
 def evaluate_obs_des(model_fn, pred_file, msfm_conf, dlss_conf):
-    """Evaluate real DES Y3 catalogs through the network, with and without systematics."""
+    """Evaluate the real DES catalogs of msfm's survey.name through the network, with and without systematics."""
     from msfm.utils import catalog, observation
 
     with_lensing = dlss_conf["dset"]["common"]["with_lensing"]
@@ -563,9 +563,10 @@ def evaluate_obs_des(model_fn, pred_file, msfm_conf, dlss_conf):
         wl_map_no_psi_rot = catalog.build_metacal_map_from_cat(msfm_conf, apply_shear_rotation=False, debug=False)[0]
         lensing_variants.append((wl_map_no_psi_rot, "_no_psi_rot"))
 
-    sys_variants = [(True, "DESy3")]
+    survey = msfm_conf["survey"]["name"]
+    sys_variants = [(True, survey)]
     if use_gc:
-        sys_variants.append((False, "DESy3_no_sys"))
+        sys_variants.append((False, f"{survey}_no_sys"))
 
     for wl, rot_suffix in lensing_variants:
         for apply_sys, label in sys_variants:

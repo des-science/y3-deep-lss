@@ -101,7 +101,7 @@ def setup():
     # Individual observation evaluation flags (all default off)
     parser.add_argument("--include_grid", action="store_true", help="write stride-spaced grid examples into obs/")
     parser.add_argument("--n_grid_examples", type=int, default=16)
-    parser.add_argument("--include_des", action="store_true", help="evaluate DES Y3 catalogs")
+    parser.add_argument("--include_des", action="store_true", help="evaluate the DES catalogs of msfm's survey.name")
     parser.add_argument("--include_mocks", action="store_true", help="evaluate mock observations from data_dir/obs/")
     parser.add_argument(
         "--mock_labels",
@@ -152,6 +152,7 @@ if __name__ == "__main__":
     loss_conf = conf["loss"]
     data_conf = conf["data"]
     msfm_conf = conf["msfm"]
+    configuration.check_scale_cuts(msfm_conf, dlss_conf)
 
     LOGGER.info("Loaded configs from the model directory")
 

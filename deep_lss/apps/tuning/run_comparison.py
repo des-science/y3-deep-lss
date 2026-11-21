@@ -68,6 +68,8 @@ SEED_FLOOR = round(SEED_SCATTER * FOM_CONSERVATISM, 3)
 # depends on head expressiveness and theta conditioning, not only on the compression, so a flow-head
 # run and a GMM-head run are not on the same scale even for the same probe.
 _GATE_FIELDS = {
+    # DES Y3 and Y6 runs share CosmoGrid realization indices, so they would pair without this
+    "survey": ("msfm", "survey", "name"),
     "probe": ("dlss", "dset", "common"),
     "density_estimator": ("loss", "mutual_info_loss", "density_estimator"),
     "standardize_theta": ("loss", "mutual_info_loss", "standardize_theta"),

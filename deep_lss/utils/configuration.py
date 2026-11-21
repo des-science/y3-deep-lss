@@ -32,6 +32,37 @@ def read_split_configs(probes_config, scales_config=None):
     return dlss_conf
 
 
+def check_scale_cuts(msfm_conf, dlss_conf):
+    """Raise unless the scales config fits msfm's survey.
+
+    ``scale_cuts.survey`` (``DESy3`` when absent) must equal msfm's ``survey.name``, and every per-bin list of a
+    probe block needs one entry per ``z_bins`` label of that probe's sample. A short list would otherwise fall back to
+    defaults without notice (``get_cls_bounds_per_pair``).
+
+    Args:
+        msfm_conf (dict): Multiprobe-simulation-forward-model config.
+        dlss_conf (dict): Deep-LSS config; nothing is checked without a ``scale_cuts`` block.
+    """
+    scale_cuts = dlss_conf.get("scale_cuts")
+    if scale_cuts is None:
+        return
+    survey = msfm_conf["survey"]["name"]
+    scales_survey = scale_cuts.get("survey", "DESy3")
+    if scales_survey != survey:
+        raise ValueError(f"The scales config is for {scales_survey}, the msfm config for {survey}")
+
+    for probe, sample in (("lensing", "metacal"), ("clustering", "maglim")):
+        n_z = len(msfm_conf["survey"][sample]["z_bins"])
+        for key in ("theta_fwhm", "white_noise_sigma", "l_max", "l_min"):
+            if key not in scale_cuts.get(probe, {}):
+                continue
+            value = scale_cuts[probe][key]
+            if value is None:
+                raise ValueError(f"scale_cuts.{probe}.{key} is not set")
+            if len(value) != n_z:
+                raise ValueError(f"scale_cuts.{probe}.{key} has {len(value)} entries for the {n_z} {sample} bins")
+
+
 def load_run_configs(path):
     """Load a saved run's ``configs.yaml`` into the nested layout, migrating legacy streams.
 

@@ -338,6 +338,7 @@ def training(args=None):
         loss_conf = input_output.read_yaml(args.loss_config)
         data_conf = input_output.read_yaml(args.data_config)
         msfm_conf = files.load_config(args.msfm_config)
+        configuration.check_scale_cuts(msfm_conf, dlss_conf)
         if args.loss_function is None:
             args.loss_function = loss_conf.get("loss_function")
         if args.loss_function is None:

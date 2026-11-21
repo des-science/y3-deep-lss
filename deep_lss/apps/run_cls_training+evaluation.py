@@ -131,6 +131,7 @@ def main():
     from msfm.utils import input_output
 
     dlss_conf = configuration.read_split_configs(args.probes_config, args.scales_config)
+    configuration.check_scale_cuts(msfm_conf, dlss_conf)
     net_conf = config_compose.load_composed(args.net_config)
     cls_n_bins = net_conf.get("cls_n_bins", 16)
 
@@ -841,10 +842,10 @@ def main():
                     raise  # the mocks are the whole point of an eval_only run
                 LOGGER.warning(f"mock {label} evaluation failed ({e}), skipping")
 
-    # --- DES Y3 real-data observation ---
+    # --- DES real-data observation (msfm's survey.name) ---
     if args.include_des:
         try:
-            cls_evaluation.evaluate_des_y3(
+            cls_evaluation.evaluate_des(
                 model=model,
                 msfm_conf=msfm_conf,
                 dlss_conf=dlss_conf,
@@ -861,7 +862,7 @@ def main():
                 cls_n_bins=cls_n_bins,
             )
         except Exception as e:
-            LOGGER.warning(f"DES Y3 evaluation failed ({e}), skipping")
+            LOGGER.warning(f"{msfm_conf['survey']['name']} evaluation failed ({e}), skipping")
 
 
 if __name__ == "__main__":
