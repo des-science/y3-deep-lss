@@ -1,40 +1,37 @@
 about: 'Written by deep_lss.apps.products.desy6, one record per step: how each DES Y6 scale cut was made.'
 steps:
   signal:
-    date: '2026-11-21T13:52:35+01:00'
-    command: python -m deep_lss.apps.products.desy6 signal --msfm-config /users/athomsen/dlss/repos/multiprobe-simulation-forward-model/configs/desy6/v1/default.yaml
+    date: '2026-11-22T11:41:26+01:00'
+    command: python -m deep_lss.apps.products.desy6 signal --msfm-config ../multiprobe-simulation-forward-model/configs/desy6/v1/default.yaml
       --scales configs/scales/desy6/8wl,32gc.yaml --source /capstor/store/cscs/userlab/lp184/tomaszk/261109_cosmogridv1_desy6/000_test/cosmogrid/processed/desy6/CosmoGrid/bary
       --provenance
     config: configs/scales/desy6/8wl,32gc.yaml
-    deep_lss_commit: 967cf05134ef4f0f5c8cacd280580698f1c2861f
-    msfm_commit: 814a500c8dca2ba54f19763467d0ef04d3095320
+    deep_lss_commit: d6b0114b656d2b82f11809d5e7fda8d231e6f524
+    msfm_commit: 3222421ddd875fa5e35d4f9313fdd4d4b4096aac
     inputs:
     - path: /users/athomsen/dlss/repos/multiprobe-simulation-forward-model/configs/desy6/v1/default.yaml
-      bytes: 7208
-      mtime: '2026-11-20T17:35:51+01:00'
-    - path: /capstor/store/cscs/userlab/lp184/tomaszk/261109_cosmogridv1_desy6/000_test/cosmogrid/processed/desy6/CosmoGrid/bary
+      bytes: 7415
+      mtime: '2026-11-22T10:53:08+01:00'
+    - path: /capstor/store/cscs/userlab/lp184/tomaszk/261109_cosmogridv1_desy6/000_test/cosmogrid/processed/desy6/CosmoGrid/bary/benchmarks/fiducial_bench
       bytes: 4096
-      mtime: '2026-11-19T13:21:08+01:00'
-    - path: /users/athomsen/dlss/repos/multiprobe-simulation-forward-model/data/CosmoGridV1_metainfo.h5
-      bytes: 12255896
-      mtime: '2026-04-01T17:04:52+02:00'
+      mtime: '2026-11-19T14:13:45+01:00'
     outputs:
     - path: data/desy6/desy6_signal_cls.h5
-      sha256: b9d8a552ceefa6df573062693e9fb70147ffadbb2cc51773e0b365dc62f7d637
+      sha256: da50f28aaaf3f310092f9a711636470c3140bad27fbbadb6184a9e5e54fb2520
   values:
-    date: '2026-11-21T15:12:08+01:00'
-    command: python -m deep_lss.apps.products.desy6 values --msfm-config /users/athomsen/dlss/repos/multiprobe-simulation-forward-model/configs/desy6/v1/default.yaml
+    date: '2026-11-22T11:43:27+01:00'
+    command: python -m deep_lss.apps.products.desy6 values --msfm-config ../multiprobe-simulation-forward-model/configs/desy6/v1/default.yaml
       --scales configs/scales/desy6/8wl,32gc.yaml --provenance
     config: configs/scales/desy6/8wl,32gc.yaml
-    deep_lss_commit: e2fbcba43c8edcf58333d88452b19722ec33e9ba
-    msfm_commit: fd3a8d1645f44f02b86e8585c2d8f73f061aab9b
+    deep_lss_commit: dd806213ae3d9f645aa5a09ce68e4d12d697fe36
+    msfm_commit: 3222421ddd875fa5e35d4f9313fdd4d4b4096aac
     inputs:
     - path: /users/athomsen/dlss/repos/multiprobe-simulation-forward-model/configs/desy6/v1/default.yaml
-      bytes: 7198
-      mtime: '2026-11-21T13:55:10+01:00'
+      bytes: 7415
+      mtime: '2026-11-22T10:53:08+01:00'
     - path: data/desy6/desy6_signal_cls.h5
-      bytes: 563200
-      mtime: '2026-11-21T13:52:35+01:00'
+      bytes: 120832
+      mtime: '2026-11-22T11:41:26+01:00'
     - path: /users/athomsen/dlss/repos/multiprobe-simulation-forward-model/data/desy6/redshift_distributions/desy6_nz_metacal_bin1.txt
       bytes: 15126
       mtime: '2026-11-20T17:55:51+01:00'
@@ -64,4 +61,4 @@ steps:
       mtime: '2026-11-20T17:55:51+01:00'
     outputs:
     - path: configs/scales/desy6/8wl,32gc.yaml
-      sha256: 82292f0e5800f6ec4fd048f2f6d9e0c47075561f12ea2b4be9ecff1fafb7a4ba
+      sha256: 3185e7b7cd2a405b628f61aa1584b394563e0d4516b073d4cc98c841394e0137
