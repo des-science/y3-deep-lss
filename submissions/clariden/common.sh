@@ -98,6 +98,22 @@ refuse_existing_preds() {
     done
 }
 
+# fresh_run <run dir>...: training from scratch. An existing run needs OVERWRITE=1 and is then deleted whole; its
+# checkpoints would make the new network refuse to save, and its budget record would shorten the new run.
+fresh_run() {
+    local dir
+    for dir in "$@"; do
+        if [ "${OVERWRITE:-0}" = "1" ]; then
+            [ -d "$dir" ] || continue
+            echo "OVERWRITE=1: deleting the old run $dir"
+            [ "$DRYRUN" = "1" ] || rm -rf "$dir"
+        elif [ -f "$dir/configs.yaml" ]; then
+            echo "$dir already holds a run; choose another RUN, or set OVERWRITE=1." >&2
+            exit 1
+        fi
+    done
+}
+
 # Call directly after the srun it checks, while $? is still that step's status.
 check_stage() {
     [ "$1" -eq 0 ] && return 0

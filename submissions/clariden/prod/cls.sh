@@ -9,8 +9,9 @@
 #SBATCH --output=/users/athomsen/dlss/repos/y3-deep-lss/submissions/clariden/slurm/slurm-%j.out
 
 # Cl-level network for several probes at once, one GPU each: train+evaluate, then infer. VERSION picks
-# the dataset (no default); the runs default to the production runs cls/<probe>/v1, which training
-# refuses to overwrite, and eval or infer on runs that already hold predictions need OVERWRITE=1.
+# the dataset (no default); the runs default to the production runs cls/<probe>/v1. Training over an
+# existing run needs OVERWRITE=1, which deletes that run first; eval or infer on runs that already
+# hold predictions need OVERWRITE=1 too.
 #   VERSION=desy6/v1 RUN=v2 sbatch cls.sh
 #   VERSION=desy6/v1 STAGES=cache sbatch --time=02:00:00 cls.sh             # build the cache on a new dataset
 #   VERSION=desy3/v18 STAGES=eval MOCK_LABELS=<label> OVERWRITE=1 sbatch cls.sh   # append one mock
@@ -43,14 +44,7 @@ else
 fi
 
 OUTPUT="$RUNS_ROOT/$METHOD_DIR"
-if has_stage train && [ "${OVERWRITE:-0}" != "1" ]; then
-    for ENTRY in "${PROBES[@]}"; do
-        if [ -f "$OUTPUT/${ENTRY%%:*}/$RUN/configs.yaml" ]; then
-            echo "$OUTPUT/${ENTRY%%:*}/$RUN already holds a run; choose another RUN, or set OVERWRITE=1." >&2
-            exit 1
-        fi
-    done
-fi
+has_stage train && fresh_run $(for e in "${PROBES[@]}"; do echo "$OUTPUT/${e%%:*}/$RUN"; done)
 if has_stage eval || has_stage infer; then
     refuse_existing_preds $(for e in "${PROBES[@]}"; do echo "$OUTPUT/${e%%:*}/$RUN"; done)
 fi

@@ -11,9 +11,9 @@
 #SBATCH --output=/users/athomsen/dlss/repos/y3-deep-lss/submissions/clariden/slurm/slurm-%j.out
 
 # Map-level network: train, evaluate, infer. VERSION picks the dataset (no default); the run defaults to
-# the production run maps_gcnn/<probe>/v1, which training refuses to overwrite, and eval or infer on a run
-# that already holds predictions need OVERWRITE=1. Combined needs 2 x 12 h, so submit it through
-# maps_chain.sh.
+# the production run maps_gcnn/<probe>/v1. Training over an existing run needs OVERWRITE=1, which deletes
+# that run first; eval or infer on a run that already holds predictions need OVERWRITE=1 too. Combined
+# needs 2 x 12 h, so submit it through maps_chain.sh.
 #   VERSION=desy6/v1 PROBE=clustering sbatch maps.sh
 #   VERSION=desy6/v1 STAGES="eval infer" PROBE=lensing sbatch maps.sh          # recover a failed tail
 #   VERSION=desy3/v18 STAGES=eval MOCK_LABELS=<label> OVERWRITE=1 sbatch maps.sh   # append one mock
@@ -47,6 +47,7 @@ fi
 STRATEGY="mirrored"
 OUTPUT="$RUNS_ROOT/$METHOD_DIR/$PROBE"
 LOG="$OUTPUT/$RUN/logs/${SLURM_JOB_ID}_${RUN_NUM}_${STRATEGY}"
+has_stage train && [ "$RUN_NUM" = "1" ] && fresh_run "$OUTPUT/$RUN"
 { has_stage eval || has_stage infer; } && refuse_existing_preds "$OUTPUT/$RUN"
 make_log_dir "$(dirname "$LOG")"
 echo "maps: $NET_CONFIG -> $OUTPUT/$RUN ($STAGES)"
@@ -54,10 +55,6 @@ echo "maps: $NET_CONFIG -> $OUTPUT/$RUN ($STAGES)"
 # --- Training ----------------------------------------------------------------------------------
 
 if has_stage train; then
-    if [ "$RUN_NUM" = "1" ] && [ -f "$OUTPUT/$RUN/configs.yaml" ] && [ "${OVERWRITE:-0}" != "1" ]; then
-        echo "$OUTPUT/$RUN already holds a run; choose another RUN, or set OVERWRITE=1." >&2
-        exit 1
-    fi
     resolve_net "$NET_CONFIG" "${LOG}_net_config.txt"
     check_stage $? "Net config resolution" "$RESOLVED"
     ensure_cls_cache "$NET_CONFIG" "${LOG}_precache.log"
