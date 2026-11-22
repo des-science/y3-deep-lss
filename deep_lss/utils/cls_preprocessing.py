@@ -244,7 +244,8 @@ def build_rebinned_cls_cache(data_dir, msfm_conf, dlss_conf, cls_n_bins, scales_
     )
 
     # grid/cls/raw shape: (n_cosmos, n_examples, n_ell, n_total_pairs)
-    raw_grid = file_dict["grid/cls/raw"].astype(np.float32)
+    # copy=False: the stored Cls are float32 already, and a copy doubles the peak (~553 GB on DES Y6)
+    raw_grid = file_dict["grid/cls/raw"].astype(np.float32, copy=False)
 
     LOGGER.warning(f"Raw grid Cls shape: {raw_grid.shape}")
 
