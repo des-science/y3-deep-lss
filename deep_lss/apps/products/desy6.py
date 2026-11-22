@@ -14,14 +14,13 @@ comoving scale at the bin's mean redshift, l_max where the squared beam falls be
 equal to the smoothed signal power at l_max.
 
 Steps, in order:
-    signal   mean signal C_l (lensing kg + A_IA ia, clustering counts at the fiducial bias) of the grid cosmologies
-             nearest the fiducial, over all their permutations, from the CosmoGrid projection (--source). The
-             nearest is the stand-in for the fiducial cosmology, the next ones show how much the noise depends on it
+    signal   mean signal C_l (lensing kg + A_IA ia, clustering counts at the fiducial bias) of the fiducial maps, over
+             all their permutations, from the benchmark fiducial_bench of the CosmoGrid projection (--source)
     values   theta_fwhm, l_max, theta_fwhm_base and white_noise_sigma, written into the marked scales config lines
 
 Usage:
     OMP_NUM_THREADS=4 python -m deep_lss.apps.products.desy6 signal --msfm-config <msfm>/configs/desy6/v1/default.yaml \
-        --scales configs/scales/desy6/8wl,32gc.yaml --source <projection> --max-perms 1 --n-nearest 1   # smoke test
+        --scales configs/scales/desy6/8wl,32gc.yaml --source <projection> --max-perms 1   # smoke test
     OMP_NUM_THREADS=4 python -m deep_lss.apps.products.desy6 signal \
         --msfm-config <msfm>/configs/desy6/v1/default.yaml --scales configs/scales/desy6/8wl,32gc.yaml \
         --source <projection>   # the pool fills the CPUs of the process (48 in a daint login session)
@@ -45,9 +44,8 @@ import numpy as np
 from astropy.cosmology import FlatLambdaCDM
 
 import msfm
-from msfm.utils import clustering, cosmogrid, files, filenames, logger, parameters, products, redshift, scales
+from msfm.utils import clustering, files, filenames, logger, products, redshift, scales
 from msfm.utils import input_output
-from msfm.utils import source_clustering_bias as scb
 
 from deep_lss.utils.configuration import PROBE_SAMPLES
 
@@ -60,6 +58,9 @@ OUT_ROOT = "data/desy6"
 SCALES_ROOT = "configs/scales/desy6"
 STEP_ORDER = ["signal", "values"]
 SIGNAL_FILE = "data/desy6/desy6_signal_cls.h5"
+# step signal: the benchmark at the fiducial cosmology, resolution and n(z), and its number of permutations
+SIGNAL_DIR = os.path.join("benchmarks", "fiducial_bench")
+SIGNAL_N_PERMS = 20
 PROVENANCE_FILE = "data/desy6/provenance.yaml"
 # the code a step runs, in this repository and in msfm
 CODE_PATHS = ("deep_lss", "configs")
@@ -91,24 +92,6 @@ def _fiducial_setup(conf):
     return {"tomo_Aia": np.asarray(tomo_Aia, dtype=np.float64), "tomo_bg": tomo_bg, "ng_bar": ng_bar}
 
 
-def _nearest_cosmologies(conf, n_nearest):
-    """The grid cosmologies nearest the fiducial, in prior-normalized distance over the CosmoGrid parameters.
-
-    Returns:
-        tuple: (keys, params, distances, param names), nearest first
-    """
-    names = conf["analysis"]["params"]["cosmo"] + conf["analysis"]["params"]["bary"]
-    info = cosmogrid.get_cosmo_params_info(os.path.join(MSFM_DIR, conf["files"]["meta_info"]), simset="grid")
-    raw = np.stack([info[name] for name in names], axis=-1).astype(np.float64)
-    grid = parameters.raw_to_prior_units(raw, names)
-    fiducial = np.array(parameters.get_fiducials(names, conf), dtype=np.float64)
-    priors = parameters.get_prior_intervals(names, conf)
-    distance = np.sqrt(np.sum(((grid - fiducial) / (priors[:, 1] - priors[:, 0])) ** 2, axis=-1))
-    order = np.argsort(distance)[:n_nearest]
-    keys = [scb.cosmo_key(info["path_par"][i]) for i in order]
-    return keys, grid[order], distance[order], names
-
-
 def _perm_cls(task):
     """C_l of one permutation's signal maps, lensing bins then lens bins. A module function, for the pool."""
     path, metacal_bins, maglim_bins, n_side, setup, l_max, datapath = task
@@ -136,19 +119,19 @@ def _perm_cls(task):
 
 
 def step_signal(conf, scales_conf, args):
-    """Writes the mean signal C_l of the n_nearest grid cosmologies nearest the fiducial to data/desy6/.
+    """Writes the mean signal C_l of the fiducial maps to data/desy6/.
 
     As configs/scales/8wl,32gc.yaml did for Y3 on the fiducial maps (msfm notebooks/desy3/scale_cuts.ipynb): lensing
     is kg + A_IA ia with the fiducial IA amplitude per bin, clustering the galaxy counts of the fiducial linear bias and
-    n_gal. Y6 has no fiducial projection yet, so the nearest grid cosmology stands in for it.
+    n_gal. The maps are the SIGNAL_N_PERMS permutations of SIGNAL_DIR, which has the fiducial cosmology, resolution and
+    n(z); Y6 has no fiducial projection.
 
     Returns:
         tuple: (input paths, output paths), or None with --dry-run or --max-perms
     """
-    source = os.path.abspath(args.source)
-    meta_path = os.path.join(MSFM_DIR, conf["files"]["meta_info"])
+    signal_dir = os.path.join(os.path.abspath(args.source), SIGNAL_DIR)
     out_path = _out_path(SIGNAL_FILE)
-    inputs = [os.path.abspath(args.msfm_config), source, meta_path]
+    inputs = [os.path.abspath(args.msfm_config), signal_dir]
     if args.dry_run:
         return products.dry_run("signal", inputs, [out_path], rel=_rel)
 
@@ -160,29 +143,21 @@ def step_signal(conf, scales_conf, args):
     datapath = os.path.join(MSFM_DIR, conf["files"]["healpy_data"])
     with_bary = conf["analysis"]["modelling"]["baryonified"]
 
-    keys, params, distances, names = _nearest_cosmologies(conf, args.n_nearest)
-    cosmo_dirs = scb.get_cosmogrid_dirs(conf, source, with_fiducial=False)
-    n_perms = conf["analysis"]["grid"]["n_perms_per_cosmo"]
-    if args.max_perms is not None:
-        n_perms = min(n_perms, args.max_perms)
+    n_perms = SIGNAL_N_PERMS if args.max_perms is None else min(SIGNAL_N_PERMS, args.max_perms)
     tasks = []
-    for key in keys:
-        for perm in range(n_perms):
-            path = filenames.get_filename_full_maps(os.path.join(cosmo_dirs[key], f"perm_{perm:04d}"), with_bary)
-            if not os.path.isfile(path):
-                raise FileNotFoundError(f"{path} does not exist")
-            tasks.append((path, metacal_bins, maglim_bins, n_side, setup, l_max, datapath))
-    for key, p, d in zip(keys, params, distances):
-        LOGGER.info(f"{key}: distance {d:.4f}, " + ", ".join(f"{n} {v:.4g}" for n, v in zip(names, p)))
+    for perm in range(n_perms):
+        path = filenames.get_filename_full_maps(os.path.join(signal_dir, f"perm_{perm:04d}"), with_bary)
+        if not os.path.isfile(path):
+            raise FileNotFoundError(f"{path} does not exist")
+        tasks.append((path, metacal_bins, maglim_bins, n_side, setup, l_max, datapath))
 
     # healpy threads per task come from OMP_NUM_THREADS, so the pool fills the cores without oversubscribing them
     n_threads = int(os.environ.get("OMP_NUM_THREADS", "1"))
     n_procs = max(1, min(len(tasks), len(os.sched_getaffinity(0)) // n_threads))
     LOGGER.info(f"anafast of {len(tasks)} maps files in {n_procs} processes x {n_threads} threads")
     with multiprocessing.Pool(n_procs) as pool:
-        perm_cls = np.stack(pool.map(_perm_cls, tasks)).reshape(len(keys), n_perms, l_max + 1, -1)
-    mean_cls = np.mean(perm_cls, axis=1)
-    assert np.all(np.isfinite(mean_cls)) and np.all(mean_cls[:, 2:] > 0), "non-finite or non-positive signal C_l"
+        mean_cls = np.mean(np.stack(pool.map(_perm_cls, tasks)), axis=0)
+    assert np.all(np.isfinite(mean_cls)) and np.all(mean_cls[2:] > 0), "non-finite or non-positive signal C_l"
 
     if args.max_perms is not None:
         LOGGER.info(f"--max-perms {args.max_perms}: the C_l passed every check, nothing is written")
@@ -190,19 +165,16 @@ def step_signal(conf, scales_conf, args):
 
     with h5py.File(out_path, "w") as f:
         f.create_dataset("cls", data=mean_cls)
-        f.create_dataset("params", data=params)
-        f.create_dataset("distance", data=distances)
-        f.create_dataset("cosmo_key", data=np.array(keys, dtype="S"))
         f.create_dataset("tomo_Aia", data=setup["tomo_Aia"])
         f.create_dataset("tomo_bg", data=setup["tomo_bg"])
         f.create_dataset("ng_bar", data=setup["ng_bar"])
-        f.attrs["param_names"] = names
+        f.attrs["maps"] = SIGNAL_DIR
         f.attrs["z_bins"] = metacal_bins + maglim_bins
         f.attrs["n_perms"] = n_perms
         f.attrs["n_side"] = n_side
         f.attrs["about"] = (
-            "cls[k]: mean signal C_l (ell = 0..3 n_side - 1, axis 1; bins axis 2, lensing then clustering) over the "
-            "permutations of the k-th grid cosmology nearest the fiducial"
+            "cls: mean signal C_l (ell = 0..3 n_side - 1, axis 0; bins axis 1, lensing then clustering) over the "
+            "permutations of the fiducial maps"
         )
     return inputs, [out_path]
 
@@ -254,8 +226,8 @@ def step_values(conf, scales_conf, args):
 
     theta_fwhm: the beam of scale_cuts.<probe>.transverse_scale (Mpc/h) at the bin's mean redshift, in the fiducial
     cosmology of msfm's config, rounded to 0.1 arcmin. l_max and white_noise_sigma follow from the rounded beam and the
-    signal C_l of the nearest grid cosmology (step signal); the next cosmologies only report the spread. A bin whose
-    beam does not reach the threshold below the band limit keeps its beam and gets l_max there, with a warning.
+    fiducial signal C_l (step signal). A bin whose beam does not reach the threshold below the band limit keeps its
+    beam and gets l_max there, with a warning.
     theta_fwhm_base: the base of the clustering kernel with the smallest overshoot at no more cost than the
     DES Y3 rule (_fwhm_base).
 
@@ -287,8 +259,8 @@ def step_values(conf, scales_conf, args):
         cls = f["cls"][:]
         made_with = {key: f[key][:] for key in ("tomo_Aia", "tomo_bg", "ng_bar")}
         z_bins = list(f.attrs["z_bins"])
-        cosmo_keys = f["cosmo_key"][:].astype(str)
     assert z_bins == [z for sample in PROBE_SAMPLES.values() for z in conf["survey"][sample]["z_bins"]], z_bins
+    assert cls.shape == (3 * n_side, len(z_bins)), f"{_rel(signal_path)}: C_l of shape {cls.shape}, rerun step signal"
     for key, value in made_with.items():
         assert np.allclose(value, setup[key], rtol=1e-12), f"stale {_rel(signal_path)}: {key} {value} != {setup[key]}"
 
@@ -297,7 +269,7 @@ def step_values(conf, scales_conf, args):
     h = fid["H0"] / 100
     threshold = scales_conf["scale_cuts"]["threshold"]
 
-    values, sigmas, i_bin = {}, [], 0
+    values, i_bin = {}, 0
     for probe, sample in PROBE_SAMPLES.items():
         probe_conf = scales_conf["scale_cuts"][probe]
         tomo_z, tomo_nz = files.load_redshift_distributions(sample, conf)
@@ -310,14 +282,13 @@ def step_values(conf, scales_conf, args):
 
         l_max, sigma = [], []
         for j, f_j in enumerate(fwhm):
-            cut = [_scale_cut(cls[k, :, i_bin + j], f_j, l_min[j], threshold, n_side) for k in range(len(cls))]
-            l_max.append(cut[0][0])
-            sigma.append(float(f"{cut[0][1]:.5g}"))
-            sigmas.append([c[1] for c in cut])
-            if cut[0][2] >= threshold:
+            l_max_j, sigma_j, beam_j = _scale_cut(cls[:, i_bin + j], f_j, l_min[j], threshold, n_side)
+            l_max.append(l_max_j)
+            sigma.append(float(f"{sigma_j:.5g}"))
+            if beam_j >= threshold:
                 LOGGER.warning(
-                    f"{conf['survey'][sample]['z_bins'][j]}: the squared {f_j} arcmin beam is still {cut[0][2]:.4f} at "
-                    f"the band limit, so l_max is the band limit {cut[0][0]}, not a {threshold} crossing"
+                    f"{conf['survey'][sample]['z_bins'][j]}: the squared {f_j} arcmin beam is still {beam_j:.4f} at "
+                    f"the band limit, so l_max is the band limit {l_max_j}, not a {threshold} crossing"
                 )
         i_bin += len(fwhm)
         LOGGER.info(f"{probe}: mean z {np.round(z_bar, 4).tolist()}, theta_fwhm {fwhm.tolist()}, l_max {l_max}")
@@ -332,12 +303,6 @@ def step_values(conf, scales_conf, args):
                 f"{probe}: theta_fwhm_base {base}, repetitions {reps.tolist()}, effective FWHM "
                 f"{np.round(effective, 1).tolist()} (+{100 * np.max(effective / fwhm - 1):.1f}% at most)"
             )
-
-    # how much the noise level depends on the stand-in cosmology
-    sigmas = np.array(sigmas)
-    for k in range(1, sigmas.shape[1]):
-        ratio = sigmas[:, k] / sigmas[:, 0]
-        LOGGER.info(f"sigma of {cosmo_keys[k]} / {cosmo_keys[0]}: {np.round(ratio, 3).tolist()}")
 
     written = products.write_marked_values(scales_conf, scales_path, values, args.check, rel=_rel)
     # with --provenance an up-to-date config is recorded too: these inputs at this commit give its values
@@ -374,8 +339,7 @@ def main(argv=None):
     )
     parser.add_argument("--check", action="store_true", help="values only: write nothing, exit 1 if a value is stale")
     parser.add_argument("--dry-run", action="store_true", help="list the inputs and outputs, write nothing")
-    parser.add_argument("--source", default=None, help="signal only: the projection root, which holds grid/")
-    parser.add_argument("--n-nearest", type=int, default=5, help="signal only: grid cosmologies nearest the fiducial")
+    parser.add_argument("--source", default=None, help="signal only: the projection root, which holds benchmarks/")
     parser.add_argument(
         "--max-perms", type=int, default=None, help="signal only: average the first N permutations, write nothing"
     )
@@ -391,8 +355,6 @@ def main(argv=None):
         parser.error("--source is required by the step signal and applies to no other step")
     if args.max_perms is not None and (args.step != "signal" or args.max_perms < 1):
         parser.error("--max-perms takes a positive number and applies to the step signal")
-    if args.n_nearest < 1:
-        parser.error("--n-nearest takes a positive number")
 
     conf = files.load_config(args.msfm_config)
     if conf["survey"]["name"] != SURVEY_NAME:
