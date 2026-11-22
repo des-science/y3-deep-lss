@@ -80,14 +80,14 @@ What is not survey-agnostic:
    `--provenance` records both commits in `data/desy6/provenance.yaml`; `data/desy6/README.md`
    documents each step.
    - `signal` (compute node, `--source` = the projection root):
-     - writes the mean signal C_l over the 20 perms of the K grid cosmologies nearest the
-       fiducial (prior-normalized distance over `cosmo` + `bary`) to `data/desy6/desy6_signal_cls.h5`;
+     - writes the mean signal C_l over the 20 perms of the benchmark `fiducial_bench` (the
+       fiducial cosmology, resolution and n(z)) to `data/desy6/desy6_signal_cls.h5` (D12);
      - lensing is `kg + A_IA ia`, clustering is the counts at the fiducial bias and n_gal;
      - re-projected files only.
    - `values` writes into `configs/scales/desy6/8wl,32gc.yaml`:
      - `theta_fwhm` (8 / 32 Mpc/h at the normalized mean z), `l_max` (the threshold crossing) and
        `theta_fwhm_base` (just above the smallest clustering FWHM / √2, rounded up to 0.1′);
-     - `white_noise_sigma` from rank 0, with the spread over ranks 1..K-1 logged.
+     - `white_noise_sigma` from that signal.
    - Cross-check: the beam math on the Y3 v18 config reproduces the committed `8wl,32gc.yaml`
      `theta_fwhm` and `l_max` to the n(z) normalization (~0.6%).
 3. **Y6 configs.**
@@ -117,9 +117,9 @@ What is not survey-agnostic:
 
 ## 3. Decisions
 
-- **D1** (2026-11-20): `white_noise_sigma` from the grid cosmology nearest the fiducial, as msfm's
-  Y3 `notebooks/metacal_bias.ipynb` aliased the fiducial. σ enters sims and data alike, so a
-  stand-in changes the effective scale cut, not a bias. Re-derive on the fiducial projection.
+- **D1** (2026-11-20, superseded by D12): `white_noise_sigma` from the grid cosmology nearest the
+  fiducial, as msfm's Y3 `notebooks/metacal_bias.ipynb` aliased the fiducial. σ enters sims and
+  data alike, so a stand-in changes the effective scale cut, not a bias.
 - **D2** (2026-11-20): DES Y6 is evaluated by default, as Y3 (prediction files only; no chains
   while msi is not ported).
 - **D3** (2026-11-20): the scales values come from product steps in y3-deep-lss, with the helpers
@@ -134,8 +134,8 @@ What is not survey-agnostic:
 - **D7** (2026-11-21): `theta_fwhm_base` is the base with the smallest overshoot at no more
   repetitions than the Y3 rule: 35.5′, +8.9% at most. The literal Y3 rule gives +15.4% on Y6, since
   MagLim 4-6 sit between the coarse √n steps. On the Y3 beams the new rule returns Y3's 40.4′.
-- **D8** (2026-11-21): σ stays on the nearest grid cosmology although the next four give 7-31%
-  more lensing noise (README, Results).
+- **D8** (2026-11-21, superseded by D12): σ stays on the nearest grid cosmology although the next
+  four give 7-31% more lensing noise.
 - **D9** (2026-11-21): DES Y6 evaluates only the default observation `DESy6`, the analogue of Y3's
   `DESy3`. The test variants `_no_sys` and `_no_psi_rot` are opt-in (`--des_variants`). Their
   default stays on for DES Y3, whose frozen runs and msi chains carry them. The msi port has to
@@ -147,6 +147,11 @@ What is not survey-agnostic:
   opt-in key `scale_cuts.clustering.theta_fwhm_base_single_probe: True`. Without it, their base is
   min θ = 46.1′, which smooths MagLim 5 at 65.2′ (+29.9%; Y3's worst bin +18.4%). Y3 configs lack
   the key, so every Y3 run keeps base = min θ. Lensing keeps min θ on both surveys (Y6 +11.4%).
+- **D12** (2026-11-22): `white_noise_sigma` from the benchmark `fiducial_bench`, mean over its 20
+  perms. It has the fiducial cosmology, the fiducial set's resolution and the config's fiducial
+  n(z) (to 4e-8), so no stand-in is left; a Y6 fiducial projection is not planned. Against
+  `cosmo_132332` (S8 0.72) σ rose 11-16% in lensing and 4-14% in clustering; `theta_fwhm`, `l_max`
+  and `theta_fwhm_base` do not depend on the signal and are unchanged.
 
 ## 4. Verification
 
