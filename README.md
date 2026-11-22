@@ -142,9 +142,9 @@ with its `theta_fwhm_base` as the combined runs do; without the key, as for DES 
 run takes its smallest beam as the base kernel.
 
 On the cluster, `VERSION=desy6/v1 SUBVERSION=default` selects the DES Y6 msfm config, and with it
-the `desy6/` configs and the `DESy6_grid_dmb_????.tfrecord` files; `INPUT` points at the
-tfrecords. The infer stage needs an msi checkout that handles DES Y6; an older one writes no DES Y6
-chain.
+the `desy6/` configs and the `DESy6_grid_dmb_????.tfrecord` files. The data, mock and run
+directories come from msfm's `configs/desy6/v1/locations.yaml` (see `submissions` below). The infer
+stage needs an msi checkout that handles DES Y6; an older one writes no DES Y6 chain.
 
 ### Entry points
 
@@ -157,7 +157,7 @@ level, [`apps/benchmark/`](deep_lss/apps/benchmark/) for sizing a network before
 | App | What it does |
 |---|---|
 | `run_training.py` | The main entry point. Trains a network on the cosmology grid with the selected objective; handles the distribution strategy, checkpointing and restore, mixed precision, XLA, and logging to Weights & Biases or TensorBoard. `--n_steps` sets a step budget; `--wall_budget_seconds` instead trains for a fixed wall-clock time and anneals the learning-rate schedule to land exactly on it. |
-| `run_evaluation.py` | Runs a trained network over the cosmology grid (`--include_grid`), the DES Y3 catalogs (`--include_des`) and every mock observation in `data_dir/obs/`, CosmoGrid benchmarks and the Buzzard flock alike (`--include_mocks`), writing the predicted summaries. |
+| `run_evaluation.py` | Runs a trained network over the cosmology grid (`--include_grid`), the DES Y3 catalogs (`--include_des`) and every mock observation in `--obs_dir` (default `data_dir/obs/`), CosmoGrid benchmarks and the Buzzard flock alike (`--include_mocks`), writing the predicted summaries. |
 | `run_cls_training+evaluation.py` | The Cls branch: trains and evaluates in one script on binned angular power spectra rather than maps, with `asinh` scaling and PCA whitening as input preprocessing. `--precache_only` builds just the rebinned-Cls cache, which the maps+Cls networks require. |
 
 **`benchmark/`** — what fits and how fast it steps, before a run is launched. Driven by
@@ -229,12 +229,19 @@ Two kinds of directory:
 
 ### `submissions`
 
-SLURM scripts for a multi-GPU cluster, kept parameterized rather than duplicated: `maps/training.sh`
-runs train → evaluate → infer in one job, `maps/training_chainer.sh` chains several of them for
-budgets longer than one allocation, `maps/rerun/` re-runs individual stages, `cls/` is the Cls
-equivalent, and `shared/` holds the domain-agnostic benchmark driver. They are written against one
-specific cluster and are included as a worked example of how the stages fit together, not as a
-portable script set.
+SLURM scripts for a multi-GPU cluster, kept parameterized rather than duplicated:
+`clariden/prod/maps.sh` runs train → evaluate → infer in one job (`STAGES` picks a subset),
+`prod/maps_chain.sh` chains several of them for budgets longer than one allocation, `prod/cls.sh` is
+the Cls equivalent, and `benchmarks/` and `experiments/` hold the sizing and study scripts. They are
+written against one specific cluster and are included as a worked example of how the stages fit
+together, not as a portable script set.
+
+Every script needs the dataset, `VERSION=desy6/v1` or `VERSION=desy3/v18`, and stops without it.
+`common.sh` reads the dataset's paths from msfm's `configs/<VERSION>/locations.yaml` through
+`python -m msfm.utils.locations`: `INPUT` (the msfm outputs), `OBS_DIR` (the mock observations) and
+`RUNS_ROOT` (the run tree), each overridable from the environment. Evaluating or inferring on a run
+that already holds predictions needs `OVERWRITE=1`, as training an existing run does. `DRYRUN=1`
+prints every step on the login node.
 
 ## Conventions
 
