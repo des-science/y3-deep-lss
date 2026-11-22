@@ -1,11 +1,10 @@
-# Sourced by every script in this tree: roots, production data defaults, shared stages.
+# Sourced by every script in this tree: roots, the dataset and its paths, shared stages.
 # Source it by absolute path; sbatch runs a spool copy of the calling script.
 
 ulimit -c 0  # a crashing task would otherwise fill the /users quota with a core dump
 
 REPOS="/users/athomsen/dlss/repos"
-MYSCRATCH="/iopsstor/scratch/cscs/athomsen"
-STORE="/capstor/store/cscs/swissai/a0158/athomsen"
+MYSCRATCH="/iopsstor/scratch/cscs/athomsen"  # the benchmarks' claude/bench outputs; datasets use their locations
 DEEP_LSS="$REPOS/y3-deep-lss"
 MSFM="$REPOS/multiprobe-simulation-forward-model"
 MSI="$REPOS/multiprobe-simulation-inference"
@@ -14,38 +13,67 @@ export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}"
 export TF_NUM_INTRAOP_THREADS="${SLURM_CPUS_PER_TASK:-1}"
 export WANDB_API_KEY=$(awk '/password/ {print $2}' ~/.netrc 2>/dev/null)
 
-# --- Production data defaults ------------------------------------------------------------------
+# DRYRUN=1 prints every srun/sbatch instead of running it (works on the login node).
+DRYRUN="${DRYRUN:-0}"
+SRUN="srun"
+[ "$DRYRUN" = "1" ] && SRUN="echo srun"
+SLURM_JOB_ID="${SLURM_JOB_ID:-dryrun}"
 
-# v18 and v16 are extended-NLA (plain configs/probes/*.yaml); v17 needs the *_nla probe configs.
-VERSION="${VERSION:-v18}"
+# --- Dataset -----------------------------------------------------------------------------------
+
+# The dataset is msfm's configs/<VERSION>/<SUBVERSION>.yaml, e.g. VERSION=desy6/v1. VERSION has no default, so a run
+# never falls back to another survey's data. DES Y3 v18 is VERSION=desy3/v18; v18 and v16 are extended-NLA (plain
+# configs/probes/*.yaml), v17 needs the *_nla probe configs.
 SUBVERSION="${SUBVERSION:-default}"
 SCALES="${SCALES:-8wl,32gc}"  # configs/scales/
 LOSS="${LOSS:-vmim}"          # configs/loss/
 DATA="${DATA:-default}"       # configs/data/
 
+datasets() { ls "$MSFM"/configs/*/*/locations.yaml 2>/dev/null | sed -E "s#^$MSFM/configs/(.*)/locations.yaml#\1#" | xargs; }
+if [ -z "${VERSION:-}" ]; then
+    echo "Set VERSION to a dataset of msfm's configs/: $(datasets)" >&2
+    exit 1
+fi
 MSFM_CONFIG="$MSFM/configs/$VERSION/$SUBVERSION.yaml"
-# survey.name of the msfm config; DES Y3 (VERSION=v18) when the config is not on this msfm checkout
-SURVEY=$(awk '/^survey:/{s=1} s&&/^  name:/{print $2; exit}' "$MSFM_CONFIG" 2>/dev/null)
-SURVEY="${SURVEY:-DESy3}"
+if [ ! -f "$MSFM_CONFIG" ]; then
+    echo "No msfm config $MSFM_CONFIG; the datasets are: $(datasets)" >&2
+    exit 1
+fi
+SURVEY=$(awk '/^survey:/{s=1} s&&/^  name:/{print $2; exit}' "$MSFM_CONFIG")
+[ -n "$SURVEY" ] || { echo "$MSFM_CONFIG has no survey.name" >&2; exit 1; }
 # DES Y3 probes and scales configs sit at the top of their dirs, every other survey's in a subdir, e.g. desy6/
 SURVEY_DIR=""
 [ "$SURVEY" = "DESy3" ] || SURVEY_DIR="${SURVEY,,}/"
 
-INPUT="${INPUT:-$MYSCRATCH/deep_lss/data/$VERSION/$SUBVERSION}"
-OBS_INPUT="${OBS_INPUT:-$STORE/deep_lss/data/$VERSION/$SUBVERSION}"  # mock observations live on the store
-RUNS_ROOT="${RUNS_ROOT:-$MYSCRATCH/deep_lss/runs/$VERSION/$SUBVERSION}"
+# The dataset's paths come from the locations.yaml next to $MSFM_CONFIG (msfm.utils.locations); an environment
+# variable overrides one. INPUT holds tfrecords/ and cls/, OBS_DIR the *_obs_maps.h5 mocks, RUNS_ROOT the runs.
+if [ -n "${OBS_INPUT:-}" ]; then
+    echo "OBS_INPUT is replaced by OBS_DIR, the directory of the *_obs_maps.h5 files itself." >&2
+    exit 1
+fi
+LOCATIONS_FILE=$(mktemp)
+if [ "$DRYRUN" = "1" ]; then
+    uenv run --view=default pytorch/v2.9.1:v2 -- ~/dlss/torch_env/bin/python \
+        -m msfm.utils.locations "$MSFM_CONFIG" > "$LOCATIONS_FILE"
+else
+    srun -N1 -n1 --environment=tensorflow --gpu-bind=none --cpu-bind=none --output="$LOCATIONS_FILE" \
+        python -m msfm.utils.locations "$MSFM_CONFIG"
+fi || { cat "$LOCATIONS_FILE" >&2; echo "Cannot resolve the locations of $MSFM_CONFIG." >&2; exit 1; }
+location() { sed -n "s|^$1=||p" "$LOCATIONS_FILE"; }
+INPUT="${INPUT:-$(location data_dir)}"
+OBS_DIR="${OBS_DIR:-$(location obs_dir)}"
+RUNS_ROOT="${RUNS_ROOT:-$(location runs_dir)}"
+rm -f "$LOCATIONS_FILE"
+if [ -z "$INPUT" ] || [ -z "$OBS_DIR" ] || [ -z "$RUNS_ROOT" ]; then
+    echo "The locations of $MSFM_CONFIG give no data, obs or runs; set INPUT, OBS_DIR and RUNS_ROOT." >&2
+    exit 1
+fi
 TRAIN_TFR="${TRAIN_TFR:-$INPUT/tfrecords/grid/${SURVEY}_grid_dmb_????.tfrecord}"
 
 PROBES_DIR="$DEEP_LSS/configs/probes/$SURVEY_DIR"
 SCALES_CONFIG="$DEEP_LSS/configs/scales/$SURVEY_DIR$SCALES.yaml"
 LOSS_CONFIG="$DEEP_LSS/configs/loss/$LOSS.yaml"
 DATA_CONFIG="$DEEP_LSS/configs/data/$DATA.yaml"
-
-# DRYRUN=1 prints every srun/sbatch instead of running it (works on the login node).
-DRYRUN="${DRYRUN:-0}"
-SRUN="srun"
-[ "$DRYRUN" = "1" ] && SRUN="echo srun"
-SLURM_JOB_ID="${SLURM_JOB_ID:-dryrun}"
 
 # --- Helpers -----------------------------------------------------------------------------------
 
@@ -56,6 +84,19 @@ has_stage() { [[ " $STAGES " == *" $1 "* ]]; }
 
 # Pause between two stages of one job, so the previous step has released its GPUs.
 settle() { [ "$DRYRUN" = "1" ] || sleep 30; }
+
+# refuse_existing_preds <run dir>...: eval and infer change a run's predictions and chains, so a run that already holds
+# predictions (the frozen production runs among them) needs OVERWRITE=1.
+refuse_existing_preds() {
+    [ "${OVERWRITE:-0}" = "1" ] && return 0
+    local dir
+    for dir in "$@"; do
+        if compgen -G "$dir/preds_*.h5" > /dev/null; then
+            echo "$dir already holds predictions, which eval and infer would change; set OVERWRITE=1." >&2
+            exit 1
+        fi
+    done
+}
 
 # Call directly after the srun it checks, while $? is still that step's status.
 check_stage() {

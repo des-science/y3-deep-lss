@@ -8,12 +8,13 @@
 #SBATCH --job-name=cls
 #SBATCH --output=/users/athomsen/dlss/repos/y3-deep-lss/submissions/clariden/slurm/slurm-%j.out
 
-# Cl-level network for several probes at once, one GPU each: train+evaluate, then infer. The
-# defaults are the v18 production runs cls/<probe>/v1, which training refuses to overwrite.
-#   RUN=v2 sbatch cls.sh
-#   STAGES=cache sbatch --time=02:00:00 cls.sh                   # build the cache on a new dataset
-#   STAGES=eval MOCK_LABELS=<label> RUNS_ROOT=<store runs> sbatch cls.sh   # append one mock
-#   NET_CONFIG=<yaml> METHOD_DIR=cls_bench RUN=<name> sbatch cls.sh        # an experiment
+# Cl-level network for several probes at once, one GPU each: train+evaluate, then infer. VERSION picks
+# the dataset (no default); the runs default to the production runs cls/<probe>/v1, which training
+# refuses to overwrite, and eval or infer on runs that already hold predictions need OVERWRITE=1.
+#   VERSION=desy6/v1 RUN=v2 sbatch cls.sh
+#   VERSION=desy6/v1 STAGES=cache sbatch --time=02:00:00 cls.sh             # build the cache on a new dataset
+#   VERSION=desy3/v18 STAGES=eval MOCK_LABELS=<label> OVERWRITE=1 sbatch cls.sh   # append one mock
+#   VERSION=desy6/v1 NET_CONFIG=<yaml> METHOD_DIR=cls_bench RUN=<name> sbatch cls.sh   # an experiment
 
 export SLURM_CPUS_PER_TASK=72  # each probe is its own 1-GPU step
 source /users/athomsen/dlss/repos/y3-deep-lss/submissions/clariden/common.sh
@@ -50,6 +51,9 @@ if has_stage train && [ "${OVERWRITE:-0}" != "1" ]; then
         fi
     done
 fi
+if has_stage eval || has_stage infer; then
+    refuse_existing_preds $(for e in "${PROBES[@]}"; do echo "$OUTPUT/${e%%:*}/$RUN"; done)
+fi
 LOG_DIR="$INPUT/precache/logs"
 make_log_dir "$LOG_DIR"
 echo "cls: $NET_CONFIG -> $OUTPUT/{${PROBES[*]}}/$RUN ($STAGES)"
@@ -80,6 +84,7 @@ if has_stage train || has_stage eval; then
                 --net_config="$NET_CONFIG" \
                 --data_config="$DATA_CONFIG" \
                 --data_dir="$INPUT" \
+                --obs_dir="$OBS_DIR" \
                 --out_dir="$OUTPUT/$PROBE" \
                 --model_name="$RUN" \
                 $EVAL_FLAGS &

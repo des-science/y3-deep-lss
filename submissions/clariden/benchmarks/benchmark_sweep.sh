@@ -12,7 +12,7 @@
 
 # Single-GPU synthetic step-time/memory sweep over (config x batch), one srun step per point, into
 # $OUT_DIR/benchmark_results.jsonl, then aggregated. BENCH_SCRIPT is benchmark_{transformer,resnet}.py.
-#   BENCH_SCRIPT=benchmark_resnet.py CONFIGS_GLOB="configs/maps/dev/deepsphere/combined/bench_v12/*.yaml" \
+#   VERSION=desy3/v18 BENCH_SCRIPT=benchmark_resnet.py CONFIGS_GLOB="configs/maps/dev/deepsphere/combined/bench_v12/*.yaml" \
 #       OUT_DIR=/iopsstor/scratch/cscs/athomsen/deep_lss/claude/bench/<name> BATCH_SIZES="16 32" \
 #       sbatch benchmark_sweep.sh
 # BENCH_CONFIGS="a.yaml b.yaml" times only those (relative to the glob's dir, to y3-deep-lss, or

@@ -593,8 +593,8 @@ def evaluate_obs_des(model_fn, pred_file, msfm_conf, dlss_conf, with_variants=Tr
             append_obs_to_file(pred_file, f"obs/preds/{label}{rot_suffix}", pred)
 
 
-def discover_mock_labels(data_dir):
-    """Return sorted labels for every {label}_obs_maps.h5 in data_dir/obs/.
+def discover_mock_labels(obs_dir):
+    """Return sorted labels for every {label}_obs_maps.h5 in obs_dir.
 
     A label is the file stem with the '_obs_maps.h5' suffix removed; passing one of
     these labels to evaluate_obs_mocks / evaluate_mock_cls resolves back to the file.
@@ -602,7 +602,6 @@ def discover_mock_labels(data_dir):
     import glob
 
     suffix = "_obs_maps.h5"
-    obs_dir = os.path.join(data_dir, "obs")
     obs_files = sorted(glob.glob(os.path.join(obs_dir, f"*{suffix}")))
     return [os.path.basename(f)[: -len(suffix)] for f in obs_files]
 
@@ -628,8 +627,8 @@ def mock_truth_cosmo(obs_file, params, msfm_conf):
     return np.array([cosmo.get(param, np.nan) for param in params], dtype=np.float64)
 
 
-def evaluate_obs_mocks(model_fn, pred_file, msfm_conf, dlss_conf, data_dir, obs_labels):
-    """Evaluate mock observations from data_dir/obs/.
+def evaluate_obs_mocks(model_fn, pred_file, msfm_conf, dlss_conf, obs_dir, obs_labels):
+    """Evaluate mock observations from obs_dir.
 
     Writes obs/preds/{label}_stack (all realizations) and obs/preds/{label}_mean to pred_file,
     and obs/cosmos/{label} containing the mock's truth cosmology.
@@ -648,8 +647,6 @@ def evaluate_obs_mocks(model_fn, pred_file, msfm_conf, dlss_conf, data_dir, obs_
     cls_bin_indices = _get_cls_bin_indices(msfm_conf, dlss_conf)
 
     target_params = dlss_conf["dset"]["training"]["params"]
-
-    obs_dir = os.path.join(data_dir, "obs")
 
     for label in obs_labels:
         obs_file = os.path.join(obs_dir, f"{label}_obs_maps.h5")

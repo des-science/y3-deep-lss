@@ -10,12 +10,13 @@
 #SBATCH --job-name=maps
 #SBATCH --output=/users/athomsen/dlss/repos/y3-deep-lss/submissions/clariden/slurm/slurm-%j.out
 
-# Map-level network: train, evaluate, infer. The defaults are the v18 production run
-# maps_gcnn/<probe>/v1, which training refuses to overwrite; set RUN for a new one. Combined needs
-# 2 x 12 h, so submit it through maps_chain.sh.
-#   PROBE=clustering sbatch maps.sh
-#   STAGES="eval infer" PROBE=lensing sbatch maps.sh                  # recover a failed tail
-#   STAGES=eval MOCK_LABELS=<label> RUNS_ROOT=<store runs> sbatch maps.sh   # append one mock
+# Map-level network: train, evaluate, infer. VERSION picks the dataset (no default); the run defaults to
+# the production run maps_gcnn/<probe>/v1, which training refuses to overwrite, and eval or infer on a run
+# that already holds predictions need OVERWRITE=1. Combined needs 2 x 12 h, so submit it through
+# maps_chain.sh.
+#   VERSION=desy6/v1 PROBE=clustering sbatch maps.sh
+#   VERSION=desy6/v1 STAGES="eval infer" PROBE=lensing sbatch maps.sh          # recover a failed tail
+#   VERSION=desy3/v18 STAGES=eval MOCK_LABELS=<label> OVERWRITE=1 sbatch maps.sh   # append one mock
 
 source /users/athomsen/dlss/repos/y3-deep-lss/submissions/clariden/common.sh
 
@@ -46,6 +47,7 @@ fi
 STRATEGY="mirrored"
 OUTPUT="$RUNS_ROOT/$METHOD_DIR/$PROBE"
 LOG="$OUTPUT/$RUN/logs/${SLURM_JOB_ID}_${RUN_NUM}_${STRATEGY}"
+{ has_stage eval || has_stage infer; } && refuse_existing_preds "$OUTPUT/$RUN"
 make_log_dir "$(dirname "$LOG")"
 echo "maps: $NET_CONFIG -> $OUTPUT/$RUN ($STAGES)"
 
@@ -98,7 +100,7 @@ if has_stage eval; then
         python "$DEEP_LSS/deep_lss/apps/run_evaluation.py" \
             --dir_model="$OUTPUT/$RUN" \
             --dist_strategy="$STRATEGY" \
-            --data_dir="$OBS_INPUT" \
+            --obs_dir="$OBS_DIR" \
             $EVAL_FLAGS $MOCK_FLAG
     check_stage $? "Evaluation" "${LOG}_evaluation.log"
 fi

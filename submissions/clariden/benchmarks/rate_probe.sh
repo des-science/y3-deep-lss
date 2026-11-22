@@ -13,7 +13,7 @@
 # Sustained 4-GPU it/s of a maps net config: prod/maps.sh's training for PROBE_STEPS steps, without
 # wandb, eval or inference, into claude/bench/rate_probe/. The single-GPU benchmark_sweep.sh and
 # extrapolations across widths both missed the real rate by 25-40%.
-#   PROBE=combined NET_CONFIG=$PWD/configs/maps/dev/deepsphere/combined/bench_v12/classic_nodrop.yaml \
+#   VERSION=desy3/v18 PROBE=combined NET_CONFIG=$PWD/configs/maps/dev/deepsphere/combined/bench_v12/classic_nodrop.yaml \
 #       sbatch --job-name=rate_combined rate_probe.sh
 
 source /users/athomsen/dlss/repos/y3-deep-lss/submissions/clariden/common.sh

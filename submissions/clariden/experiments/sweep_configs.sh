@@ -1,7 +1,7 @@
 #!/bin/bash
 # Submits one prod/maps.sh job (CHAIN=1: one maps_chain.sh chain) per net config matching a glob,
 # into maps/<probe>/<RUN_PREFIX>_<config name>. Run it on the login node; maps.sh variables forward.
-#   PROBE=combined CONFIGS_GLOB="configs/maps/dev/deepsphere/combined/bench_v12/*.yaml" \
+#   VERSION=desy3/v18 PROBE=combined CONFIGS_GLOB="configs/maps/dev/deepsphere/combined/bench_v12/*.yaml" \
 #       RUN_PREFIX=bench_v12 CHAIN=1 ./sweep_configs.sh
 
 source /users/athomsen/dlss/repos/y3-deep-lss/submissions/clariden/common.sh

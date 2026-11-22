@@ -111,6 +111,7 @@ def evaluate_mock_cls(
     model,
     pred_file,
     data_dir,
+    obs_dir,
     msfm_conf,
     dlss_conf,
     params,
@@ -125,7 +126,7 @@ def evaluate_mock_cls(
     scale_cut="hard",
     cls_n_bins=None,
 ):
-    obs_file = os.path.join(data_dir, "obs", f"{label}_obs_maps.h5")
+    obs_file = os.path.join(obs_dir, f"{label}_obs_maps.h5")
     if not os.path.exists(obs_file):
         raise FileNotFoundError(f"mock file not found: {obs_file}")
     print(f"Evaluating {label}...")

@@ -10,7 +10,7 @@
 
 # GridPipeline input-pipeline throughput (no network, no GPU), one-factor-at-a-time around the
 # configs/maps/shared/dataloader.yaml knobs, one process per point. Results: claude/bench/dataloader/.
-#   PROBES="lensing combined" sbatch benchmark_dataloader.sh
+#   VERSION=desy3/v18 PROBES="lensing combined" sbatch benchmark_dataloader.sh
 
 set -euo pipefail  # the `X=""; [ test ] && X=flag` idiom of the other scripts would abort here
 source /users/athomsen/dlss/repos/y3-deep-lss/submissions/clariden/common.sh

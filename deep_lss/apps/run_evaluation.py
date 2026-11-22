@@ -108,16 +108,21 @@ def setup():
         default=None,
         help="with --include_des, also the test variants <survey>_no_sys and _no_psi_rot; default on for DES Y3 only",
     )
-    parser.add_argument("--include_mocks", action="store_true", help="evaluate mock observations from data_dir/obs/")
+    parser.add_argument("--include_mocks", action="store_true", help="evaluate the mock observations of --obs_dir")
     parser.add_argument(
         "--mock_labels",
         nargs="+",
         default=None,
-        help="mock labels to evaluate; if omitted, every *_obs_maps.h5 in data_dir/obs/ is evaluated",
+        help="mock labels to evaluate; if omitted, every *_obs_maps.h5 in --obs_dir is evaluated",
     )
-    parser.add_argument("--data_dir", type=str, default=None, help="base data directory (needed for --include_mocks)")
+    parser.add_argument("--obs_dir", type=str, default=None, help="directory of the *_obs_maps.h5 mock observations")
+    parser.add_argument("--data_dir", type=str, default=None, help="if --obs_dir is not given, its parent: obs/ below")
 
     args, _ = parser.parse_known_args()
+    if args.obs_dir is None and args.data_dir is not None:
+        args.obs_dir = os.path.join(args.data_dir, "obs")
+    if args.include_mocks and args.obs_dir is None:
+        parser.error("--include_mocks needs --obs_dir")
 
     logger.set_all_loggers_level(args.verbosity)
 
@@ -583,9 +588,9 @@ if __name__ == "__main__":
             if args.include_mocks:
                 mock_labels = args.mock_labels
                 if mock_labels is None:
-                    mock_labels = evaluation.discover_mock_labels(args.data_dir)
-                    LOGGER.info(f"Auto-discovered {len(mock_labels)} mock(s) in {args.data_dir}/obs: {mock_labels}")
-                evaluation.evaluate_obs_mocks(model_fn, out_file, msfm_conf, dlss_conf, args.data_dir, mock_labels)
+                    mock_labels = evaluation.discover_mock_labels(args.obs_dir)
+                    LOGGER.info(f"Auto-discovered {len(mock_labels)} mock(s) in {args.obs_dir}: {mock_labels}")
+                evaluation.evaluate_obs_mocks(model_fn, out_file, msfm_conf, dlss_conf, args.obs_dir, mock_labels)
 
         if args.wandb and out_file is not None:
             LOGGER.info("Logged the predictions to weights & biases")

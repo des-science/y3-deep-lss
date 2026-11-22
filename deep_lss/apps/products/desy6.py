@@ -20,13 +20,15 @@ Steps, in order:
 
 Usage:
     OMP_NUM_THREADS=4 python -m deep_lss.apps.products.desy6 signal --msfm-config <msfm>/configs/desy6/v1/default.yaml \
-        --scales configs/scales/desy6/8wl,32gc.yaml --source <projection> --max-perms 1   # smoke test
+        --scales configs/scales/desy6/8wl,32gc.yaml --max-perms 1   # smoke test
     OMP_NUM_THREADS=4 python -m deep_lss.apps.products.desy6 signal \
-        --msfm-config <msfm>/configs/desy6/v1/default.yaml --scales configs/scales/desy6/8wl,32gc.yaml \
-        --source <projection>   # the pool fills the CPUs of the process (48 in a daint login session)
+        --msfm-config <msfm>/configs/desy6/v1/default.yaml --scales configs/scales/desy6/8wl,32gc.yaml
+        # the pool fills the CPUs of the process (48 in a daint login session)
     python -m deep_lss.apps.products.desy6 values --msfm-config <msfm>/configs/desy6/v1/default.yaml \
         --scales configs/scales/desy6/8wl,32gc.yaml
     python -m deep_lss.apps.products.desy6 values ... --check   # exit 1 if stale
+
+signal reads the projection of the msfm config's locations.yaml (msfm.utils.locations) unless --source names another.
 
 --dry-run lists a step's inputs and outputs and writes nothing. --max-perms N runs step signal on the first N
 permutations of every cosmology and writes nothing, so a partial average can never pass for the product.
@@ -44,7 +46,7 @@ import numpy as np
 from astropy.cosmology import FlatLambdaCDM
 
 import msfm
-from msfm.utils import clustering, files, filenames, logger, products, redshift, scales
+from msfm.utils import clustering, files, filenames, locations, logger, products, redshift, scales
 from msfm.utils import input_output
 
 from deep_lss.utils.configuration import PROBE_SAMPLES
@@ -339,7 +341,12 @@ def main(argv=None):
     )
     parser.add_argument("--check", action="store_true", help="values only: write nothing, exit 1 if a value is stale")
     parser.add_argument("--dry-run", action="store_true", help="list the inputs and outputs, write nothing")
-    parser.add_argument("--source", default=None, help="signal only: the projection root, which holds benchmarks/")
+    parser.add_argument(
+        "--source",
+        default=None,
+        help="signal only: the projection root, which holds benchmarks/ (default: the projection of the msfm "
+        "config's locations.yaml)",
+    )
     parser.add_argument(
         "--max-perms", type=int, default=None, help="signal only: average the first N permutations, write nothing"
     )
@@ -351,8 +358,11 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if args.check and args.step != "values":
         parser.error("--check only applies to the step values")
-    if (args.source is not None) != (args.step == "signal"):
-        parser.error("--source is required by the step signal and applies to no other step")
+    if args.source is not None and args.step != "signal":
+        parser.error("--source applies to the step signal only")
+    if args.source is None and args.step == "signal":
+        args.source = locations.get(args.msfm_config, "projection")
+        LOGGER.info(f"--source {args.source}, the projection of the msfm config's locations.yaml")
     if args.max_perms is not None and (args.step != "signal" or args.max_perms < 1):
         parser.error("--max-perms takes a positive number and applies to the step signal")
 

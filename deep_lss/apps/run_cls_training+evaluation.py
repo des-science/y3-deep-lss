@@ -112,15 +112,20 @@ def setup():
         default=None,
         help="with --include_des, also the test variants <survey>_no_sys and _no_psi_rot; default on for DES Y3 only",
     )
-    parser.add_argument("--include_mocks", action="store_true", help="evaluate mock observations from data_dir/obs/")
+    parser.add_argument("--include_mocks", action="store_true", help="evaluate the mock observations of --obs_dir")
     parser.add_argument(
         "--mock_labels",
         nargs="+",
         default=None,
-        help="mock labels to evaluate; if omitted, every *_obs_maps.h5 in data_dir/obs/ is evaluated",
+        help="mock labels to evaluate; if omitted, every *_obs_maps.h5 in --obs_dir is evaluated",
+    )
+    parser.add_argument(
+        "--obs_dir", default=None, help="directory of the *_obs_maps.h5 mock observations (default: <data_dir>/obs)"
     )
 
     args = parser.parse_args()
+    if args.obs_dir is None:
+        args.obs_dir = os.path.join(args.data_dir, "obs")
     if not args.probes_config:
         parser.error("--probes_config is required")
     if args.eval_only:
@@ -820,8 +825,8 @@ def main():
     if args.include_mocks:
         mock_labels = args.mock_labels
         if mock_labels is None:
-            mock_labels = evaluation.discover_mock_labels(args.data_dir)
-            LOGGER.info(f"Auto-discovered {len(mock_labels)} mock(s) in {args.data_dir}/obs: {mock_labels}")
+            mock_labels = evaluation.discover_mock_labels(args.obs_dir)
+            LOGGER.info(f"Auto-discovered {len(mock_labels)} mock(s) in {args.obs_dir}: {mock_labels}")
         for label in mock_labels:
             try:
                 cls_evaluation.evaluate_mock_cls(
@@ -829,6 +834,7 @@ def main():
                     model=model,
                     pred_file=pred_file,
                     data_dir=args.data_dir,
+                    obs_dir=args.obs_dir,
                     msfm_conf=msfm_conf,
                     dlss_conf=dlss_conf,
                     params=params,
