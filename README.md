@@ -231,7 +231,8 @@ Two kinds of directory:
 
 SLURM scripts for a multi-GPU cluster, kept parameterized rather than duplicated:
 `clariden/prod/maps.sh` runs train → evaluate → infer in one job (`STAGES` picks a subset),
-`prod/maps_chain.sh` chains several of them for budgets longer than one allocation, `prod/cls.sh` is
+`prod/maps_chain.sh` trains through one or more of them (one per allocation of training budget) and then
+evaluates and infers in a job of its own, `prod/cls.sh` is
 the Cls equivalent, and `benchmarks/` and `experiments/` hold the sizing and study scripts. They are
 written against one specific cluster and are included as a worked example of how the stages fit
 together, not as a portable script set.

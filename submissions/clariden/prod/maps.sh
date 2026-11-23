@@ -12,10 +12,10 @@
 
 # Map-level network: train, evaluate, infer. VERSION picks the dataset (no default); the run defaults to
 # the production run maps_gcnn/<probe>/v1. Training over an existing run needs OVERWRITE=1, which deletes
-# that run first; eval or infer on a run that already holds predictions need OVERWRITE=1 too. Combined
-# needs 2 x 12 h, so submit it through maps_chain.sh.
-#   VERSION=desy6/v1 PROBE=clustering sbatch maps.sh
-#   VERSION=desy6/v1 STAGES="eval infer" PROBE=lensing sbatch maps.sh          # recover a failed tail
+# that run first; eval or infer on a run that already holds predictions need OVERWRITE=1 too. Train a
+# prod config through maps_chain.sh: its 11 h budget leaves too little of this 12 h job for eval and infer.
+#   VERSION=desy6/v1 PROBE=clustering ./maps_chain.sh
+#   VERSION=desy6/v1 STAGES="eval infer" PROBE=lensing sbatch --time=02:30:00 maps.sh   # recover a failed tail
 #   VERSION=desy3/v18 STAGES=eval MOCK_LABELS=<label> OVERWRITE=1 sbatch maps.sh   # append one mock
 
 source /users/athomsen/dlss/repos/y3-deep-lss/submissions/clariden/common.sh
