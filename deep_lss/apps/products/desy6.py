@@ -13,12 +13,14 @@ data/desy6/<version>/provenance.yaml.
 
 The method is the one of the DES Y3 configs/scales/8wl,32gc.yaml: a Gaussian beam per bin of a fixed transverse
 comoving scale at the bin's mean redshift, l_max where the squared beam falls below the threshold, and white noise
-equal to the smoothed signal power at l_max.
+equal to the smoothed signal power at l_max. The networks smooth each probe by repeating one base kernel per bin, and
+this step chooses that kernel so that no bin is smoothed less than its beam (_base_kernel).
 
 Steps, in order:
     signal   mean signal C_l (lensing kg + A_IA ia, clustering counts at the fiducial bias) of the fiducial maps, over
              all their permutations, from the benchmark fiducial_bench of the CosmoGrid projection (--source)
-    values   theta_fwhm, l_max, theta_fwhm_base and white_noise_sigma, written into the marked scales config lines
+    values   theta_fwhm, l_max, white_noise_sigma and each probe's base kernel (theta_fwhm_base, base_repetitions),
+             written into the marked scales config lines
 
 Usage:
     OMP_NUM_THREADS=4 python -m deep_lss.apps.products.desy6 signal --msfm-config <msfm>/configs/desy6/v2/v2.yaml \
@@ -46,12 +48,13 @@ import h5py
 import healpy as hp
 import numpy as np
 from astropy.cosmology import FlatLambdaCDM
+from sklearn.neighbors import BallTree
 
 import msfm
 from msfm.utils import clustering, files, filenames, locations, logger, products, redshift, scales
 from msfm.utils import input_output
 
-from deep_lss.utils.configuration import PROBE_SAMPLES
+from deep_lss.utils.configuration import PROBE_SAMPLES, _downsample_mask, get_smooth_nside_indices
 
 LOGGER = logger.get_logger(__file__)
 
@@ -217,28 +220,78 @@ def _scale_cut(cls, fwhm, l_min, threshold, n_side):
     return l_max, float(np.sqrt(cl_noise / hp.nside2pixarea(n_side))), float(low_pass[l_max])
 
 
-def _fwhm_base(fwhm):
-    """The base FWHM of the clustering smoothing kernel, which deepsphere repeats ceil((fwhm / base)^2) times per bin.
-
-    Among bases <= min(fwhm) on a 0.1 arcmin grid that cost no more repetitions than the DES Y3 rule (just above
-    min(fwhm) / sqrt(2)), the one with the smallest worst overshoot of the effective FWHM base * sqrt(repetitions);
-    a tie goes to the larger base. The ceil never smooths less than asked.
+def _kernel_footprint(conf, sample, nside):
+    """The pixels a probe's smoothing kernel is built on at nside, as in configuration.get_smoothing_kwargs.
 
     Returns:
-        tuple: (base, repetitions, effective FWHM)
+        tuple: (lat, lon) in radians of the data vector's pixels at nside, and whether the sample's mask covers each
+    """
+    n_side = conf["analysis"]["n_side"]
+    data_vec_pix, _, _, _ = files.load_pixel_file(conf)
+    mask = files.get_tomo_dv_masks(conf)[sample]
+    if nside == n_side:
+        indices = data_vec_pix
+    elif nside < n_side:
+        indices, parent = get_smooth_nside_indices(data_vec_pix, n_side, nside)
+        mask = _downsample_mask(mask, parent, len(indices))
+    else:
+        raise ValueError(f"base_nside {nside} exceeds the maps' n_side {n_side}")
+    lon, lat = hp.pix2ang(nside, indices, nest=True, lonlat=True)
+    return np.radians(np.stack([lat, lon], axis=1)), np.any(mask > 0, axis=1)
+
+
+def _realized_fwhm(theta, covered, max_base, n_sigma_support):
+    """base -> FWHM (arcmin) that one application of deepsphere's HealpySmoothing kernel of FWHM base realizes.
+
+    The kernel as HealpySmoothing builds it: each pixel takes its k nearest pixels, k being the most any pixel has
+    within n_sigma_support sigma, with Gaussian weights; each column is divided by its pixel's row sum. On a sphere
+    sampled this coarsely it is narrower than its nominal Gaussian. The realized FWHM is that of the Gaussian with the
+    kernel's second moment, averaged over the pixels the mask covers; repetitions add second moments.
+    """
+    to_sigma = np.radians(1 / 60) / np.sqrt(8 * np.log(2))
+    tree = BallTree(theta, metric="haversine")
+    k_max = int(np.max(tree.query_radius(theta, r=max_base * to_sigma * n_sigma_support, count_only=True)))
+    dist, ind = tree.query(theta, k=k_max, sort_results=True)
+
+    def realized(base):
+        sigma = base * to_sigma
+        k = int(np.max(np.sum(dist <= sigma * n_sigma_support, axis=1)))
+        weight = np.exp(-0.5 * (dist[:, :k] / sigma) ** 2)
+        weight /= np.sum(weight, axis=1)[ind[:, :k]]
+        second = np.sum(weight * dist[:, :k] ** 2, axis=1) / np.sum(weight, axis=1)
+        return float(np.sqrt(np.mean(second[covered]) / 2) / to_sigma)
+
+    return realized
+
+
+def _base_kernel(fwhm, realized):
+    """The base kernel of one probe: a base FWHM, repeated per bin ceil((fwhm / realized(base))^2) times, so that no
+    bin is smoothed less than its beam.
+
+    Among bases <= min(fwhm) on a 0.1 arcmin grid whose repetitions total no more than the DES Y3 rule's (a nominal base
+    just above min(fwhm) / sqrt(2)), the one with the smallest worst overshoot; a tie goes to the larger base.
+
+    Returns:
+        tuple: (base, realized FWHM, repetitions, effective FWHM)
     """
     fwhm = np.asarray(fwhm, dtype=np.float64)
-
-    def reps(base):
-        return np.ceil((fwhm / base) ** 2)
-
-    def overshoot(base):
-        return np.max(base * np.sqrt(reps(base)) / fwhm)
-
-    budget = np.sum(reps(np.floor(10 * np.min(fwhm) / np.sqrt(2)) / 10 + 0.1))
-    bases = [b for b in np.arange(1, int(round(10 * np.min(fwhm))) + 1) / 10 if b <= np.min(fwhm)]
-    base = min((b for b in bases if np.sum(reps(b)) <= budget), key=lambda b: (overshoot(b), -b))
-    return float(base), reps(base).astype(int), base * np.sqrt(reps(base))
+    budget = np.sum(np.ceil((fwhm / (np.floor(10 * np.min(fwhm) / np.sqrt(2)) / 10 + 0.1)) ** 2))
+    best = None
+    for base in np.arange(int(round(10 * np.min(fwhm))), 0, -1) / 10:
+        # a kernel realizes less than its nominal FWHM (asserted below), so once the nominal repetitions exceed the
+        # budget, the realized ones of this and every smaller base do too
+        if np.sum(np.ceil((fwhm / base) ** 2)) > budget:
+            break
+        width = realized(base)
+        assert width <= base, f"the {base} arcmin kernel realizes {width:.3f} arcmin, more than nominal"
+        reps = np.ceil((fwhm / width) ** 2).astype(int)
+        overshoot = np.max(width * np.sqrt(reps) / fwhm)
+        if np.sum(reps) <= budget and (best is None or overshoot < best[0]):
+            best = (overshoot, float(base), width, reps)
+    if best is None:
+        raise ValueError(f"no base kernel for {fwhm.tolist()} within {budget:.0f} repetitions")
+    _, base, width, reps = best
+    return base, width, reps, width * np.sqrt(reps)
 
 
 def step_values(conf, scales_conf, args):
@@ -248,8 +301,7 @@ def step_values(conf, scales_conf, args):
     cosmology of msfm's config, rounded to 0.1 arcmin. l_max and white_noise_sigma follow from the rounded beam and the
     fiducial signal C_l (step signal). A bin whose beam does not reach the threshold below the band limit keeps its
     beam and gets l_max there, with a warning.
-    theta_fwhm_base: the base of the clustering kernel with the smallest overshoot at no more cost than the
-    DES Y3 rule (_fwhm_base).
+    theta_fwhm_base and base_repetitions: each probe's base kernel at scale_cuts.<probe>.base_nside (_base_kernel).
 
     Returns:
         tuple: (input paths, output paths), or None with --dry-run, --check, or when every value is up to date and
@@ -267,7 +319,8 @@ def step_values(conf, scales_conf, args):
         for sample in PROBE_SAMPLES.values()
         for z_bin in conf["survey"][sample]["z_bins"]
     ]
-    inputs = [os.path.abspath(args.msfm_config), signal_path, *nz_paths]
+    pixel_path = os.path.join(MSFM_DIR, conf["files"]["pixels"])
+    inputs = [os.path.abspath(args.msfm_config), signal_path, pixel_path, *nz_paths]
     if args.dry_run:
         return products.dry_run("values", inputs, [scales_path], rel=_rel)
     if not os.path.isfile(signal_path):
@@ -288,6 +341,7 @@ def step_values(conf, scales_conf, args):
     cosmo = FlatLambdaCDM(Om0=fid["Om"], Ob0=fid["Ob"], H0=fid["H0"], Tcmb0=2.7255, Neff=3.046, m_nu=0.02 * u.eV)
     h = fid["H0"] / 100
     threshold = scales_conf["scale_cuts"]["threshold"]
+    n_sigma_support = scales_conf["scale_cuts"]["n_sigma_support"]
 
     values, i_bin = {}, 0
     for probe, sample in PROBE_SAMPLES.items():
@@ -316,13 +370,23 @@ def step_values(conf, scales_conf, args):
         values[f"scale_cuts.{probe}.theta_fwhm"] = [float(x) for x in fwhm]
         values[f"scale_cuts.{probe}.white_noise_sigma"] = sigma
         values[f"scale_cuts.{probe}.l_max"] = l_max
-        if probe == "clustering":
-            base, reps, effective = _fwhm_base(fwhm)
-            values[f"scale_cuts.{probe}.theta_fwhm_base"] = base
-            LOGGER.info(
-                f"{probe}: theta_fwhm_base {base}, repetitions {reps.tolist()}, effective FWHM "
-                f"{np.round(effective, 1).tolist()} (+{100 * np.max(effective / fwhm - 1):.1f}% at most)"
+
+        if "base_nside" not in probe_conf:
+            raise ValueError(
+                f"scale_cuts.{probe} has no base_nside, so it predates the stated base kernel (DES Y6 v1); its "
+                "values come from the commit its provenance.yaml records"
             )
+        base_nside = probe_conf["base_nside"]
+        theta_pix, covered = _kernel_footprint(conf, sample, base_nside)
+        realized = _realized_fwhm(theta_pix, covered, float(np.min(fwhm)), n_sigma_support)
+        base, width, reps, effective = _base_kernel(fwhm, realized)
+        values[f"scale_cuts.{probe}.theta_fwhm_base"] = base
+        values[f"scale_cuts.{probe}.base_repetitions"] = [int(r) for r in reps]
+        LOGGER.info(
+            f"{probe}: base kernel {base} arcmin at nside {base_nside} realizes {width:.3f}, repetitions "
+            f"{reps.tolist()}, effective FWHM {np.round(effective, 2).tolist()} "
+            f"(+{100 * np.min(effective / fwhm - 1):.1f}% to +{100 * np.max(effective / fwhm - 1):.1f}%)"
+        )
 
     written = products.write_marked_values(scales_conf, scales_path, values, args.check, rel=_rel)
     # with --provenance an up-to-date config is recorded too: these inputs at this commit give its values

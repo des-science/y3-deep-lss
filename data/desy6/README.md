@@ -33,12 +33,16 @@ The method is that of the DES Y3 `configs/scales/8wl,32gc.yaml`, derived for Y3 
   power at `l_max`: `sigma = sqrt(high_pass² · low_pass² · C_ℓ(l_max) / Ω_pix)`. Here
   `high_pass` is the ℓ_min = 30 filter, and the signal is lensing `κ + A_IA I` and clustering
   galaxy counts at the fiducial bias and n_gal.
-- **Base kernel.** The clustering smoothing repeats one kernel of `theta_fwhm_base` ⌈(θ / base)²⌉
-  times, so its effective FWHMs are base·√n. The step takes the base ≤ min θ with the smallest
-  worst overshoot among bases that cost no more repetitions than Y3's rule (just above
-  min θ / √2). On the Y3 beams this rule gives Y3's 40.4′ exactly.
+- **Base kernel.** The networks smooth each probe by repeating one kernel of FWHM
+  `theta_fwhm_base`, `base_repetitions` times per bin, at the probe's `base_nside` (512 for
+  lensing, 256 for clustering), in every run. On a sphere sampled this coarsely the kernel deepsphere
+  builds is narrower than its nominal Gaussian (2.6% at 10.4′ on nside 512, 7.4% at 8.3′). So the
+  step builds that kernel on the footprint, takes its realized FWHM w from the kernel's second
+  moment, and repeats it n = ⌈(θ / w)²⌉ times, which never smooths a bin less than its beam: the
+  effective FWHM w·√n ≥ θ. Of the bases ≤ min θ whose repetitions total no more than Y3's rule
+  (a nominal base just above min θ / √2), it takes the one with the smallest worst overshoot.
 
-Four differences to Y3, all deliberate:
+Three differences to Y3, all deliberate:
 
 - **Fiducial maps from the benchmarks.** Y3 took the signal from the fiducial set. DES Y6 has no
   fiducial projection, so the signal is the mean over the 20 permutations of the benchmark
@@ -51,21 +55,20 @@ Four differences to Y3, all deliberate:
   low, and the Y3 lensing beams 1-3% wider than 8 Mpc/h. The Y3 clustering beams are exact.
   `l_max` and the noise follow the rounded beam the networks use; Y3 took them from the unrounded
   one, which moves its `l_max` by 1-3.
-- **Base kernel by overshoot.** Y3's rule only places the smallest bin. On Y3 the others happened
-  to land just below a step (+2.9% at most). On Y6 it would give +15.4%: the extra lens bins
-  MagLim 5 and 6 sit close to MagLim 4, between the coarse √2/√3/√4 steps.
-- **Base kernel in clustering-only runs too.** On Y3, only the combined runs use
-  `theta_fwhm_base`; the clustering-only runs take the smallest beam as the base, which on Y6
-  would smooth MagLim 5 at 65.2′ instead of 50.2′ (+29.9%; Y3's worst bin is +18.4%). The Y6
-  config sets `theta_fwhm_base_single_probe: True`, so its clustering-only runs smooth exactly as
-  the combined runs' clustering. Lensing keeps the smallest beam as its base on both surveys (Y6
-  +11.4% at most, Y3 +18.8%).
+- **One base kernel per probe, in every run.** Y3 sets a base for the clustering of its combined
+  runs only, from the nominal width (40.4′, +2.9% at most); everything else takes the smallest
+  beam as its base, so Y3's clustering-only runs smooth MagLim 3 at +18.4% and its lensing reaches
+  +18.8%. Here each probe has its own base kernel, the same in its single-probe and combined
+  runs, so the two differ only in what the network sees.
+
+v1 still followed Y3's nominal rule, for clustering only (35.5′); its configs keep
+`theta_fwhm_base_single_probe: True` to use that base in the clustering-only runs too.
 
 ## Running
 
 ```bash
 P=/users/athomsen/dlss/repos/.claude/bin/plot.sh   # torch_env on the login node
-V=v1
+V=v2
 M=/users/athomsen/dlss/repos/multiprobe-simulation-forward-model/configs/desy6/$V/$V.yaml
 SRC=/capstor/store/cscs/userlab/lp184/tomaszk/261109_cosmogridv1_desy6/000_test/cosmogrid/processed/desy6/CosmoGrid/bary
 SC=configs/scales/desy6/$V/8wl,32gc.yaml
@@ -74,7 +77,7 @@ SC=configs/scales/desy6/$V/8wl,32gc.yaml
 # session). taskset narrows the login session's CPU set further
 OMP_NUM_THREADS=4 $P python -m deep_lss.apps.products.desy6 signal \
     --msfm-config $M --scales $SC --source $SRC --provenance
-# values: seconds
+# values: half a minute, most of it building the base kernels
 $P python -m deep_lss.apps.products.desy6 values --msfm-config $M --scales $SC --provenance
 $P python -m deep_lss.apps.products.desy6 values --msfm-config $M --scales $SC --check   # exit 1 if stale
 ```
@@ -98,12 +101,14 @@ nothing.
 
 ### `values`: the scale cuts in the config
 
-- **Inputs:** the msfm config and n(z), `desy6_signal_cls.h5`.
-- **Output:** `theta_fwhm`, `l_max` and `white_noise_sigma` of both probes, and `theta_fwhm_base`
-  of clustering.
+- **Inputs:** the msfm config, its n(z) and pixel file, `desy6_signal_cls.h5`, and each probe's
+  `base_nside` from the scales config.
+- **Output:** `theta_fwhm`, `l_max`, `white_noise_sigma`, `theta_fwhm_base` and
+  `base_repetitions` of both probes.
 - **Checks:**
   - the signal file was made with the config's bins, fiducial IA amplitudes, bias and n_gal;
   - the signal has one spectrum per configured bin;
+  - no base kernel realizes more than its nominal FWHM, which the search for the base relies on;
   - the rewritten config differs from the old one only in the marked values.
 
 ## Results (2026-11-22)

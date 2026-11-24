@@ -280,7 +280,10 @@ class ResNetLayers:
             # same config geometry as the smoothing front-end (cf. _input_norm_footprint for the
             # transformer encoders); the layer binarizes it to a 0/1 indicator itself
             self._input_norm_mask = smoothing_kwargs.get("mask")
-            self.input_norm_layer = EmpiricalInputNormalization(len(smoothing_kwargs["fwhm"]), self._input_norm_mask)
+            # a stated base kernel passes one fwhm, so the repetitions carry the channel count
+            repetitions = smoothing_kwargs.get("per_channel_repetitions")
+            n_channels = len(smoothing_kwargs["fwhm"] if repetitions is None else repetitions)
+            self.input_norm_layer = EmpiricalInputNormalization(n_channels, self._input_norm_mask)
             self.layers.append(self.input_norm_layer)
 
         def append_block(index):

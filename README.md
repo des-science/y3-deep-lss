@@ -146,10 +146,12 @@ The DES Y6 scale cuts are derived, not typed in: `python -m deep_lss.apps.produc
 computes the signal power spectra and writes the smoothing scales, ℓ cuts and noise levels into the
 marked lines of `configs/scales/desy6/<version>/*.yaml`, recording each step in
 `data/desy6/<version>/provenance.yaml`. [`data/desy6/README.md`](data/desy6/README.md) describes
-the steps and their checks. The DES Y6 v1 clustering block also sets
-`theta_fwhm_base_single_probe: True`, so the clustering-only runs smooth with its `theta_fwhm_base`
-as the combined runs do; without the key, as for DES Y3, a single-probe run takes its smallest beam
-as the base kernel.
+the steps and their checks. Since v2, each probe block states its smoothing kernel
+(`theta_fwhm_base`, `base_repetitions`, `base_nside`), and every run that smooths the probe applies
+it as stated, so single-probe and combined runs smooth a probe identically and no bin less than its
+beam. A block without `base_repetitions` (DES Y3, DES Y6 v1) keeps the old rule: the repetitions
+follow from the nominal base, which is the smallest beam unless `theta_fwhm_base` sets it (combined
+runs, and v1's clustering-only runs through `theta_fwhm_base_single_probe`).
 
 On the cluster, `VERSION=desy6/v2` selects the DES Y6 msfm config `configs/desy6/v2/v2.yaml`, and
 with it the `desy6/` probes configs, the `desy6/v2/` scales configs and the
