@@ -11,10 +11,10 @@ config lines marked "# <- step values: <dotted.key>", and stops on a failed chec
 committed code in this repository and in msfm and records its inputs, outputs and both commits in
 data/desy6/<version>/provenance.yaml.
 
-The method is the one of the DES Y3 configs/scales/8wl,32gc.yaml: a Gaussian beam per bin of a fixed transverse
-comoving scale at the bin's mean redshift, l_max where the squared beam falls below the threshold, and white noise
-equal to the smoothed signal power at l_max. The networks smooth each probe by repeating one base kernel per bin, and
-this step chooses that kernel so that no bin is smoothed less than its beam (_base_kernel).
+The method is the one of the DES Y3 configs/scales/desy3/v18/8wl,32gc.yaml: a Gaussian beam per bin of a fixed
+transverse comoving scale at the bin's mean redshift, l_max where the squared beam falls below the threshold, and white
+noise equal to the smoothed signal power at l_max. The networks smooth each probe by repeating one base kernel per bin,
+and this step chooses that kernel so that no bin is smoothed less than its beam (_base_kernel).
 
 Steps, in order:
     signal   mean signal C_l (lensing kg + A_IA ia, clustering counts at the fiducial bias) of the fiducial maps, over
@@ -144,10 +144,10 @@ def _perm_cls(task):
 def step_signal(conf, scales_conf, args):
     """Writes the mean signal C_l of the fiducial maps to data/desy6/<version>/.
 
-    As configs/scales/8wl,32gc.yaml did for Y3 on the fiducial maps (msfm notebooks/desy3/scale_cuts.ipynb): lensing
-    is kg + A_IA ia with the fiducial IA amplitude per bin, clustering the galaxy counts of the fiducial linear bias and
-    n_gal. The maps are the SIGNAL_N_PERMS permutations of SIGNAL_DIR, which has the fiducial cosmology, resolution and
-    n(z); Y6 has no fiducial projection.
+    As configs/scales/desy3/v18/8wl,32gc.yaml did for Y3 on the fiducial maps (msfm notebooks/desy3/scale_cuts.ipynb):
+    lensing is kg + A_IA ia with the fiducial IA amplitude per bin, clustering the galaxy counts of the fiducial linear
+    bias and n_gal. The maps are the SIGNAL_N_PERMS permutations of SIGNAL_DIR, which has the fiducial cosmology,
+    resolution and n(z); Y6 has no fiducial projection.
 
     Returns:
         tuple: (input paths, output paths), or None with --dry-run or --max-perms

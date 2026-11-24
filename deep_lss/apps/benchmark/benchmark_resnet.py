@@ -55,8 +55,8 @@ REPOS = "/users/athomsen/dlss/repos"
 # Defaults: v16/rot_in_place, lensing, vmim.
 DEFAULTS = {
     "msfm_config": f"{REPOS}/multiprobe-simulation-forward-model/configs/v16/rot_in_place.yaml",
-    "probes_config": f"{REPOS}/y3-deep-lss/configs/probes/lensing.yaml",
-    "scales_config": f"{REPOS}/y3-deep-lss/configs/scales/8wl,32gc.yaml",
+    "probes_config": f"{REPOS}/y3-deep-lss/configs/probes/desy3/lensing.yaml",
+    "scales_config": f"{REPOS}/y3-deep-lss/configs/scales/desy3/v18/8wl,32gc.yaml",
     "loss_config": f"{REPOS}/y3-deep-lss/configs/loss/vmim.yaml",
     "data_config": f"{REPOS}/y3-deep-lss/configs/data/default.yaml",
     "configs_dir": f"{REPOS}/y3-deep-lss/configs/maps/prod/deepsphere/lensing",

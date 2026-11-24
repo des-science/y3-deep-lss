@@ -31,8 +31,8 @@ def stage(msg):
 
 msfm_conf = input_output.read_yaml(f"{REPOS}/multiprobe-simulation-forward-model/configs/v17/baseline.yaml")
 dlss_conf = configuration.read_split_configs(
-    f"{REPOS}/y3-deep-lss/configs/probes/combined_nla.yaml",
-    f"{REPOS}/y3-deep-lss/configs/scales/8wl,32gc.yaml",
+    f"{REPOS}/y3-deep-lss/configs/probes/desy3/combined_nla.yaml",
+    f"{REPOS}/y3-deep-lss/configs/scales/desy3/v18/8wl,32gc.yaml",
     msfm_conf=msfm_conf,
 )
 net_conf = input_output.read_yaml(f"{REPOS}/y3-deep-lss/configs/deepsphere/combined/maps+cls.yaml")

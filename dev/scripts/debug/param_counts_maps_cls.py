@@ -40,8 +40,8 @@ results = {}
 for probe, probes_cfg in CASES:
     print(f"\n===== {probe} (probes/{probes_cfg}.yaml) =====", flush=True)
     dlss_conf = configuration.read_split_configs(
-        f"{REPOS}/y3-deep-lss/configs/probes/{probes_cfg}.yaml",
-        f"{REPOS}/y3-deep-lss/configs/scales/8wl,32gc.yaml",
+        f"{REPOS}/y3-deep-lss/configs/probes/desy3/{probes_cfg}.yaml",
+        f"{REPOS}/y3-deep-lss/configs/scales/desy3/v18/8wl,32gc.yaml",
         msfm_conf=msfm_conf,
     )
     net_conf = input_output.read_yaml(f"{REPOS}/y3-deep-lss/configs/deepsphere/{probe}/maps+cls.yaml")

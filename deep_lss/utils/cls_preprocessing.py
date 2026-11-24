@@ -399,7 +399,7 @@ def get_rebinned_cls_dsets(
                 f"The msfm config defines all_params={list(all_params)}; the probes config asks for "
                 f"{list(requested)}. This usually means the probes config does not match the dataset "
                 f"-- e.g. a bta-containing probes config on a standard-NLA dataset built with "
-                f"extended_nla: False (msfm configs/v17+), which needs the configs/probes/*_nla.yaml "
+                f"extended_nla: False (msfm configs/v17+), which needs the configs/probes/desy3/*_nla.yaml "
                 f"variants."
             )
 

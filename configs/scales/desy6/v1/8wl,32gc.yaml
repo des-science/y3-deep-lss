@@ -1,5 +1,5 @@
 # DES Y6 scale cuts: 8 Mpc/h (lensing) and 32 Mpc/h (clustering) transverse comoving scales at each bin's mean
-# redshift, by the method of the DES Y3 configs/scales/8wl,32gc.yaml. Bins follow the msfm config's z_bins.
+# redshift, by the method of the DES Y3 configs/scales/desy3/v18/8wl,32gc.yaml. Bins follow the msfm config's z_bins.
 #
 # The derived values come from `python -m deep_lss.apps.products.desy6 <step>` (data/desy6/README.md). A line marked
 #   # <- step values: <dotted.key>

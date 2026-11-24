@@ -81,8 +81,8 @@ python deep_lss/apps/run_training.py \
     --train_tfr_pattern="$DATA/tfrecords/grid/DESy3_grid_dmb_????.tfrecord" \
     --data_dir="$DATA" \
     --msfm_config="$MSFM/configs/desy3/v18/v18.yaml" \
-    --probes_config=configs/probes/lensing.yaml \
-    --scales_config=configs/scales/8wl,32gc.yaml \
+    --probes_config=configs/probes/desy3/lensing.yaml \
+    --scales_config=configs/scales/desy3/v18/8wl,32gc.yaml \
     --loss_config=configs/loss/vmim.yaml \
     --data_config=configs/data/default.yaml \
     --net_config=configs/maps/prod/deepsphere/lensing/maps.yaml \
@@ -123,11 +123,11 @@ record of what a run actually did.
 
 ### Surveys: DES Y3 and DES Y6
 
-The survey is the one of the msfm config, its `survey.name`. The DES Y3 probes and scales configs
-sit at the top of `configs/probes/` and `configs/scales/`. Those of DES Y6 sit in
-`configs/probes/desy6/` and, since the scale cuts are derived from one dataset version's fiducials,
-in `configs/scales/desy6/<version>/`. DES Y6 has five lens bins (MagLim 1, 3, 4, 5, 6), so its bias
-parameters are `bg1, bg3, bg4, bg5, bg6`. A scales config states its survey as `scale_cuts.survey`
+The survey is the one of the msfm config, its `survey.name`. The probes configs are per survey,
+since they name its bias parameters (`configs/probes/desy3/`, `configs/probes/desy6/`). The scales
+configs are per dataset version, since the scale cuts are derived from its fiducials, and sit at the
+msfm config's path (`configs/scales/desy3/v18/`, `configs/scales/desy6/v2/`). DES Y6 has five
+lens bins (MagLim 1, 3, 4, 5, 6), so its bias parameters are `bg1, bg3, bg4, bg5, bg6`. A scales config states its survey as `scale_cuts.survey`
 (DES Y3 when absent), and the entry points refuse a scales config of another survey or with a
 per-bin list that does not match the msfm config's bins. The observation key follows the survey
 too, e.g. `obs/preds/DESy6`. Its test variants, without the lens weight maps (`_no_sys`) and
@@ -233,12 +233,13 @@ dev/               exploratory notebooks, scripts and notes; not part of the rel
 
 Two kinds of directory:
 
-- **Analysis choices**, flat: [`data/`](configs/data/), [`probes/`](configs/probes/),
-  [`scales/`](configs/scales/), [`loss/`](configs/loss/).
-- **Architectures**, shaped `<arch>/<probe>/`: `deepsphere/`, `transformer/` and `cls/`, each with
-  a subdirectory per probe holding `maps.yaml` and `maps+cls.yaml` (the defaults). Benchmark
-  rounds live alongside them in `bench_*/` subdirectories, each carrying its own `README.md`
-  describing what that round varied and what it concluded.
+- **Analysis choices**: [`data/`](configs/data/) and [`loss/`](configs/loss/), flat;
+  [`probes/`](configs/probes/) per survey, `probes/<survey>/`; [`scales/`](configs/scales/) per
+  dataset version, `scales/<survey>/<version>/`.
+- **Networks**: [`maps/`](configs/maps/) for the map-level networks, with the defaults in
+  `prod/<arch>/<probe>/{maps,maps+cls}.yaml`, the benchmark rounds in `dev/<arch>/<probe>/bench_*/`
+  (each with a `README.md` on what it varied and concluded) and the shared bases in `shared/`;
+  [`cls/`](configs/cls/) for the Cl-level networks.
 
 ### `submissions`
 
@@ -264,9 +265,10 @@ prints every step on the login node.
   (`--n_steps`, `--wall_budget_seconds`) instead.
 - **The probes config must match the dataset's intrinsic-alignment model, and a mismatch does not
   raise.** Datasets built with extended NLA (a `bta` parameter in the forward model) take the
-  plain `configs/probes/*.yaml`; standard-NLA datasets take the `*_nla.yaml` ones. Using an
+  plain `configs/probes/desy3/*.yaml`; standard-NLA datasets take the `*_nla.yaml` ones. Using an
   `_nla` config on extended-NLA data silently marginalizes over a parameter instead of failing.
-  The header of [`configs/probes/lensing_nla.yaml`](configs/probes/lensing_nla.yaml) spells this out.
+  The header of [`configs/probes/desy3/lensing_nla.yaml`](configs/probes/desy3/lensing_nla.yaml)
+  spells this out.
 - **maps+Cls networks require a precomputed rebinned-Cls cache.** `run_training.py` only *reads*
   it and aborts if it is missing; build it first with
   `run_cls_training+evaluation.py --precache_only`. The cache spans all probe pairs, so it is

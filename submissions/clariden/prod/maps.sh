@@ -20,7 +20,7 @@
 
 source /users/athomsen/dlss/repos/y3-deep-lss/submissions/clariden/common.sh
 
-PROBE="${PROBE:-lensing}"             # configs/probes/[<survey>/]<PROBE>.yaml
+PROBE="${PROBE:-lensing}"             # configs/probes/<survey>/<PROBE>.yaml
 ARCH="${ARCH:-deepsphere}"            # configs/maps/prod/<ARCH>/: deepsphere | deepsphere_convnext | transformer
 INPUTS="${INPUTS:-maps+cls}"          # maps+cls | maps
 STAGES="${STAGES:-train eval infer}"

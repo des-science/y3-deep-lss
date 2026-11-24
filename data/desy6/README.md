@@ -22,7 +22,7 @@ take the scales config of the dataset they run on, `VERSION`.
 
 ## Method
 
-The method is that of the DES Y3 `configs/scales/8wl,32gc.yaml`, derived for Y3 in msfm
+The method is that of the DES Y3 `configs/scales/desy3/v18/8wl,32gc.yaml`, derived for Y3 in msfm
 `notebooks/desy3/scale_cuts.ipynb`:
 
 - **Beam.** For each bin, a Gaussian beam whose FWHM is a fixed transverse comoving scale at the
@@ -116,7 +116,7 @@ nothing.
 
 ## Results
 
-v1 (2026-11-22), next to Y3's `configs/scales/8wl,32gc.yaml`:
+v1 (2026-11-22), next to Y3's `configs/scales/desy3/v18/8wl,32gc.yaml`:
 
 | | bins | mean z | `theta_fwhm` (′) | `l_max` | Y3 `theta_fwhm` (′) |
 |---|---|---|---|---|---|
