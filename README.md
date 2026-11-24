@@ -124,14 +124,15 @@ record of what a run actually did.
 ### Surveys: DES Y3 and DES Y6
 
 The survey is the one of the msfm config, its `survey.name`. The DES Y3 probes and scales configs
-sit at the top of `configs/probes/` and `configs/scales/`; those of DES Y6 sit in their `desy6/`
-subdirectories. DES Y6 has five lens bins (MagLim 1, 3, 4, 5, 6), so its bias parameters are
-`bg1, bg3, bg4, bg5, bg6`. A scales config states its survey as `scale_cuts.survey` (DES Y3 when
-absent), and the entry points refuse a scales config of another survey or with a per-bin list that
-does not match the msfm config's bins. The observation key follows the survey too, e.g.
-`obs/preds/DESy6`. Its test variants, without the lens weight maps (`_no_sys`) and without the shear
-rotation (`_no_psi_rot`), are evaluated by default for DES Y3 only; `--des_variants` adds them for
-another survey.
+sit at the top of `configs/probes/` and `configs/scales/`. Those of DES Y6 sit in
+`configs/probes/desy6/` and, since the scale cuts are derived from one dataset version's fiducials,
+in `configs/scales/desy6/<version>/`. DES Y6 has five lens bins (MagLim 1, 3, 4, 5, 6), so its bias
+parameters are `bg1, bg3, bg4, bg5, bg6`. A scales config states its survey as `scale_cuts.survey`
+(DES Y3 when absent), and the entry points refuse a scales config of another survey or with a
+per-bin list that does not match the msfm config's bins. The observation key follows the survey
+too, e.g. `obs/preds/DESy6`. Its test variants, without the lens weight maps (`_no_sys`) and
+without the shear rotation (`_no_psi_rot`), are evaluated by default for DES Y3 only;
+`--des_variants` adds them for another survey.
 
 The network target, `dset.training.params`, comes from the msfm config
 (`deep_lss.utils.configuration.resolve_params`). Without the key, a probe is trained on every label
@@ -143,16 +144,18 @@ repeats them.
 
 The DES Y6 scale cuts are derived, not typed in: `python -m deep_lss.apps.products.desy6 <step>`
 computes the signal power spectra and writes the smoothing scales, ℓ cuts and noise levels into the
-marked lines of `configs/scales/desy6/*.yaml`, recording each step in `data/desy6/provenance.yaml`.
-[`data/desy6/README.md`](data/desy6/README.md) describes the steps and their checks. The DES Y6
-clustering block also sets `theta_fwhm_base_single_probe: True`, so the clustering-only runs smooth
-with its `theta_fwhm_base` as the combined runs do; without the key, as for DES Y3, a single-probe
-run takes its smallest beam as the base kernel.
+marked lines of `configs/scales/desy6/<version>/*.yaml`, recording each step in
+`data/desy6/<version>/provenance.yaml`. [`data/desy6/README.md`](data/desy6/README.md) describes
+the steps and their checks. The DES Y6 v1 clustering block also sets
+`theta_fwhm_base_single_probe: True`, so the clustering-only runs smooth with its `theta_fwhm_base`
+as the combined runs do; without the key, as for DES Y3, a single-probe run takes its smallest beam
+as the base kernel.
 
 On the cluster, `VERSION=desy6/v2` selects the DES Y6 msfm config `configs/desy6/v2/v2.yaml`, and
-with it the `desy6/` configs and the `DESy6_grid_dmb_????.tfrecord` files. The data, mock and run
-directories come from msfm's `configs/desy6/v2/locations.yaml` (see `submissions` below). The infer
-stage needs an msi checkout that handles DES Y6; an older one writes no DES Y6 chain.
+with it the `desy6/` probes configs, the `desy6/v2/` scales configs and the
+`DESy6_grid_dmb_????.tfrecord` files. The data, mock and run directories come from msfm's
+`configs/desy6/v2/locations.yaml` (see `submissions` below). The infer stage needs an msi checkout
+that handles DES Y6; an older one writes no DES Y6 chain.
 
 ### Entry points
 

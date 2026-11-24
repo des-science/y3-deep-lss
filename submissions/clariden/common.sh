@@ -24,7 +24,7 @@ SLURM_JOB_ID="${SLURM_JOB_ID:-dryrun}"
 # The dataset is msfm's configs/<VERSION>/<version>.yaml, e.g. VERSION=desy6/v2 for configs/desy6/v2/v2.yaml. VERSION
 # has no default, so a run never falls back to another survey's data. DES Y3 v18 is VERSION=desy3/v18; v18 and v16
 # are extended-NLA (plain configs/probes/*.yaml), v17 needs the *_nla probe configs.
-SCALES="${SCALES:-8wl,32gc}"  # configs/scales/
+SCALES="${SCALES:-8wl,32gc}"  # configs/scales/, configs/scales/<VERSION>/ outside DES Y3
 LOSS="${LOSS:-vmim}"          # configs/loss/
 DATA="${DATA:-default}"       # configs/data/
 
@@ -70,7 +70,10 @@ fi
 TRAIN_TFR="${TRAIN_TFR:-$INPUT/tfrecords/grid/${SURVEY}_grid_dmb_????.tfrecord}"
 
 PROBES_DIR="$DEEP_LSS/configs/probes/$SURVEY_DIR"
-SCALES_CONFIG="$DEEP_LSS/configs/scales/$SURVEY_DIR$SCALES.yaml"
+# a survey's scale cuts are derived per dataset version (configs/scales/desy6/v2/); DES Y3's sit at the top level
+SCALES_DIR=""
+[ -z "$SURVEY_DIR" ] || SCALES_DIR="$VERSION/"
+SCALES_CONFIG="$DEEP_LSS/configs/scales/$SCALES_DIR$SCALES.yaml"
 LOSS_CONFIG="$DEEP_LSS/configs/loss/$LOSS.yaml"
 DATA_CONFIG="$DEEP_LSS/configs/data/$DATA.yaml"
 

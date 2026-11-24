@@ -4,10 +4,12 @@
 Created November 2026
 Author: Arne Thomsen (with Claude)
 
-Derives the DES Y6 scale cuts of configs/scales/desy6/, one step per product (data/desy6/README.md), on the msfm
-DES Y6 forward model. Every step writes only to data/desy6/ and to the config lines marked
-"# <- step values: <dotted.key>", and stops on a failed check. With --provenance, it requires committed code in this
-repository and in msfm and records its inputs, outputs and both commits in data/desy6/provenance.yaml.
+Derives the DES Y6 scale cuts of one msfm dataset version, one step per product (data/desy6/README.md). The msfm
+config <msfm>/configs/desy6/<version>/<version>.yaml selects the version, whose scales configs lie in
+configs/scales/desy6/<version>/ and whose products in data/desy6/<version>/. Every step writes only there and to the
+config lines marked "# <- step values: <dotted.key>", and stops on a failed check. With --provenance, it requires
+committed code in this repository and in msfm and records its inputs, outputs and both commits in
+data/desy6/<version>/provenance.yaml.
 
 The method is the one of the DES Y3 configs/scales/8wl,32gc.yaml: a Gaussian beam per bin of a fixed transverse
 comoving scale at the bin's mean redshift, l_max where the squared beam falls below the threshold, and white noise
@@ -19,13 +21,13 @@ Steps, in order:
     values   theta_fwhm, l_max, theta_fwhm_base and white_noise_sigma, written into the marked scales config lines
 
 Usage:
-    OMP_NUM_THREADS=4 python -m deep_lss.apps.products.desy6 signal --msfm-config <msfm>/configs/desy6/v1/default.yaml \
-        --scales configs/scales/desy6/8wl,32gc.yaml --max-perms 1   # smoke test
+    OMP_NUM_THREADS=4 python -m deep_lss.apps.products.desy6 signal --msfm-config <msfm>/configs/desy6/v2/v2.yaml \
+        --scales configs/scales/desy6/v2/8wl,32gc.yaml --max-perms 1   # smoke test
     OMP_NUM_THREADS=4 python -m deep_lss.apps.products.desy6 signal \
-        --msfm-config <msfm>/configs/desy6/v1/default.yaml --scales configs/scales/desy6/8wl,32gc.yaml
+        --msfm-config <msfm>/configs/desy6/v2/v2.yaml --scales configs/scales/desy6/v2/8wl,32gc.yaml
         # the pool fills the CPUs of the process (48 in a daint login session)
-    python -m deep_lss.apps.products.desy6 values --msfm-config <msfm>/configs/desy6/v1/default.yaml \
-        --scales configs/scales/desy6/8wl,32gc.yaml
+    python -m deep_lss.apps.products.desy6 values --msfm-config <msfm>/configs/desy6/v2/v2.yaml \
+        --scales configs/scales/desy6/v2/8wl,32gc.yaml
     python -m deep_lss.apps.products.desy6 values ... --check   # exit 1 if stale
 
 signal reads the projection of the msfm config's locations.yaml (msfm.utils.locations) unless --source names another.
@@ -56,24 +58,40 @@ LOGGER = logger.get_logger(__file__)
 REPO_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.."))
 MSFM_DIR = os.path.abspath(os.path.join(os.path.dirname(msfm.__file__), ".."))
 SURVEY_NAME = "DESy6"
-OUT_ROOT = "data/desy6"
-SCALES_ROOT = "configs/scales/desy6"
 STEP_ORDER = ["signal", "values"]
-SIGNAL_FILE = "data/desy6/desy6_signal_cls.h5"
 # step signal: the benchmark at the fiducial cosmology, resolution and n(z), and its number of permutations
 SIGNAL_DIR = os.path.join("benchmarks", "fiducial_bench")
 SIGNAL_N_PERMS = 20
-PROVENANCE_FILE = "data/desy6/provenance.yaml"
 # the code a step runs, in this repository and in msfm
 CODE_PATHS = ("deep_lss", "configs")
 MSFM_CODE_PATHS = ("msfm", "configs")
 
 
-def _out_path(rel_path):
-    """Absolute path of an output, which must lie under data/desy6/."""
+def dataset_paths(msfm_config):
+    """The products of one msfm dataset version, e.g. <msfm>/configs/desy6/v2/v2.yaml gives data/desy6/v2/ and
+    configs/scales/desy6/v2/, so the scale cuts of one version are never derived from another's fiducials.
+
+    Returns:
+        dict: repository-relative out_root, scales_root, signal and provenance
+    """
+    dataset = os.path.dirname(os.path.relpath(os.path.abspath(msfm_config), os.path.join(MSFM_DIR, "configs")))
+    survey, _, version = dataset.partition(os.sep)
+    if survey != SURVEY_NAME.lower() or not version or os.sep in version:
+        raise ValueError(f"{msfm_config} is not under <msfm>/configs/{SURVEY_NAME.lower()}/<version>/")
+    out_root = os.path.join("data", dataset)
+    return {
+        "out_root": out_root,
+        "scales_root": os.path.join("configs", "scales", dataset),
+        "signal": os.path.join(out_root, "desy6_signal_cls.h5"),
+        "provenance": os.path.join(out_root, "provenance.yaml"),
+    }
+
+
+def _out_path(rel_path, paths):
+    """Absolute path of an output, which must lie under the dataset version's data/desy6/<version>/."""
     rel_path = os.path.normpath(rel_path)
-    if os.path.isabs(rel_path) or not (rel_path + os.sep).startswith(OUT_ROOT + os.sep):
-        raise ValueError(f"DES Y6 outputs must lie under {OUT_ROOT}/, got {rel_path}")
+    if os.path.isabs(rel_path) or not (rel_path + os.sep).startswith(paths["out_root"] + os.sep):
+        raise ValueError(f"DES Y6 outputs must lie under {paths['out_root']}/, got {rel_path}")
     return os.path.join(REPO_DIR, rel_path)
 
 
@@ -121,7 +139,7 @@ def _perm_cls(task):
 
 
 def step_signal(conf, scales_conf, args):
-    """Writes the mean signal C_l of the fiducial maps to data/desy6/.
+    """Writes the mean signal C_l of the fiducial maps to data/desy6/<version>/.
 
     As configs/scales/8wl,32gc.yaml did for Y3 on the fiducial maps (msfm notebooks/desy3/scale_cuts.ipynb): lensing
     is kg + A_IA ia with the fiducial IA amplitude per bin, clustering the galaxy counts of the fiducial linear bias and
@@ -132,7 +150,7 @@ def step_signal(conf, scales_conf, args):
         tuple: (input paths, output paths), or None with --dry-run or --max-perms
     """
     signal_dir = os.path.join(os.path.abspath(args.source), SIGNAL_DIR)
-    out_path = _out_path(SIGNAL_FILE)
+    out_path = _out_path(args.paths["signal"], args.paths)
     inputs = [os.path.abspath(args.msfm_config), signal_dir]
     if args.dry_run:
         return products.dry_run("signal", inputs, [out_path], rel=_rel)
@@ -238,7 +256,7 @@ def step_values(conf, scales_conf, args):
             --provenance is not set
     """
     scales_path = os.path.abspath(args.scales)
-    signal_path = _out_path(SIGNAL_FILE)
+    signal_path = _out_path(args.paths["signal"], args.paths)
     nz_paths = [
         filenames.get_filename_z_distribution(
             os.path.join(MSFM_DIR, conf["dirs"]["redshift_distributions"]),
@@ -316,7 +334,7 @@ def step_values(conf, scales_conf, args):
 STEPS = {"signal": step_signal, "values": step_values}
 
 
-def _record_provenance(step, commits, inputs, outputs, scales_path):
+def _record_provenance(step, commits, inputs, outputs, scales_path, paths):
     record = products.provenance_record(
         command="python -m deep_lss.apps.products.desy6 " + " ".join(sys.argv[1:]),
         config=_rel(scales_path),
@@ -326,18 +344,18 @@ def _record_provenance(step, commits, inputs, outputs, scales_path):
         rel=_rel,
     )
     about = "Written by deep_lss.apps.products.desy6, one record per step: how each DES Y6 scale cut was made."
-    products.record_provenance(_out_path(PROVENANCE_FILE), step, record, STEP_ORDER, about)
-    LOGGER.info(f"recorded step {step} in {PROVENANCE_FILE}")
+    products.record_provenance(_out_path(paths["provenance"], paths), step, record, STEP_ORDER, about)
+    LOGGER.info(f"recorded step {step} in {paths['provenance']}")
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("step", choices=list(STEPS), help="the product to derive")
     parser.add_argument(
-        "--msfm-config", required=True, help="msfm DES Y6 config, e.g. <msfm>/configs/desy6/v1/default.yaml"
+        "--msfm-config", required=True, help="msfm DES Y6 config, e.g. <msfm>/configs/desy6/v2/v2.yaml"
     )
     parser.add_argument(
-        "--scales", required=True, help="DES Y6 scales config, e.g. configs/scales/desy6/8wl,32gc.yaml"
+        "--scales", required=True, help="scales config of that version, e.g. configs/scales/desy6/v2/8wl,32gc.yaml"
     )
     parser.add_argument("--check", action="store_true", help="values only: write nothing, exit 1 if a value is stale")
     parser.add_argument("--dry-run", action="store_true", help="list the inputs and outputs, write nothing")
@@ -353,7 +371,7 @@ def main(argv=None):
     parser.add_argument(
         "--provenance",
         action="store_true",
-        help="for production runs: refuse uncommitted code here or in msfm, record the step in data/desy6/",
+        help="for production runs: refuse uncommitted code here or in msfm, record the step in data/desy6/<version>/",
     )
     args = parser.parse_args(argv)
     if args.check and args.step != "values":
@@ -369,9 +387,12 @@ def main(argv=None):
     conf = files.load_config(args.msfm_config)
     if conf["survey"]["name"] != SURVEY_NAME:
         raise ValueError(f"{args.msfm_config} is a {conf['survey']['name']} config, these products are {SURVEY_NAME}")
+    args.paths = dataset_paths(args.msfm_config)
     scales_path = os.path.abspath(args.scales)
-    if not (_rel(scales_path) + os.sep).startswith(SCALES_ROOT + os.sep):
-        raise ValueError(f"the DES Y6 scales configs lie under {SCALES_ROOT}/, got {_rel(scales_path)}")
+    if os.path.dirname(_rel(scales_path)) != args.paths["scales_root"]:
+        raise ValueError(
+            f"the scales configs of this dataset lie in {args.paths['scales_root']}/, got {_rel(scales_path)}"
+        )
     scales_conf = input_output.read_yaml(scales_path)
     if scales_conf["scale_cuts"].get("survey") != SURVEY_NAME:
         raise ValueError(f"{_rel(scales_path)} is not marked scale_cuts.survey: {SURVEY_NAME}")
@@ -388,7 +409,7 @@ def main(argv=None):
         for path in result[1]:
             LOGGER.info(f"wrote {path}")
         if args.provenance:
-            _record_provenance(args.step, commits, *result, scales_path)
+            _record_provenance(args.step, commits, *result, scales_path, args.paths)
 
 
 if __name__ == "__main__":

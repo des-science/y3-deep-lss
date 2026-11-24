@@ -5,7 +5,7 @@ steps:
     command: python -m deep_lss.apps.products.desy6 signal --msfm-config ../multiprobe-simulation-forward-model/configs/desy6/v1/default.yaml
       --scales configs/scales/desy6/8wl,32gc.yaml --source /capstor/store/cscs/userlab/lp184/tomaszk/261109_cosmogridv1_desy6/000_test/cosmogrid/processed/desy6/CosmoGrid/bary
       --provenance
-    config: configs/scales/desy6/8wl,32gc.yaml
+    config: configs/scales/desy6/v1/8wl,32gc.yaml
     deep_lss_commit: d6b0114b656d2b82f11809d5e7fda8d231e6f524
     msfm_commit: 3222421ddd875fa5e35d4f9313fdd4d4b4096aac
     inputs:
@@ -16,20 +16,20 @@ steps:
       bytes: 4096
       mtime: '2026-11-19T14:13:45+01:00'
     outputs:
-    - path: data/desy6/desy6_signal_cls.h5
+    - path: data/desy6/v1/desy6_signal_cls.h5
       sha256: da50f28aaaf3f310092f9a711636470c3140bad27fbbadb6184a9e5e54fb2520
   values:
     date: '2026-11-22T11:43:27+01:00'
     command: python -m deep_lss.apps.products.desy6 values --msfm-config ../multiprobe-simulation-forward-model/configs/desy6/v1/default.yaml
       --scales configs/scales/desy6/8wl,32gc.yaml --provenance
-    config: configs/scales/desy6/8wl,32gc.yaml
+    config: configs/scales/desy6/v1/8wl,32gc.yaml
     deep_lss_commit: dd806213ae3d9f645aa5a09ce68e4d12d697fe36
     msfm_commit: 3222421ddd875fa5e35d4f9313fdd4d4b4096aac
     inputs:
     - path: /users/athomsen/dlss/repos/multiprobe-simulation-forward-model/configs/desy6/v1/default.yaml
       bytes: 7415
       mtime: '2026-11-22T10:53:08+01:00'
-    - path: data/desy6/desy6_signal_cls.h5
+    - path: data/desy6/v1/desy6_signal_cls.h5
       bytes: 120832
       mtime: '2026-11-22T11:41:26+01:00'
     - path: /users/athomsen/dlss/repos/multiprobe-simulation-forward-model/data/desy6/redshift_distributions/desy6_nz_metacal_bin1.txt
@@ -60,5 +60,5 @@ steps:
       bytes: 15124
       mtime: '2026-11-20T17:55:51+01:00'
     outputs:
-    - path: configs/scales/desy6/8wl,32gc.yaml
+    - path: configs/scales/desy6/v1/8wl,32gc.yaml
       sha256: 3185e7b7cd2a405b628f61aa1584b394563e0d4516b073d4cc98c841394e0137

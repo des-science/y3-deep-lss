@@ -1,18 +1,22 @@
 # `data/desy6/`
 
-The products behind the DES Y6 scale cuts, `configs/scales/desy6/8wl,32gc.yaml`: the smoothing
-scales, the ℓ cuts and the noise levels the networks are trained with. One script makes them,
-`deep_lss/apps/products/desy6.py`, on the DES Y6 forward model of msfm
-(`configs/desy6/v1/default.yaml` there). It writes only to this directory and to the config lines
-marked `# <- step values: <dotted.key>`. With `--provenance`, it requires committed code here and in
-msfm and records each step in `provenance.yaml`: its command, inputs, outputs and both commits.
+The products behind the DES Y6 scale cuts: the smoothing scales, the ℓ cuts and the noise levels
+the networks are trained with. One script makes them, `deep_lss/apps/products/desy6.py`, for one
+dataset version of msfm's DES Y6 forward model at a time. The msfm config
+`configs/desy6/<version>/<version>.yaml` there selects the version, whose scales config is
+`configs/scales/desy6/<version>/8wl,32gc.yaml` here and whose products are in `<version>/` of this
+directory. The fiducial IA and bias amplitudes enter the signal, so every version has its own. The
+script writes only there and to the config lines marked `# <- step values: <dotted.key>`. With
+`--provenance`, it requires committed code here and in msfm and records each step in
+`<version>/provenance.yaml`: its command, inputs, outputs and both commits. The submission scripts
+take the scales config of the dataset they run on, `VERSION`.
 
 ## Status
 
-| step | output | in git | status |
-|---|---|---|---|
-| `signal` | `desy6_signal_cls.h5` | yes | done 2026-11-21, 5 grid cosmologies × 20 permutations |
-| `values` | the marked lines of `configs/scales/desy6/8wl,32gc.yaml` | yes | done 2026-11-21 |
+| version | step | output | in git | status |
+|---|---|---|---|---|
+| v1 | `signal` | `v1/desy6_signal_cls.h5` | yes | done 2026-11-21 |
+| v1 | `values` | the marked lines of `configs/scales/desy6/v1/8wl,32gc.yaml` | yes | done 2026-11-21 |
 
 ## Method
 
@@ -61,9 +65,10 @@ Four differences to Y3, all deliberate:
 
 ```bash
 P=/users/athomsen/dlss/repos/.claude/bin/plot.sh   # torch_env on the login node
-M=/users/athomsen/dlss/repos/multiprobe-simulation-forward-model/configs/desy6/v1/default.yaml
+V=v1
+M=/users/athomsen/dlss/repos/multiprobe-simulation-forward-model/configs/desy6/$V/$V.yaml
 SRC=/capstor/store/cscs/userlab/lp184/tomaszk/261109_cosmogridv1_desy6/000_test/cosmogrid/processed/desy6/CosmoGrid/bary
-SC=configs/scales/desy6/8wl,32gc.yaml
+SC=configs/scales/desy6/$V/8wl,32gc.yaml
 
 # signal: anafast of 20 permutations, 5 s; the pool fills the CPUs of the process (48 in a daint login
 # session). taskset narrows the login session's CPU set further
