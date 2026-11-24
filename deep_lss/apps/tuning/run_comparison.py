@@ -175,6 +175,15 @@ def flow_extend_params(inference_dir):
         return []
 
 
+def effective_extension(params, inference_dir):
+    """The extension columns msi actually appended: the recorded extend_params the run's own list lacks.
+
+    msi skips an extension parameter the network was already trained on. Older flows record the
+    configured extension rather than the applied one, so the run's own list is subtracted here.
+    """
+    return [p for p in flow_extend_params(inference_dir) if p not in params]
+
+
 def drop_extension(theta, params, inference_dir, source=""):
     """Reduce theta to the run's own parameter list by dropping the flow's extension columns.
 
@@ -187,7 +196,7 @@ def drop_extension(theta, params, inference_dir, source=""):
     n_base, n_found = len(params), theta.shape[-1]
     if n_found == n_base:
         return theta
-    extend = flow_extend_params(inference_dir)
+    extend = effective_extension(params, inference_dir)
     if n_found != n_base + len(extend):
         raise ValueError(
             f"{source or inference_dir}: {n_found} parameter columns, but the run declares {n_base} "
@@ -359,6 +368,37 @@ def load_run(run_dir, pair=("Om", "S8"), flow_name=None):
         theta_sample = drop_extension(h["theta_sample"][:], params, flow_dir, source=f"{run_dir} theta_sample")
         fom = fom_per_mock(theta_sample, params, pair=pair)
     return real_idx, fom, cfg, provenance
+
+
+def load_pair_truth(run_dir, pair=("Om", "S8"), flow_name=None):
+    """(real_idx, truth) for the FoM pair, truth shaped (n_mocks, 2), from the run's coverage mocks."""
+    params = param_names(load_run_config(run_dir))
+    flow_dir, _ = find_flow_dir(run_dir, flow_name=flow_name)
+    with h5py.File(os.path.join(flow_dir, "mcmc_samples.h5"), "r") as h:
+        real_idx = h["real_idx"][:]
+        theta_true = drop_extension(h["theta_true"][:], params, flow_dir, source=f"{run_dir} theta_true")
+    return real_idx, np.stack([_param_column(theta_true, params, p) for p in pair], axis=-1)
+
+
+def check_same_truth(reference_dir, run_dirs, pair=("Om", "S8"), flow_name=None):
+    """Raise unless every mock a run shares with the reference carries the same true value of the FoM pair.
+
+    A cross-survey pairing is only valid because a shared i_sobol means a shared cosmology. That holds
+    for the CosmoGridV1 grid, but nothing in the index tuple enforces it, so it is checked here.
+    """
+    ref_idx, ref_truth = load_pair_truth(reference_dir, pair=pair, flow_name=flow_name)
+    ref_row = {tuple(row): i for i, row in enumerate(ref_idx.tolist())}
+    for d in run_dirs:
+        idx, truth = load_pair_truth(d, pair=pair, flow_name=flow_name)
+        # the shared mocks only, so --intersect pairings are checked too; gate 2 judges the mock sets
+        shared = [(ref_row[tuple(row)], j) for j, row in enumerate(idx.tolist()) if tuple(row) in ref_row]
+        i_ref, i_run = np.array(shared, dtype=int).reshape(-1, 2).T
+        n_bad = int((~np.isclose(truth[i_run], ref_truth[i_ref], rtol=1e-6, atol=0)).any(axis=1).sum())
+        if n_bad:
+            raise ValueError(
+                f"{d}: {n_bad} mocks have a different true {pair} than the reference at the same real_idx; "
+                f"the surveys do not share cosmologies row by row, so they cannot be paired"
+            )
 
 
 def describe_mock_set(real_idx):
@@ -535,6 +575,7 @@ def compare_runs(
     intersect=False,
     flow_name=None,
     cross_modality=False,
+    cross_survey=False,
 ):
     """Run the full recipe and return (rows, mock_set_info).
 
@@ -561,6 +602,12 @@ def compare_runs(
     conditions that make it comparable (probe, head type, theta standardization, summary dim) are
     still gated, but the VMIM bound's tightness also depends on how easy the SUMMARY DISTRIBUTION is
     for the flow to model, and two modalities are further apart on that axis than two architectures.
+
+    `cross_survey=True` is the same scalpel for the `survey` field: the same pipeline on DES Y3 vs Y6.
+    The surveys share CosmoGrid indices, and a shared i_sobol is the same cosmology but an independent
+    astrophysical draw and noise, so the pairing removes the cosmology-driven spread only. That the
+    FoM pair's truths agree row by row is checked rather than assumed. `vali_total` is dropped, since
+    two surveys' VMIM bounds are computed on different data.
     """
     reference_dir = reference
     ordered = list(run_dirs)
@@ -574,7 +621,8 @@ def compare_runs(
 
     # --- gate 0: comparability -------------------------------------------------------------------
     ref_key = comparability_key(ref_cfg)
-    warnings, crossed = [], []
+    warnings, crossed, crossed_survey = [], [], []
+    permitted = {k for k, on in (("input_modality", cross_modality), ("survey", cross_survey)) if on}
     for d, (_, _, cfg, prov) in loaded.items():
         if prov["n_checkpoints"] > 1:
             warnings.append(checkpoint_warning(label_of[d], prov["steps"], prov["other_steps"]))
@@ -582,11 +630,13 @@ def compare_runs(
         diff = {k: (ref_key[k], key[k]) for k in ref_key if ref_key[k] != key[k]}
         if "input_modality" in diff and cross_modality:
             crossed.append(f"{label_of[d]} ({key['input_modality']} vs reference {ref_key['input_modality']})")
-        # Under cross_modality the input difference IS the measurement, so it is permitted -- and only
-        # it. Every other field stays an error, which is what separates this from strict=False: a
-        # different head or a different holdout split would still make the ratio meaningless, and this
-        # route must not become the way those get waved through.
-        blocking = {k: v for k, v in diff.items() if not (cross_modality and k == "input_modality")}
+        if "survey" in diff and cross_survey:
+            crossed_survey.append(f"{label_of[d]} ({key['survey']} vs reference {ref_key['survey']})")
+        # Under cross_modality / cross_survey that one difference IS the measurement, so it is permitted
+        # -- and only it. Every other field stays an error, which is what separates this from
+        # strict=False: a different head or a different holdout split would still make the ratio
+        # meaningless, and this route must not become the way those get waved through.
+        blocking = {k: v for k, v in diff.items() if k not in permitted}
         if blocking:
             message = f"{label_of[d]} differs from the reference in {blocking}"
             if strict:
@@ -606,6 +656,15 @@ def compare_runs(
         )
     elif crossed:
         warnings.append(f"CROSS-MODALITY comparison, input_modality differs by design: {crossed}")
+
+    if cross_survey and not crossed_survey:
+        warnings.append(
+            f"cross_survey was requested but every run has the same survey ({ref_key['survey']}); this is "
+            f"NOT a cross-survey comparison"
+        )
+    elif crossed_survey:
+        check_same_truth(reference_dir, [d for d in ordered if d != reference_dir], pair=pair, flow_name=flow_name)
+        warnings.append(f"CROSS-SURVEY comparison, survey differs by design: {crossed_survey}")
 
     # --- gate 2: same mocks, and a structure the bootstrap can handle ----------------------------
     if intersect:
@@ -632,7 +691,7 @@ def compare_runs(
             ref_fom, aligned, i_sobol=ref_idx[:, 0] if info["clustered"] else None, n_boot=n_boot, seed=seed
         )
         stats["run"] = label_of[d]
-        stats["vali_total"] = read_vali_total(d, steps=prov["steps"])
+        stats["vali_total"] = None if crossed_survey else read_vali_total(d, steps=prov["steps"])
         stats["is_reference"] = d == reference_dir
         stats["steps"] = prov["steps"]
         rows.append(stats)
@@ -640,6 +699,7 @@ def compare_runs(
     rows.sort(key=lambda r: -r["ratio"])
     info["warnings"] = warnings
     info["cross_modality"] = bool(crossed)
+    info["cross_survey"] = bool(crossed_survey)
     return rows, info
 
 
@@ -698,6 +758,15 @@ def format_table(rows, info, reference_name):
             "bound's tightness also tracks how hard the SUMMARY DISTRIBUTION is for the flow to model, "
             "and two modalities differ more on that axis than two architectures do."
         )
+    if info.get("cross_survey"):
+        lines.append("")
+        lines.append(
+            "CROSS-SURVEY: the ratio above is each survey's constraining power at the SAME cosmology, on "
+            "its own correctly-specified mocks and marginalized over its own nuisance prior (the "
+            "astrophysical draw and noise are independent across surveys). It is a statement about "
+            "SIMULATIONS. The seed floor still applies; vali_total is omitted because the two bounds "
+            "are computed on different data."
+        )
     return "\n".join(lines)
 
 
@@ -726,6 +795,13 @@ def main(argv=None):
         "use this, never --no_strict, for a neural-vs-two-point number",
     )
     parser.add_argument(
+        "--cross_survey",
+        action="store_true",
+        help="permit the same pipeline on two surveys (DES Y3 vs Y6). Allows exactly one gate field "
+        "(survey) to differ, checks that paired mocks share the FoM pair's true values, and drops "
+        "vali_total",
+    )
+    parser.add_argument(
         "--flow_name",
         type=str,
         default=None,
@@ -748,6 +824,7 @@ def main(argv=None):
         intersect=args.intersect,
         flow_name=args.flow_name,
         cross_modality=args.cross_modality,
+        cross_survey=args.cross_survey,
     )
     print(format_table(rows, info, os.path.basename(os.path.normpath(reference_dir))))
     return 0

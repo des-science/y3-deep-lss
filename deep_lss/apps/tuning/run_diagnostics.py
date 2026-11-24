@@ -81,6 +81,12 @@ Typical use::
 
     python -m deep_lss.apps.tuning.run_diagnostics coverage \\
         --root <runs>/v18/default/maps/lensing bench_v7_full bench_v10_mean_std_1x
+
+`widths` is not a fifth question but Q1 taken apart: the paired FoM ratio split into per-parameter
+posterior widths and the (Om, S8) decorrelation, on run_comparison's gates and flags::
+
+    python -m deep_lss.apps.tuning.run_diagnostics widths --cross_survey \\
+        --reference <y3 runs>/maps_gcnn/lensing/v1 <y6 runs>/maps_gcnn/lensing/v1
 """
 
 import argparse
@@ -96,17 +102,24 @@ import numpy as np
 # runs alike. The two finders differ in what they look for and a run can have one without the other:
 # `find_chain_dir` wants the per-mock `chain_*.npy` (Q2/Q4), `find_flow_dir` the coverage stage's
 # `mcmc_samples.h5` (Q1/Q3).
+from msfm.utils.parameters import REPORT_MARGINALIZED
+
 from deep_lss.apps.tuning.run_comparison import (
     _dig,
     _param_column,
     align_to,
     checkpoint_warning,
+    common_mocks,
+    compare_runs,
+    describe_mock_set,
     drop_extension,
+    effective_extension,
     find_chain_dir,
     find_flow_dir,
-    flow_extend_params,
     fom_per_mock,
+    gather_mocks,
     load_run_config,
+    paired_ratio,
     param_names,
     run_labels,
 )
@@ -125,9 +138,10 @@ FIDUCIAL_LABEL = "fiducial_bench"
 # run's trained parameter list. Reading a lambdaCDM chain with the full list shifts everything after w0
 # and mislabels the posterior with nothing raising. Written by msi (`likelihood_base.py:145`): the
 # reduced space is exactly w0 for lambdaCDM and bta for nla, and they COMPOSE
-# (`chain_DESy3_w0gt-1_nla.npy` is 9 columns against 10 params). Mirrors dlss_plot's
-# runs.VARIANT_FIXED -- keep the two in step.
-VARIANT_FIXED = {"lambdaCDM": ("w0",), "nla": ("bta",)}
+# (`chain_DESy3_w0gt-1_nla.npy` is 9 columns against 10 params). The reference-prior chains (`refpriors`)
+# fix the baryons whenever the flow is conditioned on them. Mirrors dlss_plot's runs.VARIANT_FIXED and
+# msi's tensions.VARIANT_FIXED -- keep the three in step.
+VARIANT_FIXED = {"lambdaCDM": ("w0",), "nla": ("bta",), "refpriors": ("bary_Mc", "bary_nu")}
 
 # Qualifiers that change the SAMPLED SPACE OR THE PRIOR rather than the data vector: lambdaCDM fixes
 # w0, nla fixes bta, w0gt-1 truncates the w0 prior (`likelihood_base.py:88-101`). All three tighten
@@ -648,7 +662,7 @@ def coverage(run_dirs, flow_name=None, n_alpha=100, n_boot=4000, seed=0, referen
             # for exactly the parameters these tables report. (The HPD leg below reads `log_prob_*`,
             # which is a JOINT density and cannot be marginalized by dropping columns: its coverage
             # remains a statement about the full space the flow sampled.)
-            extend = flow_extend_params(inference_dir)
+            extend = effective_extension(params, inference_dir)
             if n_params != len(params) + len(extend):
                 raise ValueError(
                     f"{inference_dir}/mcmc_samples.h5: theta_sample has {n_params} parameter columns "
@@ -696,7 +710,8 @@ def coverage(run_dirs, flow_name=None, n_alpha=100, n_boot=4000, seed=0, referen
     # Only parameters every run actually has can be tabulated side by side; the rest are named, not
     # hidden. Normally a no-op because Q3 is read per probe, but the probes genuinely differ (10
     # parameters on combined, 6 on lensing, 7 on clustering) and a cross-probe invocation is legal.
-    per_run = [set(r["sbc"]) for r in runs]
+    # The parameters reports marginalize (msfm parameters.REPORT_MARGINALIZED) are left out as well.
+    per_run = [set(r["sbc"]) - set(REPORT_MARGINALIZED) for r in runs]
     common = [p for p in runs[0]["params"] if all(p in s for s in per_run)] if runs else []
     dropped = sorted(set.union(*per_run) - set(common)) if per_run else []
     if not common:
@@ -993,8 +1008,11 @@ def des_fom(
     }
 
 
-def format_des_fom(result):
-    """Render the Q4 table, with the caveat attached to the numbers rather than left to the reader."""
+def format_des_fom(result, blind=False):
+    """Render the Q4 table, with the caveat attached to the numbers rather than left to the reader.
+
+    `blind` drops the posterior-mean columns, so a blinded survey's data posterior shows widths only.
+    """
     runs, pair = result["runs"], result["pair"]
     width = max(16, max(len(r["label"]) for r in runs) + 2)
     lines = [
@@ -1031,7 +1049,9 @@ def format_des_fom(result):
         header = f"{'run':<{width}}{'steps':>9}{'DES/fid':>10}{'FoM':>12}{'FoM_fid':>12}"
         if base is not None:
             header += f"{'/ref':>9}"
-        header += f"{'sig_' + pair[0]:>12}{'sig_' + pair[1]:>12}{'mean_' + pair[0]:>12}{'mean_' + pair[1]:>12}"
+        header += f"{'sig_' + pair[0]:>12}{'sig_' + pair[1]:>12}"
+        if not blind:
+            header += f"{'mean_' + pair[0]:>12}{'mean_' + pair[1]:>12}"
         lines.append(header)
         lines.append("-" * len(header))
         for r in present:
@@ -1042,7 +1062,9 @@ def format_des_fom(result):
             row = f"{r['label']:<{width}}{r['steps']:>9d}{ratio}{v['fom']:>12.1f}{fid_fom}"
             if base is not None:
                 row += f"{v['fom'] / base:>9.3f}"
-            row += f"{v['sigma'][0]:>12.4f}{v['sigma'][1]:>12.4f}{v['mean'][0]:>12.4f}{v['mean'][1]:>12.4f}"
+            row += f"{v['sigma'][0]:>12.4f}{v['sigma'][1]:>12.4f}"
+            if not blind:
+                row += f"{v['mean'][0]:>12.4f}{v['mean'][1]:>12.4f}"
             if r["label"] == result["reference"]:
                 row += "  <- reference"
             lines.append(row)
@@ -1054,6 +1076,130 @@ def format_des_fom(result):
         "The '/ref' column, if shown, is a raw across-run FoM ratio: NOT the paired per-mock median",
         "ratio that run_comparison reports, and it has no bootstrap CI and no seed floor. Do not read",
         "the two side by side as if they were the same quantity.",
+    ]
+    return "\n".join(lines)
+
+
+def _load_widths(run_dir, names, pair, flow_name=None):
+    """(real_idx, sigma, rho) per coverage mock: posterior std of each of `names`, and corr of `pair`."""
+    import h5py
+
+    params = param_names(load_run_config(run_dir))
+    flow_dir, _ = find_flow_dir(run_dir, flow_name=flow_name)
+    with h5py.File(os.path.join(flow_dir, "mcmc_samples.h5"), "r") as h:
+        real_idx = h["real_idx"][:]
+        theta = drop_extension(h["theta_sample"][:], params, flow_dir, source=f"{run_dir} theta_sample")
+    sigma = np.stack([_param_column(theta, params, n).std(0, ddof=1) for n in names], axis=-1)
+    x, y = (_param_column(theta, params, p) for p in pair)
+    xc, yc = x - x.mean(0), y - y.mean(0)
+    rho = (xc * yc).sum(0) / np.sqrt((xc * xc).sum(0) * (yc * yc).sum(0))
+    return real_idx, sigma, rho
+
+
+def posterior_widths(
+    run_dirs,
+    reference,
+    pair=("Om", "S8"),
+    flow_name=None,
+    intersect=False,
+    cross_modality=False,
+    cross_survey=False,
+    n_boot=4000,
+    seed=0,
+):
+    """Q1 decomposed: which parameters' posterior widths make up the paired FoM ratio.
+
+    The FoM row comes from `compare_runs`, so the gates, the flags and the number are the ranking
+    path's. Per mock FoM = 1 / (sigma_1 sigma_2 sqrt(1 - rho^2)), so the paired ratio factors into the
+    two marginal width ratios and a decorrelation factor sqrt((1 - rho_ref^2) / (1 - rho_run^2)): a
+    degeneracy that turns can hold the FoM down while one marginal tightens. Every other parameter's
+    width ratio is listed too. Ratios are reference / run, so > 1 means the run is tighter. Only the
+    parameters every run was trained on are shown.
+    """
+    ordered = list(run_dirs)
+    if reference not in ordered:
+        ordered = [reference] + ordered
+    fom_rows, info = compare_runs(
+        ordered,
+        reference,
+        pair=pair,
+        n_boot=n_boot,
+        seed=seed,
+        intersect=intersect,
+        flow_name=flow_name,
+        cross_modality=cross_modality,
+        cross_survey=cross_survey,
+    )
+    fom_of = {r["run"]: r for r in fom_rows}
+    label_of = dict(zip(ordered, run_labels(ordered)))
+
+    common = [p for p in param_names(load_run_config(reference)) if p not in pair]
+    for d in ordered:
+        common = [p for p in common if p in param_names(load_run_config(d))]
+    names = list(pair) + common
+    loaded = {d: _load_widths(d, names, pair, flow_name=flow_name) for d in ordered}
+
+    ref_idx = common_mocks([idx for idx, _, _ in loaded.values()]) if intersect else loaded[reference][0]
+    clustered = describe_mock_set(ref_idx)["clustered"]
+
+    def aligned(d):
+        idx, sigma, rho = loaded[d]
+        if intersect:
+            return gather_mocks(idx, sigma, ref_idx), gather_mocks(idx, rho, ref_idx)
+        order = align_to(ref_idx, idx)
+        out_s, out_r = np.empty_like(sigma), np.empty_like(rho)
+        out_s[order], out_r[order] = sigma, rho
+        return out_s, out_r
+
+    ref_sigma, ref_rho = aligned(reference)
+    i_sobol = ref_idx[:, 0] if clustered else None
+    runs = []
+    for d in ordered:
+        if d == reference:
+            continue
+        sigma, rho = aligned(d)
+        rows = [(f"FoM({pair[0]},{pair[1]})", None, None, fom_of[label_of[d]])]
+        for j, n in enumerate(names):
+            stats = paired_ratio(1 / ref_sigma[:, j], 1 / sigma[:, j], i_sobol=i_sobol, n_boot=n_boot, seed=seed)
+            rows.append((f"sigma {n}", np.median(ref_sigma[:, j]), np.median(sigma[:, j]), stats))
+            if j == 1:
+                decorr = paired_ratio(
+                    (1 - ref_rho**2) ** -0.5, (1 - rho**2) ** -0.5, i_sobol=i_sobol, n_boot=n_boot, seed=seed
+                )
+                rows.append((f"decorr {pair[0]}-{pair[1]}", np.median(ref_rho), np.median(rho), decorr))
+        runs.append({"label": label_of[d], "rows": rows})
+    return {
+        "reference": label_of[reference],
+        "pair": pair,
+        "n_mocks": len(ref_idx),
+        "dropped": [p for p in param_names(load_run_config(reference)) if p not in names],
+        "runs": runs,
+        "warnings": info["warnings"],
+    }
+
+
+def format_widths(result):
+    """Render the width decomposition, one block per run against the reference."""
+    pair = result["pair"]
+    lines = [f"posterior widths on {result['n_mocks']} paired coverage mocks; ratio = reference / run, > 1 = tighter"]
+    for w in result["warnings"]:
+        lines.append(f"  ! {w}")
+    if result["dropped"]:
+        lines.append(f"  ! not trained by every run, left out: {result['dropped']}")
+    for r in result["runs"]:
+        lines += ["", f"{r['label']}  against  {result['reference']}"]
+        header = f"{'':<18}{'ref':>10}{'run':>10}{'ratio':>9}{'95% CI':>18}{'won':>7}"
+        lines += [header, "-" * len(header)]
+        for name, ref_v, run_v, s in r["rows"]:
+            vals = f"{'':>20}" if ref_v is None else f"{ref_v:>10.4f}{run_v:>10.4f}"
+            ci = f"[{s['ci_low']:.3f}, {s['ci_high']:.3f}]"
+            won = "" if name.startswith("decorr") else f"{s['win_frac']:>7.2f}"
+            lines.append(f"{name:<18}{vals}{s['ratio']:>9.3f}{ci:>18}{won}")
+    lines += [
+        "",
+        f"ref/run columns: median per-mock posterior std; on the decorr row, median rho({pair[0]}, {pair[1]}).",
+        f"Per mock, FoM ratio = sigma {pair[0]} ratio x sigma {pair[1]} ratio x decorr; the medians only",
+        "approximately multiply. Only the FoM row has a measured seed floor (run_comparison).",
     ]
     return "\n".join(lines)
 
@@ -1070,7 +1216,7 @@ def main(argv=None):
     # take --pair and --fiducial: `coverage` is per-parameter over the run's whole parameter list and
     # references the truth, not a fiducial mock, so offering it either would imply a knob that is not
     # there.
-    for name in ("robustness", "des-fom", "coverage"):
+    for name in ("robustness", "des-fom", "coverage", "widths"):
         sub = subparsers.add_parser(name)
         sub.add_argument("runs", nargs="+", help="run directory names under --root (or full paths)")
         sub.add_argument("--root", type=str, default="", help="common parent directory of the runs")
@@ -1091,6 +1237,8 @@ def main(argv=None):
             )
             continue
         sub.add_argument("--pair", type=str, nargs=2, default=["Om", "S8"], help="parameter pair")
+        if name == "widths":
+            continue
         sub.add_argument(
             "--fiducial", type=str, default=FIDUCIAL_LABEL, help="label of the correctly-specified baseline mock"
         )
@@ -1115,6 +1263,15 @@ def main(argv=None):
         "bta, both handled (default: DESy3,DESy3_w0gt-1,DESy3_lambdaCDM,DESy3_w0gt-1_nla)",
     )
     des.add_argument("--reference", type=str, default=None, help="run whose FoM the others are shown against")
+    des.add_argument(
+        "--blind", action="store_true", help="omit the posterior-mean columns (widths and FoM only), for blinded data"
+    )
+
+    widths = subparsers.choices["widths"]
+    widths.add_argument("--reference", type=str, required=True, help="run the width ratios are taken against")
+    widths.add_argument("--intersect", action="store_true", help="pair on the runs' common mocks (maps vs Cls)")
+    widths.add_argument("--cross_modality", action="store_true", help="as in run_comparison")
+    widths.add_argument("--cross_survey", action="store_true", help="as in run_comparison")
 
     args = parser.parse_args(argv)
     dirs = _resolve(args.root, args.runs)
@@ -1127,6 +1284,18 @@ def main(argv=None):
                 dirs = [resolved] + dirs
             reference = run_labels(dirs)[dirs.index(resolved)]
         print(format_coverage(coverage(dirs, flow_name=args.flow_name, reference=reference)))
+    elif args.command == "widths":
+        reference = _resolve(args.root, [args.reference])[0]
+        result = posterior_widths(
+            dirs,
+            reference,
+            pair=tuple(args.pair),
+            flow_name=args.flow_name,
+            intersect=args.intersect,
+            cross_modality=args.cross_modality,
+            cross_survey=args.cross_survey,
+        )
+        print(format_widths(result))
     elif args.command == "robustness":
         result = robustness(dirs, pair=tuple(args.pair), fiducial_label=args.fiducial, flow_name=args.flow_name)
         print(format_robustness(result, full=args.full))
@@ -1142,7 +1311,7 @@ def main(argv=None):
             fiducial_label=args.fiducial,
             flow_name=args.flow_name,
         )
-        print(format_des_fom(result))
+        print(format_des_fom(result, blind=args.blind))
     return 0
 
 
