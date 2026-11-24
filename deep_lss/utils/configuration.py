@@ -79,9 +79,8 @@ def check_scale_cuts(msfm_conf, dlss_conf):
 
     ``scale_cuts.survey`` (``DESy3`` when absent) must equal msfm's ``survey.name``, and every per-bin list of a
     probe block needs one entry per ``z_bins`` label of that probe's sample. A short list would otherwise fall back to
-    defaults without notice (``get_cls_bounds_per_pair``). ``theta_fwhm_base_single_probe`` needs a
-    ``theta_fwhm_base``. A stated base kernel (``base_repetitions``) needs ``theta_fwhm_base`` and ``base_nside`` and
-    replaces ``theta_fwhm_base_single_probe``.
+    defaults without notice (``get_cls_bounds_per_pair``). A stated base kernel (``base_repetitions``) needs
+    ``theta_fwhm_base`` and ``base_nside``.
 
     Args:
         msfm_conf (dict): Multiprobe-simulation-forward-model config.
@@ -106,18 +105,10 @@ def check_scale_cuts(msfm_conf, dlss_conf):
             if len(value) != n_z:
                 raise ValueError(f"scale_cuts.{probe}.{key} has {len(value)} entries for the {n_z} {sample} bins")
         probe_conf = scale_cuts.get(probe, {})
-        if probe_conf.get("theta_fwhm_base_single_probe", False) and probe_conf.get("theta_fwhm_base") is None:
-            raise ValueError(
-                f"scale_cuts.{probe}.theta_fwhm_base_single_probe needs scale_cuts.{probe}.theta_fwhm_base"
-            )
         if "base_repetitions" in probe_conf:
             for key in ("theta_fwhm_base", "base_nside"):
                 if probe_conf.get(key) is None:
                     raise ValueError(f"scale_cuts.{probe}.base_repetitions needs scale_cuts.{probe}.{key}")
-            if "theta_fwhm_base_single_probe" in probe_conf:
-                raise ValueError(
-                    f"scale_cuts.{probe}: base_repetitions applies in every run, drop the single-probe key"
-                )
             if not all(isinstance(r, int) and r > 0 for r in probe_conf["base_repetitions"]):
                 raise ValueError(f"scale_cuts.{probe}.base_repetitions must be positive integers")
 
@@ -397,7 +388,7 @@ def _get_split_probe_specs(
 def _stated_base_kernel(dlss_conf, probe, nside):
     """The base kernel a scales block states (``theta_fwhm_base`` repeated ``base_repetitions`` times per bin), as
     HealpySmoothing kwargs, for every run that smooths the probe. None for a block without one (DES Y3, DES Y6 v1),
-    whose repetitions HealpySmoothing derives from theta_fwhm."""
+    whose repetitions HealpySmoothing derives from theta_fwhm and, in the split path, theta_fwhm_base."""
     scale_conf = dlss_conf.get("scale_cuts", {}).get(probe, {})
     if "base_repetitions" not in scale_conf:
         return None
@@ -410,21 +401,6 @@ def _stated_base_kernel(dlss_conf, probe, nside):
         "fwhm": float(scale_conf["theta_fwhm_base"]),
         "per_channel_repetitions": [int(r) for r in scale_conf["base_repetitions"]],
     }
-
-
-def _single_probe_fwhm_base(dlss_conf, probe_nsides, with_cross):
-    """``theta_fwhm_base`` for a run that smooths one probe's channels only, if that probe's scales block sets
-    ``theta_fwhm_base_single_probe: True``. Otherwise None, and the kernel's base is min(fwhm) (as for DES Y3)."""
-    if with_cross or len(probe_nsides) != 1:
-        return None
-    (probe,) = probe_nsides
-    scale_conf = dlss_conf.get("scale_cuts", {}).get(probe, {})
-    if not scale_conf.get("theta_fwhm_base_single_probe", False):
-        return None
-    if scale_conf.get("theta_fwhm_base") is None:
-        raise ValueError(f"scale_cuts.{probe}.theta_fwhm_base_single_probe needs scale_cuts.{probe}.theta_fwhm_base")
-    LOGGER.info(f"Single-probe smoothing for {probe}: fwhm_base={scale_conf['theta_fwhm_base']}")
-    return scale_conf["theta_fwhm_base"]
 
 
 def get_smoothing_kwargs(loss_function, msfm_conf, dlss_conf, net_conf, dir_base=None, mode="training"):
@@ -498,7 +474,6 @@ def get_smoothing_kwargs(loss_function, msfm_conf, dlss_conf, net_conf, dir_base
         mask_smooth = mask
 
     # outside the try below, whose KeyError fallback would drop the smoothing layer silently
-    fwhm_base = _single_probe_fwhm_base(dlss_conf, probe_nsides, with_cross)
     scale_cuts = dlss_conf.get("scale_cuts", {})
     stated_probes = [p for p in PROBE_SAMPLES if p in probe_nsides and "base_repetitions" in scale_cuts.get(p, {})]
     if stated_probes and (with_cross or len(probe_nsides) != 1):
@@ -575,8 +550,6 @@ def get_smoothing_kwargs(loss_function, msfm_conf, dlss_conf, net_conf, dir_base
             "max_batch_size": effective_local_batch_size,
             "white_noise_sigma": white_noise_sigma,
         }
-        if fwhm_base is not None:
-            smoothing_kwargs["fwhm_base"] = fwhm_base
         if stated is not None:
             smoothing_kwargs.update(stated)
 

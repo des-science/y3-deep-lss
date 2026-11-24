@@ -63,8 +63,9 @@ Three differences to Y3, all deliberate:
   +18.8%. Here each probe has its own base kernel, the same in its single-probe and combined
   runs, so the two differ only in what the network sees.
 
-v1 still followed Y3's nominal rule, for clustering only (35.5′); its configs keep
-`theta_fwhm_base_single_probe: True` to use that base in the clustering-only runs too.
+v1 still followed Y3's nominal rule, for clustering only (35.5′). Its clustering-only runs used that
+base too, through a key that has since been removed, so the v1 scales config now smooths them with
+the smallest beam as the base, and its sha256 no longer matches `v1/provenance.yaml`.
 
 ## Running
 

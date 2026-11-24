@@ -29,8 +29,6 @@ scale_cuts:
     # base with the smallest overshoot of the effective FWHM at no more repetitions than min(theta_fwhm) / sqrt(2)
     # would take. The combined runs (per-probe smooth_nside) always use it
     theta_fwhm_base: 35.5 # <- step values: scale_cuts.clustering.theta_fwhm_base
-    # the clustering-only runs too; without this key (as for DES Y3) their base is min(theta_fwhm), +29.9% on MagLim 5
-    theta_fwhm_base_single_probe: True
     white_noise_sigma: [0.7654, 0.36561, 0.35196, 0.27219, 0.20663] # <- step values: scale_cuts.clustering.white_noise_sigma
     l_max: [136, 256, 307, 346, 377] # <- step values: scale_cuts.clustering.l_max
     l_min: [30, 30, 30, 30, 30]

@@ -150,8 +150,8 @@ the steps and their checks. Since v2, each probe block states its smoothing kern
 (`theta_fwhm_base`, `base_repetitions`, `base_nside`), and every run that smooths the probe applies
 it as stated, so single-probe and combined runs smooth a probe identically and no bin less than its
 beam. A block without `base_repetitions` (DES Y3, DES Y6 v1) keeps the old rule: the repetitions
-follow from the nominal base, which is the smallest beam unless `theta_fwhm_base` sets it (combined
-runs, and v1's clustering-only runs through `theta_fwhm_base_single_probe`).
+follow from the nominal base, which is the smallest beam unless `theta_fwhm_base` sets it for the
+combined runs.
 
 On the cluster, `VERSION=desy6/v2` selects the DES Y6 msfm config `configs/desy6/v2/v2.yaml`, and
 with it the `desy6/` probes configs, the `desy6/v2/` scales configs and the
