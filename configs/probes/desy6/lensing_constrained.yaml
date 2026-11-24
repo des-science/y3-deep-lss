@@ -1,0 +1,5 @@
+# The default target without the labels the reports marginalize (msfm parameters.REPORT_MARGINALIZED).
+extends: probes/desy6/lensing.yaml
+dset:
+  training:
+    params: [Om, s8, w0, ia]
