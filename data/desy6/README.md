@@ -17,6 +17,8 @@ take the scales config of the dataset they run on, `VERSION`.
 |---|---|---|---|---|
 | v1 | `signal` | `v1/desy6_signal_cls.h5` | yes | done 2026-11-21 |
 | v1 | `values` | the marked lines of `configs/scales/desy6/v1/8wl,32gc.yaml` | yes | done 2026-11-21 |
+| v2 | `signal` | `v2/desy6_signal_cls.h5` | yes | done 2026-11-24, provenance not yet recorded |
+| v2 | `values` | the marked lines of `configs/scales/desy6/v2/8wl,32gc.yaml` | yes | done 2026-11-24, provenance not yet recorded |
 
 ## Method
 
@@ -111,9 +113,9 @@ nothing.
   - no base kernel realizes more than its nominal FWHM, which the search for the base relies on;
   - the rewritten config differs from the old one only in the marked values.
 
-## Results (2026-11-22)
+## Results
 
-The scale cuts, next to Y3's `configs/scales/8wl,32gc.yaml`:
+v1 (2026-11-22), next to Y3's `configs/scales/8wl,32gc.yaml`:
 
 | | bins | mean z | `theta_fwhm` (′) | `l_max` | Y3 `theta_fwhm` (′) |
 |---|---|---|---|---|---|
@@ -128,3 +130,20 @@ The scale cuts, next to Y3's `configs/scales/8wl,32gc.yaml`:
   nearest the fiducial in prior-normalized distance, `cosmo_132332` (S8 0.72 against 0.78), gives
   0.90, 0.87, 0.88, 0.88 of the fiducial lensing noise and 0.97, 0.88, 0.95, 0.93, 0.96 of the
   clustering noise.
+
+v2 (2026-11-24) has v1's beams and `l_max`, which depend only on the cosmology and the n(z). Its base
+kernels follow the realized width, for both probes:
+
+| | `base_nside` | `theta_fwhm_base` (′) | realized (′) | `base_repetitions` | effective FWHM (′) | overshoot |
+|---|---|---|---|---|---|---|
+| lensing | 512 | 8.3 | 7.69 | 10, 7, 3, 2 | 24.31, 20.34, 13.31, 10.87 | +0.0 to +5.9% |
+| clustering | 256 | 36.1 | 35.60 | 13, 4, 3, 2, 2 | 128.36, 71.20, 61.66, 50.35, 50.35 | +0.2 to +9.2% |
+
+v1's realized overshoots were -2.7 to +8.5% (lensing, base 10.4′) and -1.9 to +6.8% (clustering,
+35.5′), so metacal 4 and MagLim 5 were smoothed slightly less than their beams. Over the footprint,
+the realized width of one kernel varies by about 1% between pixels (1st to 99th percentile, lensing),
+and the repetitions use its mean.
+
+v2's fiducial IA (A_IA 0.13, η 2.0) and bias (1.54, 1.85, 1.76, 1.93, 1.90) change the
+signal, so its noise is 1.11, 1.03, 1.01, 1.01 × v1's in lensing and 1.14, 1.23, 1.12, 1.19, 1.14 ×
+v1's in clustering, the latter in proportion to the bias.
