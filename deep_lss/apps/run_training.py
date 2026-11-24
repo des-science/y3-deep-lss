@@ -547,48 +547,16 @@ def training(args=None):
         net_conf, dlss_conf, msfm_conf
     )
 
-    # the grid tfrecords store bary_Mc raw (CosmoGrid convention, ~1e12 - 1e15) while the priors,
-    # fiducials and inference all use log10(Mc) -- convert the label column(s) at load time. This
-    # is the tf.data mirror of parameters.raw_to_prior_units (used on the numpy label gathers in
-    # deep_lss.utils.cls_preprocessing and msi.utils.preprocessing); both are driven by the shared
-    # parameters.LOG10_PARAMS list, so theta reaches the loss in prior units as the theta
-    # standardization below assumes.
-    def _log10_label_columns(pipeline_params):
-        idxs = [pipeline_params.index(p) for p in parameters.LOG10_PARAMS if p in pipeline_params]
-        if not idxs:
-            return None
-
-        def _convert(*batch):
-            *rest, cosmo, index = batch
-            log10 = tf.math.log(tf.constant(10.0, cosmo.dtype))
-            for i in idxs:
-                col = cosmo[:, i]
-                assert_raw = tf.debugging.assert_greater(
-                    tf.reduce_min(col),
-                    tf.constant(parameters.LOG10_RAW_MIN, cosmo.dtype),
-                    message="expected raw bary_Mc labels, got log10(Mc)?",
-                )
-                with tf.control_dependencies([assert_raw]):
-                    log_col = tf.math.log(col[:, None]) / log10
-                cosmo = tf.concat([cosmo[:, :i], log_col, cosmo[:, i + 1 :]], axis=1)
-            return (*rest, cosmo, index)
-
-        return _convert
-
-    # every train/vali/adapt dataset uses the same in-network nside downsampling; specify it once
+    # every train/vali/adapt dataset uses the same in-network nside downsampling; specify it once. The grid
+    # pipeline returns bary_Mc in log10, like the priors that standardize theta below
     def build_dset(pipeline, tfr_pattern, ds_kwargs, input_context=None):
-        dset = pipeline.get_dset(
+        return pipeline.get_dset(
             tfr_pattern=tfr_pattern,
             **ds_kwargs,
             input_context=input_context,
             downsample_nside=smooth_nside if parent_output_idx is not None else None,
             parent_output_idx=parent_output_idx,
         )
-        if isinstance(pipeline, GridPipeline):
-            convert = _log10_label_columns(pipeline.params)
-            if convert is not None:
-                dset = dset.map(convert)
-        return dset
 
     # constants: deep_lss
     params = dlss_conf["dset"]["training"]["params"]
