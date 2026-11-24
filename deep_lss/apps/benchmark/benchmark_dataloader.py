@@ -82,9 +82,9 @@ class RSSSampler(threading.Thread):
 def build_dataset(args, params_dset):
     """Reconstruct the exact training grid pipeline for one parameter choice."""
     net_conf = config_compose.load_composed(args.net_config)
-    dlss_conf = configuration.read_split_configs(args.probes_config, args.scales_config)
-    data_conf = input_output.read_yaml(args.data_config)
     msfm_conf = files.load_config(args.msfm_config)
+    dlss_conf = configuration.read_split_configs(args.probes_config, args.scales_config, msfm_conf=msfm_conf)
+    data_conf = input_output.read_yaml(args.data_config)
 
     dset_common = dlss_conf["dset"]["common"]
     with_lensing = dset_common["with_lensing"]

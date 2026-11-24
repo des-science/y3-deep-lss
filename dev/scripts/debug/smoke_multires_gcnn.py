@@ -33,6 +33,7 @@ msfm_conf = input_output.read_yaml(f"{REPOS}/multiprobe-simulation-forward-model
 dlss_conf = configuration.read_split_configs(
     f"{REPOS}/y3-deep-lss/configs/probes/combined_nla.yaml",
     f"{REPOS}/y3-deep-lss/configs/scales/8wl,32gc.yaml",
+    msfm_conf=msfm_conf,
 )
 net_conf = input_output.read_yaml(f"{REPOS}/y3-deep-lss/configs/deepsphere/combined/maps+cls.yaml")
 
@@ -54,9 +55,7 @@ n_output = 12  # arbitrary summary dim for the smoke test
 effective_local_batch_size = net_conf["dset"]["training"]["grid"]["local_batch_size"]
 
 stage("1. smoothing spec")
-smoothing_kwargs = configuration.get_smoothing_kwargs(
-    "mutual_info", msfm_conf, dlss_conf, net_conf, dir_base=OUT
-)
+smoothing_kwargs = configuration.get_smoothing_kwargs("mutual_info", msfm_conf, dlss_conf, net_conf, dir_base=OUT)
 assert "split_probes" in smoothing_kwargs, "expected a split_probes spec for the combined multi-res config"
 specs = smoothing_kwargs["split_probes"]
 by_probe = {s["probe"]: s for s in specs}
@@ -127,8 +126,9 @@ def build_multires_composite():
     )
     net = ResNetMapsPlusCLSNetwork(
         conv_layers=None,
-        cls_embedding_layers=get_cls_embedding_layers(cls_conf["embedding_layers"],
-                                                      dropout_rate=cls_conf["embedding_dropout_rate"]),
+        cls_embedding_layers=get_cls_embedding_layers(
+            cls_conf["embedding_layers"], dropout_rate=cls_conf["embedding_dropout_rate"]
+        ),
         regression_head_layers=spec.get_head_layers_no_flatten(),
         n_side=None,
         tfr_n_side=n_side,
@@ -217,13 +217,16 @@ smoothing_kwargs_sr = configuration.get_smoothing_kwargs(
 )
 assert "split_probes" not in smoothing_kwargs_sr
 spec_sr = NETWORKS["resnet"](
-    out_features=n_output, smoothing_kwargs=smoothing_kwargs_sr, input_norm=True,
+    out_features=n_output,
+    smoothing_kwargs=smoothing_kwargs_sr,
+    input_norm=True,
     **net_conf_sr["network"]["kwargs"],
 )
 network_sr = ResNetMapsPlusCLSNetwork(
     conv_layers=spec_sr.get_conv_layers(),
-    cls_embedding_layers=get_cls_embedding_layers(cls_conf["embedding_layers"],
-                                                  dropout_rate=cls_conf["embedding_dropout_rate"]),
+    cls_embedding_layers=get_cls_embedding_layers(
+        cls_conf["embedding_layers"], dropout_rate=cls_conf["embedding_dropout_rate"]
+    ),
     regression_head_layers=spec_sr.get_head_layers_no_flatten(),
     n_side=smooth_nside,
     tfr_n_side=n_side,

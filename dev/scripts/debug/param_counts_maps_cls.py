@@ -42,6 +42,7 @@ for probe, probes_cfg in CASES:
     dlss_conf = configuration.read_split_configs(
         f"{REPOS}/y3-deep-lss/configs/probes/{probes_cfg}.yaml",
         f"{REPOS}/y3-deep-lss/configs/scales/8wl,32gc.yaml",
+        msfm_conf=msfm_conf,
     )
     net_conf = input_output.read_yaml(f"{REPOS}/y3-deep-lss/configs/deepsphere/{probe}/maps+cls.yaml")
 
@@ -57,8 +58,10 @@ for probe, probes_cfg in CASES:
     smooth_nside, smooth_indices, _ = configuration.resolve_smooth_nside(net_conf, dlss_conf, msfm_conf)
     is_multires = "split_probes" in smoothing_kwargs
     input_norm = bool(net_conf["network"].get("input_norm", False))
-    print(f"n_output={n_output}, n_z_bins={n_z_bins}, nside={smooth_nside}, "
-          f"n_pix={len(smooth_indices)}, multires={is_multires}")
+    print(
+        f"n_output={n_output}, n_z_bins={n_z_bins}, nside={smooth_nside}, "
+        f"n_pix={len(smooth_indices)}, multires={is_multires}"
+    )
 
     net_spec = NETWORKS["resnet"](
         out_features=n_output,
@@ -98,9 +101,11 @@ for probe, probes_cfg in CASES:
         l_min_per_pair=l_min_per_pair,
         l_max_per_pair=l_max_per_pair,
         cls_transform=cls_conf["transform"],
-        map_feature_dim=MAP_FEATURE_DIM_OVERRIDE
-        if MAP_FEATURE_DIM_OVERRIDE is not None
-        else net_conf["network"].get("map_feature_dim", None),
+        map_feature_dim=(
+            MAP_FEATURE_DIM_OVERRIDE
+            if MAP_FEATURE_DIM_OVERRIDE is not None
+            else net_conf["network"].get("map_feature_dim", None)
+        ),
         map_encoder=map_encoder,
     )
     if network.gcnn is not None:

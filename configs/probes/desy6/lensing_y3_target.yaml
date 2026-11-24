@@ -1,0 +1,6 @@
+# Lensing with the network target of the DES Y3 runs: Om, s8, w0 and the IA labels, without ns, Ob, H0
+# and the baryons that the default target (lensing.yaml) adds. A control for the default target.
+extends: probes/desy6/lensing.yaml
+dset:
+  training:
+    params: [Om, s8, w0, ia]

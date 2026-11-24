@@ -37,6 +37,7 @@ msfm_conf = input_output.read_yaml(f"{REPOS}/multiprobe-simulation-forward-model
 dlss_conf = configuration.read_split_configs(
     f"{REPOS}/y3-deep-lss/configs/probes/combined_nla.yaml",
     f"{REPOS}/y3-deep-lss/configs/scales/8wl,32gc.yaml",
+    msfm_conf=msfm_conf,
 )
 net_conf = input_output.read_yaml(f"{REPOS}/y3-deep-lss/configs/transformer/combined/maps+cls.yaml")
 
@@ -45,9 +46,7 @@ n_z_bins = len(msfm_conf["survey"]["metacal"]["z_bins"]) + len(msfm_conf["survey
 n_output = 12  # arbitrary summary dim for the smoke test
 
 stage("1. smoothing spec")
-smoothing_kwargs = configuration.get_smoothing_kwargs(
-    "mutual_info", msfm_conf, dlss_conf, net_conf, dir_base=OUT
-)
+smoothing_kwargs = configuration.get_smoothing_kwargs("mutual_info", msfm_conf, dlss_conf, net_conf, dir_base=OUT)
 assert "split_probes" in smoothing_kwargs, "expected a split_probes spec for the combined multi-res config"
 by_probe = {s["probe"]: s for s in smoothing_kwargs["split_probes"]}
 assert by_probe["lensing"]["smoothing_kwargs"]["nside"] == 512

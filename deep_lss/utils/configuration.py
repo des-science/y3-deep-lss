@@ -2,7 +2,9 @@ import os
 import numpy as np
 import yaml
 
-from msfm.utils import input_output, logger, files
+from msfm.utils import input_output, logger, files, parameters
+
+from deep_lss.utils import config_compose
 
 LOGGER = logger.get_logger(__file__)
 
@@ -13,7 +15,7 @@ _LEGACY_LOSS_KEYS = ("loss_function", "delta_loss", "likelihood_loss", "mutual_i
 PROBE_SAMPLES = {"lensing": "metacal", "clustering": "maglim"}
 
 
-def read_split_configs(probes_config, scales_config=None):
+def read_split_configs(probes_config, scales_config=None, *, msfm_conf):
     """Build the dlss_conf dict from the orthogonal split configs.
 
     The split configs define disjoint top-level namespaces: probes provides ``dset.*`` and
@@ -21,18 +23,55 @@ def read_split_configs(probes_config, scales_config=None):
     ``dict.update`` is the correct merge. The loss config is kept separate (loaded as its own
     ``loss_conf``) in both apps and is intentionally not merged here.
 
+    The probes config may ``extends:`` a base (deep_lss.utils.config_compose), and its network target
+    is resolved against the msfm config by resolve_params.
+
     Args:
         probes_config (str): path to the probes config (required).
         scales_config (str, optional): path to the scales config. Merged in if given.
+        msfm_conf (dict): the msfm config of the dataset.
 
     Returns:
         dict: the merged dlss_conf (``dset`` + ``scale_cuts``).
     """
-    dlss_conf = input_output.read_yaml(probes_config)
+    dlss_conf = config_compose.load_composed(probes_config)
     if scales_config:
         dlss_conf.update(input_output.read_yaml(scales_config))
+    resolve_params(dlss_conf, msfm_conf)
     LOGGER.info("Loaded the split configs")
     return dlss_conf
+
+
+def resolve_params(dlss_conf, msfm_conf):
+    """Write the network target into dlss_conf as an explicit list of labels, in place.
+
+    ``dset.training.params`` is optional. Absent, it defaults to the labels the probe's maps depend on
+    (msfm parameters.probe_parameter_spec); given, it may hold label and group names
+    (msfm parameters.resolve_parameters). ``dset.eval.grid.params`` repeats the result, which the
+    run directory's configs.yaml then saves. ``dset.eval.fiducial.params`` is left as it is, since there
+    it names the fiducial perturbations.
+
+    Args:
+        dlss_conf (dict): the merged split configs.
+        msfm_conf (dict): the msfm config of the dataset.
+
+    Returns:
+        list: the resolved labels.
+    """
+    dset = dlss_conf["dset"]
+    spec = (dset.get("training") or {}).get("params")
+    if spec is None:
+        common = dset["common"]
+        spec = parameters.probe_parameter_spec(common["with_lensing"], common["with_clustering"], msfm_conf)
+    params = parameters.resolve_parameters(spec, msfm_conf)
+    dset.setdefault("training", {})["params"] = params
+
+    grid = dset.setdefault("eval", {}).setdefault("grid", {})
+    if grid.get("params") is not None and parameters.resolve_parameters(grid["params"], msfm_conf) != params:
+        raise ValueError(f"dset.eval.grid.params {grid['params']} differs from the network target {params}")
+    grid["params"] = params
+    LOGGER.info(f"The network target: {params}")
+    return params
 
 
 def check_scale_cuts(msfm_conf, dlss_conf):

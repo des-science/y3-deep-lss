@@ -92,9 +92,9 @@ def run_single(args):
     from deep_lss.nets.layers.cls.embedding import get_cls_branch_kwargs
 
     net_conf = config_compose.load_composed(args.net_config)
-    dlss_conf = configuration.read_split_configs(args.probes_config, args.scales_config)
-    loss_conf = input_output.read_yaml(args.loss_config)
     msfm_conf = files.load_config(args.msfm_config)
+    dlss_conf = configuration.read_split_configs(args.probes_config, args.scales_config, msfm_conf=msfm_conf)
+    loss_conf = input_output.read_yaml(args.loss_config)
 
     assert (
         net_conf["network"]["name"] == "resnet"

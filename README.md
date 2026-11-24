@@ -133,6 +133,14 @@ does not match the msfm config's bins. The observation key follows the survey to
 rotation (`_no_psi_rot`), are evaluated by default for DES Y3 only; `--des_variants` adds them for
 another survey.
 
+The network target, `dset.training.params`, comes from the msfm config
+(`deep_lss.utils.configuration.resolve_params`). Without the key, a probe is trained on every label
+its maps depend on (msfm's `parameters.PROBE_GROUPS`), which for the combined probes is every
+label. The DES Y6 probes configs leave it out. A list of label and group names overrides it, like
+`[cosmo, ia]` or `[Om, s8, w0]`, as the DES Y3 configs do, and a probes config can `extends:`
+another. The labels always come out in the order of the stored ones, and `dset.eval.grid.params`
+repeats them.
+
 The DES Y6 scale cuts are derived, not typed in: `python -m deep_lss.apps.products.desy6 <step>`
 computes the signal power spectra and writes the smoothing scales, ℓ cuts and noise levels into the
 marked lines of `configs/scales/desy6/*.yaml`, recording each step in `data/desy6/provenance.yaml`.

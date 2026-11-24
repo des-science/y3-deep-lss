@@ -14,6 +14,8 @@ mutual_info_kwargs assembly is left per-app (the two build it with different str
 
 import numpy as np
 
+from msfm.utils.parameters import REPORT_MARGINALIZED
+
 
 def theta_standardization_from_samples(samples):
     """Return (shift, scale) = per-parameter mean/std of physical training labels, float32.
@@ -40,9 +42,11 @@ def theta_standardization_from_prior_intervals(prior_intervals):
 
 
 def cosmo_param_indices(params, cosmo_names):
-    """Indices of the cosmological parameters within `params`.
+    """Indices of the reported cosmological parameters within `params`.
 
     The validation nrmse is averaged over only these (the wide IA-nuisance priors otherwise
-    dominate an unweighted physical-units error). `cosmo_names` is msfm_conf["analysis"]["params"]["cosmo"].
+    dominate an unweighted physical-units error). `cosmo_names` is msfm_conf["analysis"]["params"]["cosmo"],
+    less the ones reports marginalize (msfm parameters.REPORT_MARGINALIZED), so the metric stays over
+    Om, s8 and w0 whether or not the network target holds ns, Ob and H0.
     """
-    return [i for i, p in enumerate(params) if p in cosmo_names]
+    return [i for i, p in enumerate(params) if p in cosmo_names and p not in REPORT_MARGINALIZED]

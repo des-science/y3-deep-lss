@@ -334,10 +334,10 @@ def training(args=None):
     if not args.restore_checkpoint:
         # load the configs
         net_conf = config_compose.load_composed(os.path.join(args.repo_dir, args.net_config))
-        dlss_conf = configuration.read_split_configs(args.probes_config, args.scales_config)
+        msfm_conf = files.load_config(args.msfm_config)
+        dlss_conf = configuration.read_split_configs(args.probes_config, args.scales_config, msfm_conf=msfm_conf)
         loss_conf = input_output.read_yaml(args.loss_config)
         data_conf = input_output.read_yaml(args.data_config)
-        msfm_conf = files.load_config(args.msfm_config)
         configuration.check_scale_cuts(msfm_conf, dlss_conf)
         if args.loss_function is None:
             args.loss_function = loss_conf.get("loss_function")
@@ -1089,7 +1089,7 @@ def training(args=None):
 
         # training step, fiducial pipeline
         if args.loss_function == "delta":
-            perts = parameters.get_fiducial_perturbations(params)
+            perts = parameters.get_fiducial_perturbations(params, conf=msfm_conf)
             LOGGER.info(f"Training with respect to the {n_params} parameters {params} with off sets {perts}")
 
             model.setup_delta_loss_step(
@@ -1259,7 +1259,7 @@ def training(args=None):
                     mse = tf.keras.metrics.MeanSquaredError()
 
                     # as this loss is supervised
-                    labels = parameters.get_fiducials(params)
+                    labels = parameters.get_fiducials(params, conf=msfm_conf)
 
                     @tf.function
                     def vali_loss_fn(batch):

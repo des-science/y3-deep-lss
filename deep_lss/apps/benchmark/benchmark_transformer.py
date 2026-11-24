@@ -81,9 +81,9 @@ def run_single(args):
     from deep_lss.nets.heads.regression_head import get_regression_head
 
     net_conf = config_compose.load_composed(args.net_config)
-    dlss_conf = configuration.read_split_configs(args.probes_config, args.scales_config)
-    loss_conf = input_output.read_yaml(args.loss_config)
     msfm_conf = files.load_config(args.msfm_config)
+    dlss_conf = configuration.read_split_configs(args.probes_config, args.scales_config, msfm_conf=msfm_conf)
+    loss_conf = input_output.read_yaml(args.loss_config)
 
     assert net_conf["network"]["name"] == "nested_transformer", (
         f"benchmark_transformer only supports the nested_transformer net, got " f"{net_conf['network']['name']}"

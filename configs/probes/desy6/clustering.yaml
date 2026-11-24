@@ -1,3 +1,5 @@
+# dset.training.params defaults to every label the maps depend on, resolved from the msfm config
+# (configuration.resolve_params). A list of labels and msfm groups, like [cosmo, ia], overrides it.
 dset:
   common:
     with_lensing: False
@@ -5,10 +7,6 @@ dset:
     with_cross_z: True
     with_cross_probe: False
     apply_norm: True
-  training:
-    params: [Om, s8, w0, bg1, bg3, bg4, bg5, bg6]
   eval:
     fiducial:
       params: []
-    grid:
-      params: [Om, s8, w0, bg1, bg3, bg4, bg5, bg6]
