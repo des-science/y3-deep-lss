@@ -7,9 +7,9 @@
 
 # Multi-node / distribution-strategy throughput (run_training.py --pasc_throughput) of the v17
 # clustering transformer. The topology comes from the sbatch flags, the strategy from the env.
-#   STRATEGY=mirrored CFG=ctrl_b20 GPU_BIND=none VERSION=desy3/v17 SUBVERSION=baseline \
+#   STRATEGY=mirrored CFG=ctrl_b20 GPU_BIND=none VERSION=desy3/v17 \
 #       sbatch --nodes=1 --ntasks-per-node=1 --gpus-per-node=4 --gpus-per-task=4 --cpus-per-task=288 benchmark_2node.sh
-#   STRATEGY=horovod CFG=b10 VERSION=desy3/v17 SUBVERSION=baseline \
+#   STRATEGY=horovod CFG=b10 VERSION=desy3/v17 \
 #       sbatch --nodes=2 --ntasks-per-node=4 --gpus-per-node=4 --gpus-per-task=1 --cpus-per-task=72 benchmark_2node.sh
 
 source /users/athomsen/dlss/repos/y3-deep-lss/submissions/clariden/common.sh

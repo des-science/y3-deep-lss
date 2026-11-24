@@ -80,7 +80,7 @@ python deep_lss/apps/run_training.py \
     --dir_model=maps \
     --train_tfr_pattern="$DATA/tfrecords/grid/DESy3_grid_dmb_????.tfrecord" \
     --data_dir="$DATA" \
-    --msfm_config="$MSFM/configs/v18/default.yaml" \
+    --msfm_config="$MSFM/configs/desy3/v18/v18.yaml" \
     --probes_config=configs/probes/lensing.yaml \
     --scales_config=configs/scales/8wl,32gc.yaml \
     --loss_config=configs/loss/vmim.yaml \
@@ -141,9 +141,9 @@ clustering block also sets `theta_fwhm_base_single_probe: True`, so the clusteri
 with its `theta_fwhm_base` as the combined runs do; without the key, as for DES Y3, a single-probe
 run takes its smallest beam as the base kernel.
 
-On the cluster, `VERSION=desy6/v1 SUBVERSION=default` selects the DES Y6 msfm config, and with it
-the `desy6/` configs and the `DESy6_grid_dmb_????.tfrecord` files. The data, mock and run
-directories come from msfm's `configs/desy6/v1/locations.yaml` (see `submissions` below). The infer
+On the cluster, `VERSION=desy6/v2` selects the DES Y6 msfm config `configs/desy6/v2/v2.yaml`, and
+with it the `desy6/` configs and the `DESy6_grid_dmb_????.tfrecord` files. The data, mock and run
+directories come from msfm's `configs/desy6/v2/locations.yaml` (see `submissions` below). The infer
 stage needs an msi checkout that handles DES Y6; an older one writes no DES Y6 chain.
 
 ### Entry points
@@ -237,7 +237,7 @@ the Cls equivalent, and `benchmarks/` and `experiments/` hold the sizing and stu
 written against one specific cluster and are included as a worked example of how the stages fit
 together, not as a portable script set.
 
-Every script needs the dataset, `VERSION=desy6/v1` or `VERSION=desy3/v18`, and stops without it.
+Every script needs the dataset, `VERSION=desy6/v2` or `VERSION=desy3/v18`, and stops without it.
 `common.sh` reads the dataset's paths from msfm's `configs/<VERSION>/locations.yaml` through
 `python -m msfm.utils.locations`: `INPUT` (the msfm outputs), `OBS_DIR` (the mock observations) and
 `RUNS_ROOT` (the run tree), each overridable from the environment. Evaluating or inferring on a run

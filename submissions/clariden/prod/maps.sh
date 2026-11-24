@@ -75,7 +75,7 @@ if has_stage train; then
             --net_config="$NET_CONFIG" \
             --dist_strategy="$STRATEGY" \
             --wandb \
-            --wandb_tags "$VERSION" "$SUBVERSION" "$PROBE" "$LOSS" "$STRATEGY" "$ARCH" \
+            --wandb_tags "$VERSION" "$PROBE" "$LOSS" "$STRATEGY" "$ARCH" \
                 "$(basename "${NET_CONFIG%.yaml}")" "$SCALES" \
             $RESTORE $TRAIN_EXTRA
     check_stage $? "Training" "${LOG}_training.log"

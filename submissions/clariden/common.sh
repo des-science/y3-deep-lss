@@ -21,10 +21,9 @@ SLURM_JOB_ID="${SLURM_JOB_ID:-dryrun}"
 
 # --- Dataset -----------------------------------------------------------------------------------
 
-# The dataset is msfm's configs/<VERSION>/<SUBVERSION>.yaml, e.g. VERSION=desy6/v1. VERSION has no default, so a run
-# never falls back to another survey's data. DES Y3 v18 is VERSION=desy3/v18; v18 and v16 are extended-NLA (plain
-# configs/probes/*.yaml), v17 needs the *_nla probe configs.
-SUBVERSION="${SUBVERSION:-default}"
+# The dataset is msfm's configs/<VERSION>/<version>.yaml, e.g. VERSION=desy6/v2 for configs/desy6/v2/v2.yaml. VERSION
+# has no default, so a run never falls back to another survey's data. DES Y3 v18 is VERSION=desy3/v18; v18 and v16
+# are extended-NLA (plain configs/probes/*.yaml), v17 needs the *_nla probe configs.
 SCALES="${SCALES:-8wl,32gc}"  # configs/scales/
 LOSS="${LOSS:-vmim}"          # configs/loss/
 DATA="${DATA:-default}"       # configs/data/
@@ -34,7 +33,7 @@ if [ -z "${VERSION:-}" ]; then
     echo "Set VERSION to a dataset of msfm's configs/: $(datasets)" >&2
     exit 1
 fi
-MSFM_CONFIG="$MSFM/configs/$VERSION/$SUBVERSION.yaml"
+MSFM_CONFIG="$MSFM/configs/$VERSION/$(basename "$VERSION").yaml"
 if [ ! -f "$MSFM_CONFIG" ]; then
     echo "No msfm config $MSFM_CONFIG; the datasets are: $(datasets)" >&2
     exit 1
