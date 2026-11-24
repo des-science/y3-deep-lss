@@ -17,8 +17,8 @@ take the scales config of the dataset they run on, `VERSION`.
 |---|---|---|---|---|
 | v1 | `signal` | `v1/desy6_signal_cls.h5` | yes | done 2026-11-21 |
 | v1 | `values` | the marked lines of `configs/scales/desy6/v1/8wl,32gc.yaml` | yes | done 2026-11-21 |
-| v2 | `signal` | `v2/desy6_signal_cls.h5` | yes | done 2026-11-24, provenance not yet recorded |
-| v2 | `values` | the marked lines of `configs/scales/desy6/v2/8wl,32gc.yaml` | yes | done 2026-11-24, provenance not yet recorded |
+| v2 | `signal` | `v2/desy6_signal_cls.h5` | yes | done 2026-11-24 |
+| v2 | `values` | the marked lines of `configs/scales/desy6/v2/8wl,32gc.yaml` | yes | done 2026-11-24 |
 
 ## Method
 

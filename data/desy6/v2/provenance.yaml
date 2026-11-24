@@ -1,0 +1,67 @@
+about: 'Written by deep_lss.apps.products.desy6, one record per step: how each DES Y6 scale cut was made.'
+steps:
+  signal:
+    date: '2026-11-24T20:13:07+01:00'
+    command: python -m deep_lss.apps.products.desy6 signal --msfm-config /users/athomsen/dlss/repos/multiprobe-simulation-forward-model/configs/desy6/v2/v2.yaml
+      --scales configs/scales/desy6/v2/8wl,32gc.yaml --source /capstor/store/cscs/userlab/lp184/tomaszk/261109_cosmogridv1_desy6/000_test/cosmogrid/processed/desy6/CosmoGrid/bary
+      --provenance
+    config: configs/scales/desy6/v2/8wl,32gc.yaml
+    deep_lss_commit: 447391ac1823b556ef53ec3dfebc289268f43dd8
+    msfm_commit: 19a08f809a0db3cf68db38669d02c4aaea9bb1a6
+    inputs:
+    - path: /users/athomsen/dlss/repos/multiprobe-simulation-forward-model/configs/desy6/v2/v2.yaml
+      bytes: 8781
+      mtime: '2026-11-24T16:16:31+01:00'
+    - path: /capstor/store/cscs/userlab/lp184/tomaszk/261109_cosmogridv1_desy6/000_test/cosmogrid/processed/desy6/CosmoGrid/bary/benchmarks/fiducial_bench
+      bytes: 4096
+      mtime: '2026-11-19T14:13:45+01:00'
+    outputs:
+    - path: data/desy6/v2/desy6_signal_cls.h5
+      sha256: 9af77b710fd551b9a49576f0dc031b55727c81bcea9f216c04710d4b4f8da060
+  values:
+    date: '2026-11-24T20:13:42+01:00'
+    command: python -m deep_lss.apps.products.desy6 values --msfm-config /users/athomsen/dlss/repos/multiprobe-simulation-forward-model/configs/desy6/v2/v2.yaml
+      --scales configs/scales/desy6/v2/8wl,32gc.yaml --provenance
+    config: configs/scales/desy6/v2/8wl,32gc.yaml
+    deep_lss_commit: 447391ac1823b556ef53ec3dfebc289268f43dd8
+    msfm_commit: 19a08f809a0db3cf68db38669d02c4aaea9bb1a6
+    inputs:
+    - path: /users/athomsen/dlss/repos/multiprobe-simulation-forward-model/configs/desy6/v2/v2.yaml
+      bytes: 8781
+      mtime: '2026-11-24T16:16:31+01:00'
+    - path: data/desy6/v2/desy6_signal_cls.h5
+      bytes: 120832
+      mtime: '2026-11-24T20:13:07+01:00'
+    - path: /users/athomsen/dlss/repos/multiprobe-simulation-forward-model/data/desy6/desy6_pixels_fiducial_512.h5
+      bytes: 29643257
+      mtime: '2026-11-20T17:57:24+01:00'
+    - path: /users/athomsen/dlss/repos/multiprobe-simulation-forward-model/data/desy6/redshift_distributions/desy6_nz_metacal_bin1.txt
+      bytes: 15126
+      mtime: '2026-11-20T17:55:51+01:00'
+    - path: /users/athomsen/dlss/repos/multiprobe-simulation-forward-model/data/desy6/redshift_distributions/desy6_nz_metacal_bin2.txt
+      bytes: 15126
+      mtime: '2026-11-20T17:55:51+01:00'
+    - path: /users/athomsen/dlss/repos/multiprobe-simulation-forward-model/data/desy6/redshift_distributions/desy6_nz_metacal_bin3.txt
+      bytes: 15126
+      mtime: '2026-11-20T17:55:51+01:00'
+    - path: /users/athomsen/dlss/repos/multiprobe-simulation-forward-model/data/desy6/redshift_distributions/desy6_nz_metacal_bin4.txt
+      bytes: 15126
+      mtime: '2026-11-20T17:55:51+01:00'
+    - path: /users/athomsen/dlss/repos/multiprobe-simulation-forward-model/data/desy6/redshift_distributions/desy6_nz_maglim_bin1.txt
+      bytes: 15124
+      mtime: '2026-11-20T17:55:51+01:00'
+    - path: /users/athomsen/dlss/repos/multiprobe-simulation-forward-model/data/desy6/redshift_distributions/desy6_nz_maglim_bin3.txt
+      bytes: 15124
+      mtime: '2026-11-20T17:55:51+01:00'
+    - path: /users/athomsen/dlss/repos/multiprobe-simulation-forward-model/data/desy6/redshift_distributions/desy6_nz_maglim_bin4.txt
+      bytes: 15124
+      mtime: '2026-11-20T17:55:51+01:00'
+    - path: /users/athomsen/dlss/repos/multiprobe-simulation-forward-model/data/desy6/redshift_distributions/desy6_nz_maglim_bin5.txt
+      bytes: 15124
+      mtime: '2026-11-20T17:55:51+01:00'
+    - path: /users/athomsen/dlss/repos/multiprobe-simulation-forward-model/data/desy6/redshift_distributions/desy6_nz_maglim_bin6.txt
+      bytes: 15124
+      mtime: '2026-11-20T17:55:51+01:00'
+    outputs:
+    - path: configs/scales/desy6/v2/8wl,32gc.yaml
+      sha256: bada3fe935ac55848cebbcbc03f8a8024867e61b86ef5fe467cc423bbb028136
