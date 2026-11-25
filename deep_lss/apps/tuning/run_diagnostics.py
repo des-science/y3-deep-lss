@@ -102,7 +102,7 @@ import numpy as np
 # runs alike. The two finders differ in what they look for and a run can have one without the other:
 # `find_chain_dir` wants the per-mock `chain_*.npy` (Q2/Q4), `find_flow_dir` the coverage stage's
 # `mcmc_samples.h5` (Q1/Q3).
-from msfm.utils.parameters import REPORT_MARGINALIZED
+from msfm.utils.parameters import REPORT_MARGINALIZED, chain_columns
 
 from deep_lss.apps.tuning.run_comparison import (
     _dig,
@@ -133,15 +133,6 @@ EXCLUDE_PREFIXES = ("cosmo", "grid", "buzzard")
 
 # The correctly-specified baseline every contaminated mock is referenced against.
 FIDUCIAL_LABEL = "fiducial_bench"
-
-# Chain variants that DROP a parameter column rather than fixing it, so the file is narrower than the
-# run's trained parameter list. Reading a lambdaCDM chain with the full list shifts everything after w0
-# and mislabels the posterior with nothing raising. Written by msi (`likelihood_base.py:145`): the
-# reduced space is exactly w0 for lambdaCDM and bta for nla, and they COMPOSE
-# (`chain_DESy3_w0gt-1_nla.npy` is 9 columns against 10 params). The reference-prior chains (`refpriors`)
-# fix the baryons whenever the flow is conditioned on them. Mirrors dlss_plot's runs.VARIANT_FIXED and
-# msi's tensions.VARIANT_FIXED -- keep the three in step.
-VARIANT_FIXED = {"lambdaCDM": ("w0",), "nla": ("bta",), "refpriors": ("bary_Mc", "bary_nu")}
 
 # Qualifiers that change the SAMPLED SPACE OR THE PRIOR rather than the data vector: lambdaCDM fixes
 # w0, nla fixes bta, w0gt-1 truncates the w0 prior (`likelihood_base.py:88-101`). All three tighten
@@ -239,19 +230,6 @@ def assert_param_sources_agree(cfg, run_dir):
             f"{list(grid)}. The chain column order is ambiguous for this run; resolve which list the "
             f"inference stage actually wrote before reading any chain from it."
         )
-
-
-def chain_params(params, variant):
-    """The column list of `chain_<variant>.npy`, which is NOT always the run's trained parameter list.
-
-    A `lambdaCDM` variant drops w0 and an `nla` variant drops bta instead of fixing them, so the array
-    is one column narrower per qualifier and they compose. Qualifiers are matched as whole
-    underscore-separated tokens, not as substrings, so a longer label containing one by accident does
-    not silently remove a column (same rule as dlss_plot's `runs.variant_fixed`).
-    """
-    tokens = set((variant or "").split("_"))
-    dropped = {p for qualifier, fixed in VARIANT_FIXED.items() if qualifier in tokens for p in fixed}
-    return [p for p in params if p not in dropped]
 
 
 def load_chain(chain_dir, label, params):
@@ -985,7 +963,7 @@ def des_fom(
                 f"in absolute terms -- there is nothing within the run to normalise it against"
             )
         for variant in variants:
-            columns = chain_params(params, variant)
+            columns = chain_columns(params, variant)
             summary = _chain_fom(chain_dir, variant, columns, pair)
             if summary is not None:
                 entry["variants"][variant] = summary
