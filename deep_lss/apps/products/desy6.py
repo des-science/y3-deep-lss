@@ -120,6 +120,8 @@ def _fiducial_setup(conf):
         "tomo_bg": tomo_bg,
         "ng_bar": ng_bar,
         "tomo_cg": np.asarray(tomo_cg, dtype=np.float64),
+        # the projection's map type of the lens n(z) convergence
+        "lens_kappa": files.get_lens_convergence_map_type(conf),
     }
 
 
@@ -129,7 +131,7 @@ def _perm_cls(task):
     # the convergence of the lens n(z), for the magnification of the lens counts
     magnified = setup["tomo_cg"].size > 0
     keys = [f"map/{m}/{b}" for m in ("kg", "ia") for b in metacal_bins] + [f"map/dg/{b}" for b in maglim_bins]
-    keys += [f"map/kg/{b}" for b in maglim_bins] if magnified else []
+    keys += [f"map/{setup['lens_kappa']}/{b}" for b in maglim_bins] if magnified else []
     with h5py.File(path, "r") as f:
         for key in keys:
             if key not in f:
@@ -139,7 +141,7 @@ def _perm_cls(task):
         kg = np.stack([f[f"map/kg/{b}"][:] for b in metacal_bins], axis=-1)
         ia = np.stack([f[f"map/ia/{b}"][:] for b in metacal_bins], axis=-1)
         dg = np.stack([f[f"map/dg/{b}"][:] for b in maglim_bins], axis=-1)
-        kl = np.stack([f[f"map/kg/{b}"][:] for b in maglim_bins], axis=-1) if magnified else None
+        kl = np.stack([f[f"map/{setup['lens_kappa']}/{b}"][:] for b in maglim_bins], axis=-1) if magnified else None
 
     wl = kg + setup["tomo_Aia"] * ia
     mean_dg = np.mean(dg, axis=0)
