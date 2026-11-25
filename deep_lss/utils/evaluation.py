@@ -550,47 +550,56 @@ def des_variants(msfm_conf, requested=None):
     return msfm_conf["survey"]["name"] == "DESy3"
 
 
-def evaluate_obs_des(model_fn, pred_file, msfm_conf, dlss_conf, with_variants=True):
-    """Evaluate the real DES catalogs of msfm's survey.name through the network, with the variants if requested."""
-    from msfm.utils import catalog, observation
+def des_observations(msfm_conf, use_wl, use_gc, with_variants=True, all_maps=False):
+    """Yield (label, wl_gamma_map, gc_count_map, apply_sys) for the real DES catalogs of msfm's survey.name.
 
-    with_lensing = dlss_conf["dset"]["common"]["with_lensing"]
-    with_clustering = dlss_conf["dset"]["common"]["with_clustering"]
-    with_cross_probe = dlss_conf["dset"]["common"]["with_cross_probe"]
+    The labels are <survey> and, with_variants (des_variants), <survey>_no_sys without the lens weight maps (if
+    use_gc) and the _no_psi_rot of each without the shear rotation (if use_wl). A probe's map is built only if it is
+    in use, or for all_maps."""
+    from msfm.utils import catalog
 
-    use_wl = with_lensing or with_cross_probe
-    use_gc = with_clustering or with_cross_probe
-
-    cls_bin_indices = _get_cls_bin_indices(msfm_conf, dlss_conf)
-
-    wl_map = catalog.build_metacal_map_from_cat(msfm_conf)[0] if use_wl else None
-    gc_map = catalog.build_maglim_map_from_cat(msfm_conf) if use_gc else None
+    survey = msfm_conf["survey"]["name"]
+    wl_map = catalog.build_metacal_map_from_cat(msfm_conf)[0] if use_wl or all_maps else None
+    gc_map = catalog.build_maglim_map_from_cat(msfm_conf) if use_gc or all_maps else None
 
     lensing_variants = [(wl_map, "")]
     if use_wl and with_variants:
         wl_map_no_psi_rot = catalog.build_metacal_map_from_cat(msfm_conf, apply_shear_rotation=False, debug=False)[0]
         lensing_variants.append((wl_map_no_psi_rot, "_no_psi_rot"))
 
-    survey = msfm_conf["survey"]["name"]
     sys_variants = [(True, survey)]
     if use_gc and with_variants:
         sys_variants.append((False, f"{survey}_no_sys"))
 
     for wl, rot_suffix in lensing_variants:
         for apply_sys, label in sys_variants:
-            des_dv, des_cls, _ = observation.forward_model_observation_map(
-                wl_gamma_map=wl,
-                gc_count_map=gc_map,
-                conf=msfm_conf,
-                apply_norm=True,
-                with_padding=True,
-                nest_in=False,
-                apply_maglim_sys_map=apply_sys,
-            )
-            if des_cls.shape[-1] != len(cls_bin_indices):
-                des_cls = des_cls[:, cls_bin_indices]
-            pred = model_fn(des_dv[np.newaxis], des_cls[np.newaxis])
-            append_obs_to_file(pred_file, f"obs/preds/{label}{rot_suffix}", pred)
+            yield f"{label}{rot_suffix}", wl, gc_map, apply_sys
+
+
+def evaluate_obs_des(model_fn, pred_file, msfm_conf, dlss_conf, with_variants=True):
+    """Evaluate the real DES catalogs of msfm's survey.name through the network, with the variants if requested."""
+    from msfm.utils import observation
+
+    common = dlss_conf["dset"]["common"]
+    use_wl = common["with_lensing"] or common["with_cross_probe"]
+    use_gc = common["with_clustering"] or common["with_cross_probe"]
+
+    cls_bin_indices = _get_cls_bin_indices(msfm_conf, dlss_conf)
+
+    for label, wl, gc_map, apply_sys in des_observations(msfm_conf, use_wl, use_gc, with_variants):
+        des_dv, des_cls, _ = observation.forward_model_observation_map(
+            wl_gamma_map=wl,
+            gc_count_map=gc_map,
+            conf=msfm_conf,
+            apply_norm=True,
+            with_padding=True,
+            nest_in=False,
+            apply_maglim_sys_map=apply_sys,
+        )
+        if des_cls.shape[-1] != len(cls_bin_indices):
+            des_cls = des_cls[:, cls_bin_indices]
+        pred = model_fn(des_dv[np.newaxis], des_cls[np.newaxis])
+        append_obs_to_file(pred_file, f"obs/preds/{label}", pred)
 
 
 def discover_mock_labels(obs_dir):

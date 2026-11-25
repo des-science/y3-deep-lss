@@ -187,51 +187,34 @@ def evaluate_des(
 ):
     """Evaluate the real DES catalogs of msfm's survey.name through the Cls network; with_variants adds the
     evaluation.des_variants (_no_sys, _no_psi_rot)."""
-    from msfm.utils import catalog
-
     use_wl = with_lensing or with_cross_probe
     use_gc = with_clustering or with_cross_probe
 
-    # Build both maps regardless of probe selection: preprocess_obs_hard_rebinned
+    # Build both maps regardless of probe selection (all_maps): preprocess_obs_hard_rebinned
     # rebins the full (lensing+clustering) set of pairs and applies probe
     # selection afterwards, so obs_cl must cover all pairs just like the grid cache.
-    survey = msfm_conf["survey"]["name"]
-    print(f"Building {survey} maps from catalogs...")
-    wl_gamma_map, _ = catalog.build_metacal_map_from_cat(msfm_conf)
-    gc_count_map = catalog.build_maglim_map_from_cat(msfm_conf)
-
-    lensing_variants = [(wl_gamma_map, "")]
-    if use_wl and with_variants:
-        wl_gamma_map_no_psi_rot, _ = catalog.build_metacal_map_from_cat(
-            msfm_conf, apply_shear_rotation=False, debug=False
+    print(f"Evaluating {msfm_conf['survey']['name']} from its catalogs...")
+    for label, wl_map, gc_count_map, apply_sys in evaluation.des_observations(
+        msfm_conf, use_wl, use_gc, with_variants, all_maps=True
+    ):
+        des_cl = _obs_preprocessing_fn(scale_cut, cls_n_bins=cls_n_bins)(
+            wl_gamma_map=wl_map,
+            gc_count_map=gc_count_map,
+            msfm_conf=msfm_conf,
+            dlss_conf=dlss_conf,
+            base_dir=data_dir,
+            nest_in=False,
+            with_lensing=with_lensing,
+            with_clustering=with_clustering,
+            with_cross_z=with_cross_z,
+            with_cross_probe=with_cross_probe,
+            lenses_before_sources=lenses_before_sources,
+            apply_log=apply_log,
+            standardize=False,
+            ell_weighting=ell_weighting,
+            make_plot=False,
+            apply_maglim_sys_map=apply_sys,
         )
-        lensing_variants.append((wl_gamma_map_no_psi_rot, "_no_psi_rot"))
 
-    sys_variants = [(True, survey)]
-    if use_gc and with_variants:
-        sys_variants.append((False, f"{survey}_no_sys"))
-
-    print(f"Computing {survey} binned Cls...")
-    for wl_map, rot_suffix in lensing_variants:
-        for apply_sys, sys_label in sys_variants:
-            des_cl = _obs_preprocessing_fn(scale_cut, cls_n_bins=cls_n_bins)(
-                wl_gamma_map=wl_map,
-                gc_count_map=gc_count_map,
-                msfm_conf=msfm_conf,
-                dlss_conf=dlss_conf,
-                base_dir=data_dir,
-                nest_in=False,
-                with_lensing=with_lensing,
-                with_clustering=with_clustering,
-                with_cross_z=with_cross_z,
-                with_cross_probe=with_cross_probe,
-                lenses_before_sources=lenses_before_sources,
-                apply_log=apply_log,
-                standardize=False,
-                ell_weighting=ell_weighting,
-                make_plot=False,
-                apply_maglim_sys_map=apply_sys,
-            )
-
-            des_pred = model(tf.constant(des_cl, dtype=tf.float32), training=False).numpy()
-            evaluation.append_obs_to_file(pred_file, f"obs/preds/{sys_label}{rot_suffix}", des_pred)
+        des_pred = model(tf.constant(des_cl, dtype=tf.float32), training=False).numpy()
+        evaluation.append_obs_to_file(pred_file, f"obs/preds/{label}", des_pred)
