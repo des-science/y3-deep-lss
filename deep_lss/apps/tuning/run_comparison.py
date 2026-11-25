@@ -175,15 +175,6 @@ def flow_extend_params(inference_dir):
         return []
 
 
-def effective_extension(params, inference_dir):
-    """The extension columns msi actually appended: the recorded extend_params the run's own list lacks.
-
-    msi skips an extension parameter the network was already trained on. Older flows record the
-    configured extension rather than the applied one, so the run's own list is subtracted here.
-    """
-    return [p for p in flow_extend_params(inference_dir) if p not in params]
-
-
 def drop_extension(theta, params, inference_dir, source=""):
     """Reduce theta to the run's own parameter list by dropping the flow's extension columns.
 
@@ -196,7 +187,7 @@ def drop_extension(theta, params, inference_dir, source=""):
     n_base, n_found = len(params), theta.shape[-1]
     if n_found == n_base:
         return theta
-    extend = effective_extension(params, inference_dir)
+    extend = flow_extend_params(inference_dir)
     if n_found != n_base + len(extend):
         raise ValueError(
             f"{source or inference_dir}: {n_found} parameter columns, but the run declares {n_base} "

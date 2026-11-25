@@ -110,9 +110,9 @@ from deep_lss.apps.tuning.run_comparison import (
     align_to,
     checkpoint_warning,
     drop_extension,
-    effective_extension,
     find_chain_dir,
     find_flow_dir,
+    flow_extend_params,
     fom_per_mock,
     load_run_config,
     pair_runs,
@@ -646,7 +646,7 @@ def coverage(run_dirs, flow_name=None, n_alpha=100, n_boot=4000, seed=0, referen
             # for exactly the parameters these tables report. (The HPD leg below reads `log_prob_*`,
             # which is a JOINT density and cannot be marginalized by dropping columns: its coverage
             # remains a statement about the full space the flow sampled.)
-            extend = effective_extension(params, inference_dir)
+            extend = flow_extend_params(inference_dir)
             if n_params != len(params) + len(extend):
                 raise ValueError(
                     f"{inference_dir}/mcmc_samples.h5: theta_sample has {n_params} parameter columns "
