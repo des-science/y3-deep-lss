@@ -38,8 +38,6 @@ if [ ! -f "$MSFM_CONFIG" ]; then
     echo "No msfm config $MSFM_CONFIG; the datasets are: $(datasets)" >&2
     exit 1
 fi
-SURVEY=$(awk '/^survey:/{s=1} s&&/^  name:/{print $2; exit}' "$MSFM_CONFIG")
-[ -n "$SURVEY" ] || { echo "$MSFM_CONFIG has no survey.name" >&2; exit 1; }
 
 # The dataset's paths come from the locations.yaml next to $MSFM_CONFIG (msfm.utils.locations); an environment
 # variable overrides one. INPUT holds tfrecords/ and cls/, OBS_DIR the *_obs_maps.h5 mocks, RUNS_ROOT the runs.
@@ -64,10 +62,11 @@ if [ -z "$INPUT" ] || [ -z "$OBS_DIR" ] || [ -z "$RUNS_ROOT" ]; then
     echo "The locations of $MSFM_CONFIG give no data, obs or runs; set INPUT, OBS_DIR and RUNS_ROOT." >&2
     exit 1
 fi
-TRAIN_TFR="${TRAIN_TFR:-$INPUT/tfrecords/grid/${SURVEY}_grid_dmb_????.tfrecord}"
+TRAIN_TFR="${TRAIN_TFR:-$INPUT/tfrecords/grid/*_grid_dmb_????.tfrecord}"  # the grid of this dataset only
 
-# the probes configs are per survey (they name its bias parameters), the scale cuts per dataset version
-PROBES_DIR="$DEEP_LSS/configs/probes/${SURVEY,,}/"
+# the probes configs are per survey (they name its bias parameters), the scale cuts per dataset version, each laid
+# out like msfm's configs/<survey>/<version>/
+PROBES_DIR="$DEEP_LSS/configs/probes/${VERSION%%/*}/"
 SCALES_CONFIG="$DEEP_LSS/configs/scales/$VERSION/$SCALES.yaml"
 LOSS_CONFIG="$DEEP_LSS/configs/loss/$LOSS.yaml"
 DATA_CONFIG="$DEEP_LSS/configs/data/$DATA.yaml"
