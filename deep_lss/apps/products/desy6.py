@@ -104,7 +104,8 @@ def _rel(path):
 
 
 def _fiducial_setup(conf):
-    """The fiducial amplitudes the signal maps are built with: per-bin A_IA, lens bias and lens counts per pixel."""
+    """The fiducial amplitudes the signal maps are built with: per-bin A_IA, lens bias, lens counts per pixel and lens
+    magnification coefficient C (empty without magnification)."""
     fid = conf["analysis"]["fiducial"]
     tomo_z, tomo_nz = files.load_redshift_distributions("metacal", conf)
     tomo_Aia = redshift.get_tomo_amplitudes(fid["Aia"], fid["n_Aia"], tomo_z, tomo_nz, conf["survey"]["metacal"]["z0"])
@@ -112,14 +113,25 @@ def _fiducial_setup(conf):
     n_side = conf["analysis"]["n_side"]
     ng_bar = np.array(conf["survey"]["maglim"]["n_gal"]) * hp.nside2pixarea(n_side, degrees=True)
     assert len(tomo_bg) == len(conf["survey"]["maglim"]["z_bins"]), "one linear bias per lens bin"
-    return {"tomo_Aia": np.asarray(tomo_Aia, dtype=np.float64), "tomo_bg": tomo_bg, "ng_bar": ng_bar}
+    magnification, mag_params = files.get_magnification(conf)
+    tomo_cg = clustering.magnification_coefficient([fid[p] for p in mag_params]) if magnification else []
+    return {
+        "tomo_Aia": np.asarray(tomo_Aia, dtype=np.float64),
+        "tomo_bg": tomo_bg,
+        "ng_bar": ng_bar,
+        "tomo_cg": np.asarray(tomo_cg, dtype=np.float64),
+    }
 
 
 def _perm_cls(task):
     """C_l of one permutation's signal maps, lensing bins then lens bins. A module function, for the pool."""
     path, metacal_bins, maglim_bins, n_side, setup, l_max, datapath = task
+    # the convergence of the lens n(z), for the magnification of the lens counts
+    magnified = setup["tomo_cg"].size > 0
+    keys = [f"map/{m}/{b}" for m in ("kg", "ia") for b in metacal_bins] + [f"map/dg/{b}" for b in maglim_bins]
+    keys += [f"map/kg/{b}" for b in maglim_bins] if magnified else []
     with h5py.File(path, "r") as f:
-        for key in [f"map/{m}/{b}" for m in ("kg", "ia") for b in metacal_bins] + [f"map/dg/{b}" for b in maglim_bins]:
+        for key in keys:
             if key not in f:
                 raise KeyError(f"{path} has no {key}, so it is not a re-projected DES Y6 file")
             if f[key].shape != (hp.nside2npix(n_side),):
@@ -127,10 +139,17 @@ def _perm_cls(task):
         kg = np.stack([f[f"map/kg/{b}"][:] for b in metacal_bins], axis=-1)
         ia = np.stack([f[f"map/ia/{b}"][:] for b in metacal_bins], axis=-1)
         dg = np.stack([f[f"map/dg/{b}"][:] for b in maglim_bins], axis=-1)
+        kl = np.stack([f[f"map/kg/{b}"][:] for b in maglim_bins], axis=-1) if magnified else None
 
     wl = kg + setup["tomo_Aia"] * ia
     mean_dg = np.mean(dg, axis=0)
-    gc = clustering.galaxy_density_to_count(setup["ng_bar"], (dg - mean_dg) / mean_dg, setup["tomo_bg"])
+    gc = clustering.galaxy_density_to_count(
+        setup["ng_bar"],
+        (dg - mean_dg) / mean_dg,
+        setup["tomo_bg"],
+        mg=kl - np.mean(kl, axis=0) if magnified else None,
+        cg=setup["tomo_cg"] if magnified else None,
+    )
     maps = np.concatenate([wl, gc], axis=-1)
     return np.stack(
         [
@@ -146,8 +165,9 @@ def step_signal(conf, scales_conf, args):
 
     As configs/scales/desy3/v18/8wl,32gc.yaml did for Y3 on the fiducial maps (msfm notebooks/desy3/scale_cuts.ipynb):
     lensing is kg + A_IA ia with the fiducial IA amplitude per bin, clustering the galaxy counts of the fiducial linear
-    bias and n_gal. The maps are the SIGNAL_N_PERMS permutations of SIGNAL_DIR, which has the fiducial cosmology,
-    resolution and n(z); Y6 has no fiducial projection.
+    bias and n_gal, magnified at the fiducial alpha if the config has lens magnification. The maps are the
+    SIGNAL_N_PERMS permutations of SIGNAL_DIR, which has the fiducial cosmology, resolution and n(z); Y6 has no
+    fiducial projection.
 
     Returns:
         tuple: (input paths, output paths), or None with --dry-run or --max-perms
@@ -191,6 +211,9 @@ def step_signal(conf, scales_conf, args):
         f.create_dataset("tomo_Aia", data=setup["tomo_Aia"])
         f.create_dataset("tomo_bg", data=setup["tomo_bg"])
         f.create_dataset("ng_bar", data=setup["ng_bar"])
+        # only with magnification, so that a signal without it is written as before
+        if setup["tomo_cg"].size:
+            f.create_dataset("tomo_cg", data=setup["tomo_cg"])
         f.attrs["maps"] = SIGNAL_DIR
         f.attrs["z_bins"] = metacal_bins + maglim_bins
         f.attrs["n_perms"] = n_perms
@@ -331,11 +354,15 @@ def step_values(conf, scales_conf, args):
     with h5py.File(signal_path, "r") as f:
         cls = f["cls"][:]
         made_with = {key: f[key][:] for key in ("tomo_Aia", "tomo_bg", "ng_bar")}
+        # a signal without magnification has no tomo_cg
+        made_with["tomo_cg"] = f["tomo_cg"][:] if "tomo_cg" in f else np.zeros(0)
         z_bins = list(f.attrs["z_bins"])
     assert z_bins == [z for sample in PROBE_SAMPLES.values() for z in conf["survey"][sample]["z_bins"]], z_bins
     assert cls.shape == (3 * n_side, len(z_bins)), f"{_rel(signal_path)}: C_l of shape {cls.shape}, rerun step signal"
     for key, value in made_with.items():
-        assert np.allclose(value, setup[key], rtol=1e-12), f"stale {_rel(signal_path)}: {key} {value} != {setup[key]}"
+        assert value.shape == setup[key].shape and np.allclose(
+            value, setup[key], rtol=1e-12
+        ), f"stale {_rel(signal_path)}: {key} {value} != {setup[key]}"
 
     fid = conf["analysis"]["fiducial"]
     cosmo = FlatLambdaCDM(Om0=fid["Om"], Ob0=fid["Ob"], H0=fid["H0"], Tcmb0=2.7255, Neff=3.046, m_nu=0.02 * u.eV)
