@@ -163,7 +163,6 @@ if __name__ == "__main__":
     loss_conf = conf["loss"]
     data_conf = conf["data"]
     msfm_conf = conf["msfm"]
-    configuration.check_scale_cuts(msfm_conf, dlss_conf)
 
     LOGGER.info("Loaded configs from the model directory")
 

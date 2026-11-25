@@ -24,7 +24,8 @@ def read_split_configs(probes_config, scales_config=None, *, msfm_conf):
     ``loss_conf``) in both apps and is intentionally not merged here.
 
     The probes config may ``extends:`` a base (deep_lss.utils.config_compose), and its network target
-    is resolved against the msfm config by resolve_params.
+    is resolved against the msfm config by resolve_params. The scale cuts must fit the msfm config's survey
+    (check_scale_cuts).
 
     Args:
         probes_config (str): path to the probes config (required).
@@ -38,6 +39,7 @@ def read_split_configs(probes_config, scales_config=None, *, msfm_conf):
     if scales_config:
         dlss_conf.update(input_output.read_yaml(scales_config))
     resolve_params(dlss_conf, msfm_conf)
+    check_scale_cuts(msfm_conf, dlss_conf)
     LOGGER.info("Loaded the split configs")
     return dlss_conf
 

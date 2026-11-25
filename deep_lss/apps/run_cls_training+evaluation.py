@@ -142,7 +142,6 @@ def main():
     from msfm.utils import input_output
 
     dlss_conf = configuration.read_split_configs(args.probes_config, args.scales_config, msfm_conf=msfm_conf)
-    configuration.check_scale_cuts(msfm_conf, dlss_conf)
     net_conf = config_compose.load_composed(args.net_config)
     cls_n_bins = net_conf.get("cls_n_bins", 16)
 
