@@ -109,16 +109,13 @@ from deep_lss.apps.tuning.run_comparison import (
     _param_column,
     align_to,
     checkpoint_warning,
-    common_mocks,
-    compare_runs,
-    describe_mock_set,
     drop_extension,
     effective_extension,
     find_chain_dir,
     find_flow_dir,
     fom_per_mock,
-    gather_mocks,
     load_run_config,
+    pair_runs,
     paired_ratio,
     param_names,
     run_labels,
@@ -1074,22 +1071,6 @@ def format_des_fom(result, blind=None):
     return "\n".join(lines)
 
 
-def _load_widths(run_dir, names, pair, flow_name=None):
-    """(real_idx, sigma, rho) per coverage mock: posterior std of each of `names`, and corr of `pair`."""
-    import h5py
-
-    params = param_names(load_run_config(run_dir))
-    flow_dir, _ = find_flow_dir(run_dir, flow_name=flow_name)
-    with h5py.File(os.path.join(flow_dir, "mcmc_samples.h5"), "r") as h:
-        real_idx = h["real_idx"][:]
-        theta = drop_extension(h["theta_sample"][:], params, flow_dir, source=f"{run_dir} theta_sample")
-    sigma = np.stack([_param_column(theta, params, n).std(0, ddof=1) for n in names], axis=-1)
-    x, y = (_param_column(theta, params, p) for p in pair)
-    xc, yc = x - x.mean(0), y - y.mean(0)
-    rho = (xc * yc).sum(0) / np.sqrt((xc * xc).sum(0) * (yc * yc).sum(0))
-    return real_idx, sigma, rho
-
-
 def posterior_widths(
     run_dirs,
     reference,
@@ -1103,56 +1084,43 @@ def posterior_widths(
 ):
     """Q1 decomposed: which parameters' posterior widths make up the paired FoM ratio.
 
-    The FoM row comes from `compare_runs`, so the gates, the flags and the number are the ranking
-    path's. Per mock FoM = 1 / (sigma_1 sigma_2 sqrt(1 - rho^2)), so the paired ratio factors into the
-    two marginal width ratios and a decorrelation factor sqrt((1 - rho_ref^2) / (1 - rho_run^2)): a
-    degeneracy that turns can hold the FoM down while one marginal tightens. Every other parameter's
-    width ratio is listed too. Ratios are reference / run, so > 1 means the run is tighter. Only the
-    parameters every run was trained on are shown.
+    The runs are loaded, gated and paired by `pair_runs`, the first steps of `compare_runs`, and the FoM row is
+    its paired ratio, so the gates, the flags and the number are the ranking path's.
+
+    Per mock FoM = 1 / (sigma_1 sigma_2 sqrt(1 - rho^2)), so the paired ratio factors into the two marginal
+    width ratios and a decorrelation factor sqrt((1 - rho_ref^2) / (1 - rho_run^2)): a degeneracy that turns
+    can hold the FoM down while one marginal tightens. Every other parameter's width ratio is listed too.
+    Ratios are reference / run, so > 1 means the run is tighter. Only the parameters every run was trained on
+    are shown.
     """
     ordered = list(run_dirs)
     if reference not in ordered:
         ordered = [reference] + ordered
-    fom_rows, info = compare_runs(
-        ordered,
-        reference,
-        pair=pair,
-        n_boot=n_boot,
-        seed=seed,
-        intersect=intersect,
-        flow_name=flow_name,
-        cross_modality=cross_modality,
-        cross_survey=cross_survey,
-    )
-    fom_of = {r["run"]: r for r in fom_rows}
-    label_of = dict(zip(ordered, run_labels(ordered)))
-
     common = [p for p in param_names(load_run_config(reference)) if p not in pair]
     for d in ordered:
         common = [p for p in common if p in param_names(load_run_config(d))]
     names = list(pair) + common
-    loaded = {d: _load_widths(d, names, pair, flow_name=flow_name) for d in ordered}
+    paired, info = pair_runs(
+        ordered,
+        reference,
+        pair=pair,
+        intersect=intersect,
+        flow_name=flow_name,
+        cross_modality=cross_modality,
+        cross_survey=cross_survey,
+        widths=names,
+    )
 
-    ref_idx = common_mocks([idx for idx, _, _ in loaded.values()]) if intersect else loaded[reference][0]
-    clustered = describe_mock_set(ref_idx)["clustered"]
-
-    def aligned(d):
-        idx, sigma, rho = loaded[d]
-        if intersect:
-            return gather_mocks(idx, sigma, ref_idx), gather_mocks(idx, rho, ref_idx)
-        order = align_to(ref_idx, idx)
-        out_s, out_r = np.empty_like(sigma), np.empty_like(rho)
-        out_s[order], out_r[order] = sigma, rho
-        return out_s, out_r
-
-    ref_sigma, ref_rho = aligned(reference)
-    i_sobol = ref_idx[:, 0] if clustered else None
+    ref = paired[reference]
+    ref_sigma, ref_rho = ref["sigma"], ref["rho"]
+    i_sobol = info["real_idx"][:, 0] if info["clustered"] else None
     runs = []
-    for d in ordered:
+    for d, run in paired.items():
         if d == reference:
             continue
-        sigma, rho = aligned(d)
-        rows = [(f"FoM({pair[0]},{pair[1]})", None, None, fom_of[label_of[d]])]
+        sigma, rho = run["sigma"], run["rho"]
+        fom = paired_ratio(ref["fom"], run["fom"], i_sobol=i_sobol, n_boot=n_boot, seed=seed)
+        rows = [(f"FoM({pair[0]},{pair[1]})", None, None, fom)]
         for j, n in enumerate(names):
             stats = paired_ratio(1 / ref_sigma[:, j], 1 / sigma[:, j], i_sobol=i_sobol, n_boot=n_boot, seed=seed)
             rows.append((f"sigma {n}", np.median(ref_sigma[:, j]), np.median(sigma[:, j]), stats))
@@ -1161,11 +1129,11 @@ def posterior_widths(
                     (1 - ref_rho**2) ** -0.5, (1 - rho**2) ** -0.5, i_sobol=i_sobol, n_boot=n_boot, seed=seed
                 )
                 rows.append((f"decorr {pair[0]}-{pair[1]}", np.median(ref_rho), np.median(rho), decorr))
-        runs.append({"label": label_of[d], "rows": rows})
+        runs.append({"label": info["labels"][d], "rows": rows})
     return {
-        "reference": label_of[reference],
+        "reference": info["labels"][reference],
         "pair": pair,
-        "n_mocks": len(ref_idx),
+        "n_mocks": len(info["real_idx"]),
         "dropped": [p for p in param_names(load_run_config(reference)) if p not in names],
         "runs": runs,
         "warnings": info["warnings"],

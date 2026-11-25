@@ -24,7 +24,7 @@ estimator validity (SBC/TARP/HPD) and the DES FoM, which is unsigned under missp
 separate questions with separate instruments and a good FoM ratio here is not evidence about any of
 them. The first and third live in `run_diagnostics`, which imports the primitives below so its numbers
 are on this footing; the machinery they share (`find_inference_dir`, `run_labels`,
-`checkpoint_warning`, `fom_per_mock`, `_param_column`) is defined here and used there.
+`checkpoint_warning`, `fom_per_mock`, `pair_runs`, `_param_column`) is defined here and used there.
 
 Typical use::
 
@@ -323,6 +323,15 @@ def _param_column(theta, params, name):
     raise KeyError(f"unknown parameter {name!r}; trained params are {params}")
 
 
+def pair_covariance(theta_sample, params, pair=("Om", "S8")):
+    """(cxx, cyy, cxy), the posterior covariance of the pair per mock, over axis 0 of (n_samples, n_mocks, n_params)."""
+    x = _param_column(theta_sample, params, pair[0])
+    y = _param_column(theta_sample, params, pair[1])
+    n = x.shape[0]
+    xc, yc = x - x.mean(0), y - y.mean(0)
+    return (xc * xc).sum(0) / (n - 1), (yc * yc).sum(0) / (n - 1), (xc * yc).sum(0) / (n - 1)
+
+
 def fom_per_mock(theta_sample, params, pair=("Om", "S8")):
     """FoM = det(cov(p1, p2))**-0.5 per mock, vectorised over the mock axis.
 
@@ -330,23 +339,19 @@ def fom_per_mock(theta_sample, params, pair=("Om", "S8")):
     better. Signed ONLY because these mocks are correctly specified -- the same statistic on a
     misspecified observation (DES) carries no sign and must not be ranked on.
     """
-    x = _param_column(theta_sample, params, pair[0])
-    y = _param_column(theta_sample, params, pair[1])
-    n = x.shape[0]
-    xc, yc = x - x.mean(0), y - y.mean(0)
-    cxx = (xc * xc).sum(0) / (n - 1)
-    cyy = (yc * yc).sum(0) / (n - 1)
-    cxy = (xc * yc).sum(0) / (n - 1)
+    cxx, cyy, cxy = pair_covariance(theta_sample, params, pair=pair)
     det = cxx * cyy - cxy**2
     if np.any(det <= 0):
         raise ValueError(f"non-positive covariance determinant for {int((det <= 0).sum())} mocks")
     return det**-0.5
 
 
-def load_run(run_dir, pair=("Om", "S8"), flow_name=None):
-    """Load one run and reduce it to (real_idx, fom, config, provenance).
+def load_run(run_dir, pair=("Om", "S8"), flow_name=None, widths=()):
+    """Load one run and reduce it to per-mock summaries of its coverage posteriors.
 
-    Only the per-mock FoM is retained: theta_sample is ~360 MB per run, so keeping it for a table of
+    Returns a dict of real_idx, fom, truth (the pair's true values, (n_mocks, 2)), config and provenance, and
+    with `widths` (parameter names) also sigma, their posterior std per mock, and rho, the pair's correlation.
+    Only per-mock reductions are retained: theta_sample is ~360 MB per run, so keeping it for a table of
     ten runs is pointless. `provenance` records which checkpoint was used and how many were available.
     """
     cfg = load_run_config(run_dir)
@@ -366,34 +371,38 @@ def load_run(run_dir, pair=("Om", "S8"), flow_name=None):
             )
         real_idx = h["real_idx"][:]
         theta_sample = drop_extension(h["theta_sample"][:], params, flow_dir, source=f"{run_dir} theta_sample")
-        fom = fom_per_mock(theta_sample, params, pair=pair)
-    return real_idx, fom, cfg, provenance
-
-
-def load_pair_truth(run_dir, pair=("Om", "S8"), flow_name=None):
-    """(real_idx, truth) for the FoM pair, truth shaped (n_mocks, 2), from the run's coverage mocks."""
-    params = param_names(load_run_config(run_dir))
-    flow_dir, _ = find_flow_dir(run_dir, flow_name=flow_name)
-    with h5py.File(os.path.join(flow_dir, "mcmc_samples.h5"), "r") as h:
-        real_idx = h["real_idx"][:]
         theta_true = drop_extension(h["theta_true"][:], params, flow_dir, source=f"{run_dir} theta_true")
-    return real_idx, np.stack([_param_column(theta_true, params, p) for p in pair], axis=-1)
+    cxx, cyy, cxy = pair_covariance(theta_sample, params, pair=pair)
+    run = {
+        "real_idx": real_idx,
+        "fom": fom_per_mock(theta_sample, params, pair=pair),
+        "truth": np.stack([_param_column(theta_true, params, p) for p in pair], axis=-1),
+        "config": cfg,
+        "provenance": provenance,
+    }
+    if widths:
+        run["sigma"] = np.stack([_param_column(theta_sample, params, n).std(0, ddof=1) for n in widths], axis=-1)
+        run["rho"] = cxy / np.sqrt(cxx * cyy)
+    return run
 
 
-def check_same_truth(reference_dir, run_dirs, pair=("Om", "S8"), flow_name=None):
+def check_same_truth(runs, reference, pair=("Om", "S8")):
     """Raise unless every mock a run shares with the reference carries the same true value of the FoM pair.
 
-    A cross-survey pairing is only valid because a shared i_sobol means a shared cosmology. That holds
-    for the CosmoGridV1 grid, but nothing in the index tuple enforces it, so it is checked here.
+    `runs` maps run directories to load_run's dicts. A cross-survey pairing is only valid because a shared
+    i_sobol means a shared cosmology. That holds for the CosmoGridV1 grid, but nothing in the index tuple
+    enforces it, so it is checked here.
     """
-    ref_idx, ref_truth = load_pair_truth(reference_dir, pair=pair, flow_name=flow_name)
-    ref_row = {tuple(row): i for i, row in enumerate(ref_idx.tolist())}
-    for d in run_dirs:
-        idx, truth = load_pair_truth(d, pair=pair, flow_name=flow_name)
+    ref = runs[reference]
+    ref_row = {tuple(row): i for i, row in enumerate(ref["real_idx"].tolist())}
+    for d, run in runs.items():
+        if d == reference:
+            continue
         # the shared mocks only, so --intersect pairings are checked too; gate 2 judges the mock sets
-        shared = [(ref_row[tuple(row)], j) for j, row in enumerate(idx.tolist()) if tuple(row) in ref_row]
+        rows = run["real_idx"].tolist()
+        shared = [(ref_row[tuple(row)], j) for j, row in enumerate(rows) if tuple(row) in ref_row]
         i_ref, i_run = np.array(shared, dtype=int).reshape(-1, 2).T
-        n_bad = int((~np.isclose(truth[i_run], ref_truth[i_ref], rtol=1e-6, atol=0)).any(axis=1).sum())
+        n_bad = int((~np.isclose(run["truth"][i_run], ref["truth"][i_ref], rtol=1e-6, atol=0)).any(axis=1).sum())
         if n_bad:
             raise ValueError(
                 f"{d}: {n_bad} mocks have a different true {pair} than the reference at the same real_idx; "
@@ -468,6 +477,16 @@ def gather_mocks(idx, fom, wanted):
     """Reorder one run's per-mock FoM onto the rows of `wanted` (an (n, 3) real_idx array)."""
     row_of = {tuple(row): i for i, row in enumerate(idx.tolist())}
     return fom[np.array([row_of[tuple(row)] for row in wanted.tolist()])]
+
+
+def align_mocks(ref_idx, idx, values, intersect=False):
+    """One run's per-mock `values` (rows of `idx`) in the row order of `ref_idx`: the same mock set by
+    align_to, or under `intersect` the subset `ref_idx` by gather_mocks."""
+    if intersect:
+        return gather_mocks(idx, values, ref_idx)
+    out = np.empty_like(values)
+    out[align_to(ref_idx, idx)] = values
+    return out
 
 
 def paired_ratio(fom_reference, fom_run, i_sobol=None, n_boot=4000, seed=0):
@@ -609,24 +628,67 @@ def compare_runs(
     FoM pair's truths agree row by row is checked rather than assumed. `vali_total` is dropped, since
     two surveys' VMIM bounds are computed on different data.
     """
+    runs, info = pair_runs(
+        run_dirs,
+        reference,
+        pair=pair,
+        strict=strict,
+        intersect=intersect,
+        flow_name=flow_name,
+        cross_modality=cross_modality,
+        cross_survey=cross_survey,
+    )
+    ref_fom = runs[reference]["fom"]
+    i_sobol = info["real_idx"][:, 0] if info["clustered"] else None
+    rows = []
+    for d, run in runs.items():
+        stats = paired_ratio(ref_fom, run["fom"], i_sobol=i_sobol, n_boot=n_boot, seed=seed)
+        steps = run["provenance"]["steps"]
+        stats["run"] = info["labels"][d]
+        stats["vali_total"] = None if info["cross_survey"] else read_vali_total(d, steps=steps)
+        stats["is_reference"] = d == reference
+        stats["steps"] = steps
+        rows.append(stats)
+
+    rows.sort(key=lambda r: -r["ratio"])
+    return rows, info
+
+
+def pair_runs(
+    run_dirs,
+    reference,
+    pair=("Om", "S8"),
+    strict=True,
+    intersect=False,
+    flow_name=None,
+    cross_modality=False,
+    cross_survey=False,
+    widths=(),
+):
+    """Steps 0-3 of compare_runs: load every run (load_run, with `widths`), gate it, and pair it on the mocks.
+
+    Returns (runs, info). `runs` maps each run directory, the reference first, to load_run's dict, its per-mock
+    arrays aligned row by row to info["real_idx"]. `info` is describe_mock_set's, plus real_idx, the run labels,
+    the warnings and whether the modality or the survey was crossed.
+    """
     reference_dir = reference
     ordered = list(run_dirs)
     if reference_dir not in ordered:
         ordered = [reference_dir] + ordered
 
-    loaded = {d: load_run(d, pair=pair, flow_name=flow_name) for d in ordered}
-    ref_idx, ref_fom, ref_cfg, _ = loaded[reference_dir]
+    runs = {d: load_run(d, pair=pair, flow_name=flow_name, widths=widths) for d in ordered}
     # Same labelling rule as run_diagnostics, so the Q1 and Q2 tables name the runs identically.
     label_of = dict(zip(ordered, run_labels(ordered)))
 
     # --- gate 0: comparability -------------------------------------------------------------------
-    ref_key = comparability_key(ref_cfg)
+    ref_key = comparability_key(runs[reference_dir]["config"])
     warnings, crossed, crossed_survey = [], [], []
     permitted = {k for k, on in (("input_modality", cross_modality), ("survey", cross_survey)) if on}
-    for d, (_, _, cfg, prov) in loaded.items():
+    for d, run in runs.items():
+        prov = run["provenance"]
         if prov["n_checkpoints"] > 1:
             warnings.append(checkpoint_warning(label_of[d], prov["steps"], prov["other_steps"]))
-        key = comparability_key(cfg)
+        key = comparability_key(run["config"])
         diff = {k: (ref_key[k], key[k]) for k in ref_key if ref_key[k] != key[k]}
         if "input_modality" in diff and cross_modality:
             crossed.append(f"{label_of[d]} ({key['input_modality']} vs reference {ref_key['input_modality']})")
@@ -663,44 +725,37 @@ def compare_runs(
             f"NOT a cross-survey comparison"
         )
     elif crossed_survey:
-        check_same_truth(reference_dir, [d for d in ordered if d != reference_dir], pair=pair, flow_name=flow_name)
+        check_same_truth(runs, reference_dir, pair=pair)
         warnings.append(f"CROSS-SURVEY comparison, survey differs by design: {crossed_survey}")
 
     # --- gate 2: same mocks, and a structure the bootstrap can handle ----------------------------
+    ref_idx = runs[reference_dir]["real_idx"]
     if intersect:
         # cross-pipeline case: pair on the mocks every run actually evaluated, not on the reference set
-        wanted = common_mocks([idx for idx, _, _, _ in loaded.values()])
-        ref_fom = gather_mocks(ref_idx, ref_fom, wanted)
-        ref_idx = wanted
-        dropped = {label_of[d]: len(idx) - len(wanted) for d, (idx, _, _, _) in loaded.items()}
+        ref_idx = common_mocks([run["real_idx"] for run in runs.values()])
+        dropped = {label_of[d]: len(run["real_idx"]) - len(ref_idx) for d, run in runs.items()}
         if any(dropped.values()):
             warnings.append(
-                f"paired on the {len(wanted)}-mock intersection of the runs' coverage sets (dropped per "
+                f"paired on the {len(ref_idx)}-mock intersection of the runs' coverage sets (dropped per "
                 f"run: {dropped}); the CI widens as sqrt(n) but the seed floor does not"
             )
     info = describe_mock_set(ref_idx)
-    rows = []
-    for d, (idx, fom, cfg, prov) in loaded.items():
-        if intersect:
-            aligned = gather_mocks(idx, fom, ref_idx)
-        else:
-            order = align_to(ref_idx, idx)
-            aligned = np.empty_like(fom)
-            aligned[order] = fom
-        stats = paired_ratio(
-            ref_fom, aligned, i_sobol=ref_idx[:, 0] if info["clustered"] else None, n_boot=n_boot, seed=seed
-        )
-        stats["run"] = label_of[d]
-        stats["vali_total"] = None if crossed_survey else read_vali_total(d, steps=prov["steps"])
-        stats["is_reference"] = d == reference_dir
-        stats["steps"] = prov["steps"]
-        rows.append(stats)
 
-    rows.sort(key=lambda r: -r["ratio"])
-    info["warnings"] = warnings
-    info["cross_modality"] = bool(crossed)
-    info["cross_survey"] = bool(crossed_survey)
-    return rows, info
+    # --- step 3: pair on the full real_idx tuple -------------------------------------------------
+    for run in runs.values():
+        for key in ("fom", "truth", "sigma", "rho"):
+            if key in run:
+                run[key] = align_mocks(ref_idx, run["real_idx"], run[key], intersect=intersect)
+        run["real_idx"] = ref_idx
+
+    info.update(
+        real_idx=ref_idx,
+        labels=label_of,
+        warnings=warnings,
+        cross_modality=bool(crossed),
+        cross_survey=bool(crossed_survey),
+    )
+    return runs, info
 
 
 def format_table(rows, info, reference_name):
