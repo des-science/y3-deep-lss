@@ -134,6 +134,14 @@ EXCLUDE_PREFIXES = ("cosmo", "grid", "buzzard")
 # The correctly-specified baseline every contaminated mock is referenced against.
 FIDUCIAL_LABEL = "fiducial_bench"
 
+# The DES chains des-fom tabulates by default, as qualifiers of each run's survey.name ("" is the plain chain).
+# lambdaCDM and nla are in on purpose: they drop a column, so the default invocation exercises that handling. A
+# variant a run was not sampled for is skipped and named in the warnings, so listing one costs nothing.
+DES_FOM_QUALIFIERS = ("", "w0gt-1", "lambdaCDM", "w0gt-1_nla")
+
+# The surveys whose data posterior may be shown; des-fom hides the posterior means of every other survey.
+UNBLINDED_SURVEYS = ("DESy3",)
+
 # Qualifiers that change the SAMPLED SPACE OR THE PRIOR rather than the data vector: lambdaCDM fixes
 # w0, nla fixes bta, w0gt-1 truncates the w0 prior (`likelihood_base.py:88-101`). All three tighten
 # (Om, S8) on their own, and the fiducial and contaminated mocks were only ever sampled with the
@@ -358,7 +366,7 @@ def floor_from_pair(run_a, run_b, pair=("Om", "S8"), fiducial_label=FIDUCIAL_LAB
 
 
 def _load_runs(run_dirs, flow_name=None, finder=find_chain_dir):
-    """Resolve each run to (label, run_dir, params, inference_dir, steps), plus the shared warnings.
+    """Resolve each run to (label, run_dir, params, survey, inference_dir, steps), plus the shared warnings.
 
     Every subcommand needs exactly this preamble -- config, parameter-source gate, inference directory,
     checkpoint ambiguity -- and having it more than once is how the tables drifted into naming the same
@@ -382,6 +390,7 @@ def _load_runs(run_dirs, flow_name=None, finder=find_chain_dir):
                 "label": label,
                 "run_dir": run_dir,
                 "params": param_names(cfg),
+                "survey": _dig(cfg, ("msfm", "survey", "name")),
                 "inference_dir": inference_dir,
                 "steps": candidates[inference_dir],
             }
@@ -926,10 +935,11 @@ def _chain_fom(chain_dir, label, params, pair):
     }
 
 
-def des_fom(
-    run_dirs, variants=("DESy3",), pair=("Om", "S8"), reference=None, fiducial_label=FIDUCIAL_LABEL, flow_name=None
-):
-    """Q4 diagnostic: FoM on the real DES Y3 data vector, per run, normalised WITHIN each run.
+def des_fom(run_dirs, variants=None, pair=("Om", "S8"), reference=None, fiducial_label=FIDUCIAL_LABEL, flow_name=None):
+    """Q4 diagnostic: FoM on the real DES data vector, per run, normalised WITHIN each run.
+
+    `variants` are the chain labels to tabulate; by default each run's survey.name with DES_FOM_QUALIFIERS. The
+    result is `blind` unless every run's survey is in UNBLINDED_SURVEYS.
 
     Same statistic as the grid FoM that ranks runs -- literally the same function -- evaluated on the
     real observation instead of the correctly-specified coverage mocks. That one substitution removes
@@ -947,14 +957,16 @@ def des_fom(
     `run_comparison`. This is the same referencing rule as `posterior_shifts`: against the run's own
     fiducial, never across runs.
 
-    Caveat kept in view: `fiducial_bench_mean` is a NOISELESS mean data vector while DESy3 is one noisy
+    Caveat kept in view: `fiducial_bench_mean` is a NOISELESS mean data vector while DES is one noisy
     realization, so the ratio carries a realization scatter that no single number here can separate.
     """
     loaded, warnings = _load_runs(run_dirs, flow_name=flow_name)
     reference_label = None
-    runs = []
+    runs, tabulated = [], {}
     for meta in loaded:
         chain_dir, params = meta["inference_dir"], meta["params"]
+        run_variants = variants or ["_".join(filter(None, (meta["survey"], q))) for q in DES_FOM_QUALIFIERS]
+        tabulated.update(dict.fromkeys(run_variants))
         entry = {**meta, "variants": {}}
         entry["fiducial"] = _chain_fom(chain_dir, f"{fiducial_label}_mean", params, pair)
         if entry["fiducial"] is None:
@@ -962,12 +974,12 @@ def des_fom(
                 f"{meta['label']}: no chain_{fiducial_label}_mean.npy, so its DES FoM can only be read "
                 f"in absolute terms -- there is nothing within the run to normalise it against"
             )
-        for variant in variants:
+        for variant in run_variants:
             columns = chain_columns(params, variant)
             summary = _chain_fom(chain_dir, variant, columns, pair)
             if summary is not None:
                 entry["variants"][variant] = summary
-        missing = [v for v in variants if v not in entry["variants"]]
+        missing = [v for v in run_variants if v not in entry["variants"]]
         if missing:
             # Named rather than left to be inferred from a run's absence from one table: a run that
             # quietly drops out of a variant reads as agreement between the runs that remain.
@@ -979,22 +991,26 @@ def des_fom(
         raise ValueError(f"--reference {reference} is not among the runs")
     return {
         "runs": runs,
-        "variants": list(variants),
+        "variants": list(tabulated),
         "pair": tuple(pair),
         "reference": reference_label,
+        "blind": any(r["survey"] not in UNBLINDED_SURVEYS for r in runs),
         "warnings": warnings,
     }
 
 
-def format_des_fom(result, blind=False):
+def format_des_fom(result, blind=None):
     """Render the Q4 table, with the caveat attached to the numbers rather than left to the reader.
 
-    `blind` drops the posterior-mean columns, so a blinded survey's data posterior shows widths only.
+    `blind` drops the posterior-mean columns, so a blinded survey's data posterior shows widths only; None takes
+    the result's own `blind`.
     """
     runs, pair = result["runs"], result["pair"]
+    if blind is None:
+        blind = result["blind"]
     width = max(16, max(len(r["label"]) for r in runs) + 2)
     lines = [
-        "Q4 DES Y3 FoM -- UNSIGNED DIAGNOSTIC, NOT A RANKING.",
+        "Q4 DES FoM -- UNSIGNED DIAGNOSTIC, NOT A RANKING.",
         "Higher is NOT better here: on a misspecified observation the FoM has no direction, and",
         "ranking on it selects for confident wrongness. Use it only to flag a DES-vs-sim divergence.",
         "",
@@ -1232,17 +1248,17 @@ def main(argv=None):
     des.add_argument(
         "--variants",
         type=lambda s: [v for v in s.split(",") if v],
-        # lambdaCDM and nla are in the default set on purpose: they are the two variants that drop a
-        # column, so the handling that exists for them is exercised by the default invocation rather
-        # than only when someone remembers to ask. A variant a run was not sampled for is skipped and
-        # named in the warnings, so listing one costs nothing.
-        default=["DESy3", "DESy3_w0gt-1", "DESy3_lambdaCDM", "DESy3_w0gt-1_nla"],
-        help="comma-separated chain variants to tabulate; lambdaCDM drops the w0 column and nla drops "
-        "bta, both handled (default: DESy3,DESy3_w0gt-1,DESy3_lambdaCDM,DESy3_w0gt-1_nla)",
+        default=None,
+        help="comma-separated chain variants to tabulate; lambdaCDM drops the w0 column and nla drops bta, both "
+        "handled (default: each run's survey with the qualifiers " + ",".join(DES_FOM_QUALIFIERS[1:]) + ")",
     )
     des.add_argument("--reference", type=str, default=None, help="run whose FoM the others are shown against")
     des.add_argument(
-        "--blind", action="store_true", help="omit the posterior-mean columns (widths and FoM only), for blinded data"
+        "--blind",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="omit the posterior-mean columns (widths and FoM only); default on unless every run's survey is "
+        "unblinded (" + ", ".join(UNBLINDED_SURVEYS) + ")",
     )
 
     widths = subparsers.choices["widths"]
@@ -1283,7 +1299,7 @@ def main(argv=None):
             dirs = [reference] + dirs
         result = des_fom(
             dirs,
-            variants=tuple(args.variants),
+            variants=args.variants,
             pair=tuple(args.pair),
             reference=reference,
             fiducial_label=args.fiducial,
