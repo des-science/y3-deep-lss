@@ -675,7 +675,8 @@ def load_rebinned_cls_grid(
         real_idx: (n_cosmos * n_examples, 3) per-row (i_sobol, i_signal, i_noise), row-aligned with
             cls_flat (same C-order flatten of the (n_cosmos, n_examples) grid).
         cosmos: (n_cosmos * n_examples, n_params_all) the FULL stored parameter vector per row
-            (cosmology + per-signal Latin-hypercube astro nuisances), row-aligned with cls_flat.
+            (cosmology + per-signal Latin-hypercube astro nuisances), row-aligned with cls_flat, in prior
+            units (bary_Mc in log10).
         cosmo_params: list of the n_params_all parameter names, giving the column order of ``cosmos``
             (so a caller can select the subset a flow was trained on).
     """
@@ -721,6 +722,8 @@ def load_rebinned_cls_grid(
     assert cosmos.shape[1] == len(
         cosmo_params
     ), f"stored cosmo has {cosmos.shape[1]} columns but get_parameters lists {len(cosmo_params)}."
+    # bary_Mc is stored raw, the flows are conditioned on log10(Mc)
+    cosmos = msfm_params.raw_to_prior_units(cosmos, cosmo_params, copy=False)
     return cls_flat, real_idx, cosmos, cosmo_params
 
 
