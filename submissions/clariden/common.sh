@@ -38,6 +38,15 @@ if [ ! -f "$MSFM_CONFIG" ]; then
     echo "No msfm config $MSFM_CONFIG; the datasets are: $(datasets)" >&2
     exit 1
 fi
+# The dataset's variants of the real data observation (msfm.utils.data_observations), evaluated next to it wherever
+# the DES catalogs are; none for DES Y3. An empty DATA_OBSERVATIONS switches them off.
+if [ -n "${DATA_OBSERVATIONS-}" ] && [ ! -f "$DATA_OBSERVATIONS" ]; then
+    echo "No data observation registry $DATA_OBSERVATIONS" >&2
+    exit 1
+fi
+DATA_OBSERVATIONS="${DATA_OBSERVATIONS-$MSFM/configs/$VERSION/data_observations.yaml}"
+DATA_OBS_FLAG=""
+[ -f "$DATA_OBSERVATIONS" ] && DATA_OBS_FLAG="--data_observations=$DATA_OBSERVATIONS"
 
 # The dataset's paths come from the locations.yaml next to $MSFM_CONFIG (msfm.utils.locations); an environment
 # variable overrides one. INPUT holds tfrecords/ and cls/, OBS_DIR the *_obs_maps.h5 mocks, RUNS_ROOT the runs.

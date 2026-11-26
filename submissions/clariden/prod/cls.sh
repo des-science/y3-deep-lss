@@ -15,6 +15,8 @@
 #   VERSION=desy6/v1 RUN=v2 sbatch cls.sh
 #   VERSION=desy6/v1 STAGES=cache sbatch --time=02:00:00 cls.sh             # build the cache on a new dataset
 #   VERSION=desy3/v18 STAGES=eval MOCK_LABELS=<label> OVERWRITE=1 sbatch cls.sh   # append one mock
+#   VERSION=desy6/v2 STAGES="eval infer" DES_LABELS=DESy6_lens_isd PROBES="clustering combined" OVERWRITE=1 \
+#       sbatch --partition=debug --time=00:30:00 cls.sh   # add a data observation variant to finished runs
 #   VERSION=desy6/v1 NET_CONFIG=<yaml> METHOD_DIR=cls_bench RUN=<name> sbatch cls.sh   # an experiment
 
 export SLURM_CPUS_PER_TASK=72  # each probe is its own 1-GPU step
@@ -23,7 +25,8 @@ source /users/athomsen/dlss/repos/y3-deep-lss/submissions/clariden/common.sh
 # "probe" or "probe:probes_config"; v17 needs e.g. "lensing:lensing_nla combined:combined_nla"
 read -r -a PROBES <<< "${PROBES:-lensing clustering combined}"
 STAGES="${STAGES:-train infer}"       # cache | train | eval | infer
-MOCK_LABELS="${MOCK_LABELS:-}"        # required with eval and no train: mocks appended to the preds
+MOCK_LABELS="${MOCK_LABELS:-}"        # eval without train: mocks appended to the preds
+DES_LABELS="${DES_LABELS:-}"          # eval without train: DES labels (data_observations.yaml) appended, trained flows
 
 PROD_NET_CONFIG="$DEEP_LSS/configs/cls/branch/default.yaml"
 NET_CONFIG="${NET_CONFIG:-$PROD_NET_CONFIG}"  # configs/cls/<net>/<name>.yaml
@@ -35,12 +38,29 @@ if [ "$NET_CONFIG" != "$PROD_NET_CONFIG" ] && [ "$METHOD_DIR/$RUN" = "cls/v1" ];
     exit 1
 fi
 
-if has_stage eval && ! has_stage train; then
-    [ -n "$MOCK_LABELS" ] || { echo "STAGES=eval appends mocks and needs MOCK_LABELS." >&2; exit 1; }
-    EVAL_FLAGS="--eval_only --include_mocks --mock_labels $MOCK_LABELS"
-    export INCLUDE_OBS="--include_mocks" FLOW_MEMBERS=""
+if [ -n "$DES_LABELS" ] && has_stage train; then
+    echo "DES_LABELS adds to finished runs, so STAGES cannot train." >&2
+    exit 1
+fi
+if has_stage eval && ! has_stage train && [ -z "$MOCK_LABELS$DES_LABELS" ]; then
+    echo "STAGES=eval appends and needs MOCK_LABELS or DES_LABELS." >&2
+    exit 1
+fi
+
+# without eval too, so that STAGES=infer reruns an add-on's inference on the same flows
+if [ -n "$MOCK_LABELS$DES_LABELS" ] && ! has_stage train; then
+    # mocks retrain the flows and DES labels load them, so they are separate jobs
+    [ -z "$MOCK_LABELS" ] || [ -z "$DES_LABELS" ] || { echo "MOCK_LABELS and DES_LABELS are separate jobs." >&2; exit 1; }
+    if [ -n "$MOCK_LABELS" ]; then
+        EVAL_FLAGS="--eval_only --include_mocks --mock_labels $MOCK_LABELS"; INCLUDE_OBS="--include_mocks"
+    else
+        # the trained flows are loaded, and inference resamples every DES chain of the runs on them
+        EVAL_FLAGS="--eval_only --include_des $DATA_OBS_FLAG --des_labels $DES_LABELS"; INCLUDE_OBS="--include_des"
+        export LOAD_FLOW="${LOAD_FLOW---load_flow}" SAMPLE_POSTERIOR="${SAMPLE_POSTERIOR-}"
+    fi
+    export INCLUDE_OBS FLOW_MEMBERS=""
 else
-    EVAL_FLAGS="--include_grid --include_des --include_mocks"
+    EVAL_FLAGS="--include_grid --include_des $DATA_OBS_FLAG --include_mocks"
 fi
 
 OUTPUT="$RUNS_ROOT/$METHOD_DIR"

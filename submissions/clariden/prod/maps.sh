@@ -17,6 +17,8 @@
 #   VERSION=desy6/v1 PROBE=clustering ./maps_chain.sh
 #   VERSION=desy6/v1 STAGES="eval infer" PROBE=lensing sbatch --time=02:30:00 maps.sh   # recover a failed tail
 #   VERSION=desy3/v18 STAGES=eval MOCK_LABELS=<label> OVERWRITE=1 sbatch maps.sh   # append one mock
+#   VERSION=desy6/v2 STAGES="eval infer" DES_LABELS=DESy6_lens_isd PROBE=clustering OVERWRITE=1 \
+#       sbatch --partition=debug --time=00:30:00 maps.sh   # add a data observation variant to a finished run
 
 source /users/athomsen/dlss/repos/y3-deep-lss/submissions/clariden/common.sh
 
@@ -25,6 +27,7 @@ ARCH="${ARCH:-deepsphere}"            # configs/maps/prod/<ARCH>/: deepsphere | 
 INPUTS="${INPUTS:-maps+cls}"          # maps+cls | maps
 STAGES="${STAGES:-train eval infer}"
 MOCK_LABELS="${MOCK_LABELS:-}"        # without train: evaluate only these mocks, appended to the preds
+DES_LABELS="${DES_LABELS:-}"          # without train: only these DES labels (data_observations.yaml), trained flows
 RUN_NUM="${RUN_NUM:-1}"               # position in a chain; >1 restores the checkpoint
 TRAIN_EXTRA="${TRAIN_EXTRA:-}"        # extra run_training.py flags, e.g. --profile, --n_steps=N
 
@@ -42,6 +45,11 @@ else
     [ "$INPUTS" = "maps" ] && method="${method}_nocls"
     METHOD_DIR="${METHOD_DIR:-$method}"
     RUN="${RUN:-v1}"
+fi
+
+if [ -n "$DES_LABELS" ] && has_stage train; then
+    echo "DES_LABELS adds to a finished run, so STAGES cannot train." >&2
+    exit 1
 fi
 
 STRATEGY="mirrored"
@@ -83,11 +91,19 @@ fi
 
 # --- Evaluation --------------------------------------------------------------------------------
 
-EVAL_FLAGS="--grid_vali_tfr_pattern=$TRAIN_TFR --include_grid --include_des --include_mocks"
-if [ -n "$MOCK_LABELS" ] && ! has_stage train; then
+EVAL_FLAGS="--grid_vali_tfr_pattern=$TRAIN_TFR --include_grid --include_des $DATA_OBS_FLAG --include_mocks"
+if [ -n "$MOCK_LABELS$DES_LABELS" ] && ! has_stage train; then
+    # mocks retrain the flow and DES labels load it, so they are separate jobs
+    [ -z "$MOCK_LABELS" ] || [ -z "$DES_LABELS" ] || { echo "MOCK_LABELS and DES_LABELS are separate jobs." >&2; exit 1; }
     # No grid pattern: a grid pass would rewrite grid/preds/test under the already trained flow.
-    EVAL_FLAGS="--include_mocks"
-    export INCLUDE_OBS="--include_mocks" FLOW_MEMBERS=""
+    if [ -n "$MOCK_LABELS" ]; then
+        EVAL_FLAGS="--include_mocks"; INCLUDE_OBS="--include_mocks"
+    else
+        # the trained flow is loaded, and inference resamples every DES chain of the run on it
+        EVAL_FLAGS="--include_des $DATA_OBS_FLAG --des_labels $DES_LABELS"; INCLUDE_OBS="--include_des"
+        export LOAD_FLOW="${LOAD_FLOW---load_flow}" SAMPLE_POSTERIOR="${SAMPLE_POSTERIOR-}"
+    fi
+    export INCLUDE_OBS FLOW_MEMBERS=""
 fi
 MOCK_FLAG=""; [ -n "$MOCK_LABELS" ] && MOCK_FLAG="--mock_labels $MOCK_LABELS"
 
