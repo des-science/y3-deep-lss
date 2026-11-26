@@ -108,6 +108,19 @@ def setup():
         default=None,
         help="with --include_des, also the test variants <survey>_no_sys and _no_psi_rot; default on for DES Y3 only",
     )
+    parser.add_argument(
+        "--data_observations",
+        type=str,
+        default=None,
+        help="with --include_des, also the variants of this msfm data observation registry, e.g. "
+        "configs/desy6/v2/data_observations.yaml",
+    )
+    parser.add_argument(
+        "--des_labels",
+        nargs="+",
+        default=None,
+        help="with --include_des, evaluate only these DES labels, e.g. a registry variant added to a finished run",
+    )
     parser.add_argument("--include_mocks", action="store_true", help="evaluate the mock observations of --obs_dir")
     parser.add_argument(
         "--mock_labels",
@@ -581,8 +594,22 @@ if __name__ == "__main__":
                 evaluation.evaluate_obs_grid(out_file, _gp, _gc, _isob, _isig, _inoi, args.n_grid_examples)
 
             if args.include_des:
+                if args.des_labels is not None:
+                    # the chains of a DES label already in the file were sampled on its summaries
+                    with h5py.File(out_file, "r") as f:
+                        present = [label for label in args.des_labels if f"obs/preds/{label}" in f]
+                    if present:
+                        raise RuntimeError(f"--des_labels only appends, but {out_file} already holds {present}")
                 with_variants = evaluation.des_variants(msfm_conf, args.des_variants)
-                evaluation.evaluate_obs_des(model_fn, out_file, msfm_conf, dlss_conf, with_variants=with_variants)
+                evaluation.evaluate_obs_des(
+                    model_fn,
+                    out_file,
+                    msfm_conf,
+                    dlss_conf,
+                    with_variants=with_variants,
+                    data_observations=args.data_observations,
+                    labels=args.des_labels,
+                )
 
             if args.include_mocks:
                 mock_labels = args.mock_labels

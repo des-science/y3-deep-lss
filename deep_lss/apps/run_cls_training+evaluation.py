@@ -97,9 +97,10 @@ def setup():
     parser.add_argument(
         "--eval_only",
         action="store_true",
-        help="Restore the latest checkpoint and append the named --mock_labels to the existing preds file. "
-        "No training, and configs.yaml and every stored summary are left untouched. Aborts unless the "
-        "restored network reproduces the stored test-set summaries.",
+        help="Restore the latest checkpoint and append the named --mock_labels and/or --des_labels to the existing "
+        "preds file. No training, and configs.yaml and every stored summary are left untouched, so a DES label "
+        "the file already holds is refused. Aborts unless the restored network reproduces the stored test-set "
+        "summaries.",
     )
 
     # Observation inclusion flags (all default off)
@@ -111,6 +112,19 @@ def setup():
         action=argparse.BooleanOptionalAction,
         default=None,
         help="with --include_des, also the test variants <survey>_no_sys and _no_psi_rot; default on for DES Y3 only",
+    )
+    parser.add_argument(
+        "--data_observations",
+        type=str,
+        default=None,
+        help="with --include_des, also the variants of this msfm data observation registry, e.g. "
+        "configs/desy6/v2/data_observations.yaml",
+    )
+    parser.add_argument(
+        "--des_labels",
+        nargs="+",
+        default=None,
+        help="with --include_des, evaluate only these DES labels, e.g. a registry variant added to a finished run",
     )
     parser.add_argument("--include_mocks", action="store_true", help="evaluate the mock observations of --obs_dir")
     parser.add_argument(
@@ -129,9 +143,14 @@ def setup():
     if not args.probes_config:
         parser.error("--probes_config is required")
     if args.eval_only:
-        # grid/DES would overwrite summaries the trained flows and published chains were built on
-        if args.include_grid or args.include_des or not (args.include_mocks and args.mock_labels):
-            parser.error("--eval_only takes --include_mocks with explicit --mock_labels, and nothing else")
+        # the grid and the existing observations are the summaries the trained flows and chains were built on, so
+        # only named mocks and named new DES labels are appended
+        named = (not args.include_mocks or args.mock_labels) and (not args.include_des or args.des_labels)
+        if args.include_grid or not (args.include_mocks or args.include_des) or not named:
+            parser.error(
+                "--eval_only takes --include_mocks with explicit --mock_labels and/or --include_des with explicit "
+                "--des_labels, and nothing else"
+            )
         args.restore_checkpoint = True
     return args
 
@@ -212,6 +231,11 @@ def main():
     os.makedirs(pred_dir, exist_ok=True)
 
     pred_file = os.path.join(pred_dir, f"preds_{n_steps}.h5")
+    if args.eval_only and args.include_des:
+        with h5py.File(pred_file, "r") as f:
+            present = [label for label in args.des_labels if f"obs/preds/{label}" in f]
+        if present:
+            raise RuntimeError(f"eval_only only appends, but {pred_file} already holds the DES labels {present}")
 
     LOGGER.info(f"probe          = {probe}")
     LOGGER.info(f"pred_dir       = {pred_dir}")
@@ -872,8 +896,12 @@ def main():
                 scale_cut=scale_cut,
                 cls_n_bins=cls_n_bins,
                 with_variants=evaluation.des_variants(msfm_conf, args.des_variants),
+                data_observations=args.data_observations,
+                labels=args.des_labels,
             )
         except Exception as e:
+            if args.eval_only:
+                raise  # the DES labels are the whole point of an eval_only run
             LOGGER.warning(f"{msfm_conf['survey']['name']} evaluation failed ({e}), skipping")
 
 

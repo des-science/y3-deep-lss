@@ -550,34 +550,68 @@ def des_variants(msfm_conf, requested=None):
     return msfm_conf["survey"]["name"] == "DESy3"
 
 
-def des_observations(msfm_conf, use_wl, use_gc, with_variants=True, all_maps=False):
+def des_observations(
+    msfm_conf, use_wl, use_gc, with_variants=True, all_maps=False, data_observations=None, labels=None
+):
     """Yield (label, wl_gamma_map, gc_count_map, apply_sys) for the real DES catalogs of msfm's survey.name.
 
     The labels are <survey> and, with_variants (des_variants), <survey>_no_sys without the lens weight maps (if
-    use_gc) and the _no_psi_rot of each without the shear rotation (if use_wl). A probe's map is built only if it is
-    in use, or for all_maps."""
+    use_gc) and the _no_psi_rot of each without the shear rotation (if use_wl). data_observations, the path of an msfm
+    registry of data observations (msfm.utils.data_observations), adds its variants if use_gc, since they change the
+    lens counts only; their apply_sys is the path of their lens weight file. labels keeps only those observations, and
+    a label that is none of them is an error. A probe's map is built only if it is in use, or for all_maps."""
     from msfm.utils import catalog
+    from msfm.utils import data_observations as msfm_data_observations
+
+    registry = []
+    if data_observations is not None:
+        problems = msfm_data_observations.check(data_observations, msfm_conf)
+        if problems:
+            raise ValueError(f"{data_observations} does not apply to this run: {'; '.join(problems)}")
+        registry = msfm_data_observations.load(data_observations)
+        if not use_gc:
+            skipped = [o.label for o in registry]
+            asked = sorted(set(labels or []) & set(skipped))
+            if asked:
+                raise ValueError(f"the DES labels {asked} change only the lens counts, and this run has no clustering")
+            LOGGER.info(f"{data_observations}: no clustering, so its lens count variants {skipped} are skipped")
+            registry = []
 
     survey = msfm_conf["survey"]["name"]
+    rot_suffixes = ["", "_no_psi_rot"] if use_wl and with_variants else [""]
+    sys_variants = [(True, survey)] + ([(False, f"{survey}_no_sys")] if use_gc and with_variants else [])
+    names = [f"{label}{rot}" for rot in rot_suffixes for _, label in sys_variants]
+    if labels is not None:
+        unknown = sorted(set(labels) - set(names) - {o.label for o in registry})
+        if unknown:
+            raise ValueError(f"the DES labels {unknown} are none of {names + [o.label for o in registry]}")
+
+    def wanted(label):
+        return labels is None or label in labels
+
     wl_map = catalog.build_metacal_map_from_cat(msfm_conf)[0] if use_wl or all_maps else None
     gc_map = catalog.build_maglim_map_from_cat(msfm_conf) if use_gc or all_maps else None
 
-    lensing_variants = [(wl_map, "")]
-    if use_wl and with_variants:
-        wl_map_no_psi_rot = catalog.build_metacal_map_from_cat(msfm_conf, apply_shear_rotation=False, debug=False)[0]
-        lensing_variants.append((wl_map_no_psi_rot, "_no_psi_rot"))
-
-    sys_variants = [(True, survey)]
-    if use_gc and with_variants:
-        sys_variants.append((False, f"{survey}_no_sys"))
-
-    for wl, rot_suffix in lensing_variants:
+    for rot_suffix in rot_suffixes:
+        if not any(wanted(f"{label}{rot_suffix}") for _, label in sys_variants):
+            continue
+        wl = wl_map
+        if rot_suffix:
+            wl = catalog.build_metacal_map_from_cat(msfm_conf, apply_shear_rotation=False, debug=False)[0]
         for apply_sys, label in sys_variants:
-            yield f"{label}{rot_suffix}", wl, gc_map, apply_sys
+            if wanted(f"{label}{rot_suffix}"):
+                yield f"{label}{rot_suffix}", wl, gc_map, apply_sys
+
+    for obs in registry:
+        if wanted(obs.label):
+            yield obs.label, wl_map, gc_map, obs.lens_weights
 
 
-def evaluate_obs_des(model_fn, pred_file, msfm_conf, dlss_conf, with_variants=True):
-    """Evaluate the real DES catalogs of msfm's survey.name through the network, with the variants if requested."""
+def evaluate_obs_des(
+    model_fn, pred_file, msfm_conf, dlss_conf, with_variants=True, data_observations=None, labels=None
+):
+    """Evaluate the real DES catalogs of msfm's survey.name through the network, with the variants if requested and
+    those of the data observation registry data_observations, or only the given labels (des_observations)."""
     from msfm.utils import observation
 
     common = dlss_conf["dset"]["common"]
@@ -586,7 +620,9 @@ def evaluate_obs_des(model_fn, pred_file, msfm_conf, dlss_conf, with_variants=Tr
 
     cls_bin_indices = _get_cls_bin_indices(msfm_conf, dlss_conf)
 
-    for label, wl, gc_map, apply_sys in des_observations(msfm_conf, use_wl, use_gc, with_variants):
+    for label, wl, gc_map, apply_sys in des_observations(
+        msfm_conf, use_wl, use_gc, with_variants, data_observations=data_observations, labels=labels
+    ):
         des_dv, des_cls, _ = observation.forward_model_observation_map(
             wl_gamma_map=wl,
             gc_count_map=gc_map,

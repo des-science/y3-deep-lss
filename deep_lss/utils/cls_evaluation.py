@@ -184,9 +184,12 @@ def evaluate_des(
     scale_cut="hard",
     cls_n_bins=None,
     with_variants=True,
+    data_observations=None,
+    labels=None,
 ):
     """Evaluate the real DES catalogs of msfm's survey.name through the Cls network; with_variants adds the
-    evaluation.des_variants (_no_sys, _no_psi_rot)."""
+    evaluation.des_variants (_no_sys, _no_psi_rot), data_observations the variants of that msfm registry, and labels
+    keeps only those (evaluation.des_observations)."""
     use_wl = with_lensing or with_cross_probe
     use_gc = with_clustering or with_cross_probe
 
@@ -195,7 +198,7 @@ def evaluate_des(
     # selection afterwards, so obs_cl must cover all pairs just like the grid cache.
     print(f"Evaluating {msfm_conf['survey']['name']} from its catalogs...")
     for label, wl_map, gc_count_map, apply_sys in evaluation.des_observations(
-        msfm_conf, use_wl, use_gc, with_variants, all_maps=True
+        msfm_conf, use_wl, use_gc, with_variants, all_maps=True, data_observations=data_observations, labels=labels
     ):
         des_cl = _obs_preprocessing_fn(scale_cut, cls_n_bins=cls_n_bins)(
             wl_gamma_map=wl_map,
